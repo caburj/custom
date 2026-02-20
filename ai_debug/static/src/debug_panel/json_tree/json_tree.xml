@@ -52,6 +52,8 @@
                 label="entry[0]"
                 depth="(props.depth ?? 0) + 1"
                 maxDepth="props.maxDepth ?? 2"
+                forceCollapsed="state.childForceCollapsed"
+                forceVersion="state.childForceVersion"
               />
             </div>
           </t>
