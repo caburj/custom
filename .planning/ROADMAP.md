@@ -28,11 +28,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. A trace record shows why the loop terminated (final message / max iterations / confirmation pause) and carries ms-level timing at trace, iteration, and tool call levels
   4. An exception during the loop sets `state = 'error'` and stores the message; the loop's streaming behavior is completely unchanged (confirmation flow still works)
   5. The `ai_debugger.enabled` config param gates all capture; disabling it produces no records and no performance impact
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 01-01: Define `ai.debug.trace`, `ai.debug.iteration`, `ai.debug.tool.call` models with all fields, security CSV, and module scaffold
-- [ ] 01-02: Implement `AiSessionDebug` (`_inherit = 'ai.session'`) generator yield passthrough for `_run_agentic_loop` and `_handle_tool_calls`; add `_generate_next_response` hook for system prompt + RAG capture; wire config param and `@api.autovacuum` retention
+- [ ] 01-01-PLAN.md — Module scaffold, data models (trace/iteration/tool_call), security CSV, autovacuum
+- [ ] 01-02-PLAN.md — Generator yield passthrough for _run_agentic_loop, _handle_tool_calls, _generate_next_response; config param gating
 
 ### Phase 2: Backend Views
 **Goal**: Captured traces are browsable and filterable in the Odoo backend without touching any code
