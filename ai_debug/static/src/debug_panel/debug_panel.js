@@ -38,7 +38,6 @@ export class DebugPanel extends Component {
             connectionStatus: "connecting",
             traceInfo: null,
             errorMsg: null,
-            traceDetailExpanded: false,
             traceDetailLoading: false,
         });
 
@@ -56,7 +55,6 @@ export class DebugPanel extends Component {
         this.toggleIteration = this.toggleIteration.bind(this);
         this.toggleToolCall = this.toggleToolCall.bind(this);
         this.setActiveTab = this.setActiveTab.bind(this);
-        this.toggleTraceDetail = this.toggleTraceDetail.bind(this);
 
         onMounted(async () => {
             // Hide Odoo web client chrome (navbar, chat widget) for standalone feel.
@@ -130,11 +128,10 @@ export class DebugPanel extends Component {
         this.state.traceInfo = traceInfo;
         this.state.iterations.splice(0);
         this.state.errorMsg = null;
-        this.state.traceDetailExpanded = false;
-        this.state.traceDetailLoading = false;
 
         // Subscribe to the trace-specific channel — must happen ASAP.
         this.busService.addChannel(`ai_debug:trace:${busChannel}`);
+        this._loadTraceDetail();
     }
 
     /**
@@ -340,31 +337,29 @@ export class DebugPanel extends Component {
     // Expand/collapse with lazy detail fetch
     // -------------------------------------------------------------------------
 
-    async toggleTraceDetail() {
-        this.state.traceDetailExpanded = !this.state.traceDetailExpanded;
-        // Lazy-load if expanding and traceInfo lacks these fields (live mode).
+    async _loadTraceDetail() {
         if (
-            this.state.traceDetailExpanded &&
-            this.state.traceId &&
-            this.state.traceInfo &&
-            !("instructions" in this.state.traceInfo) &&
-            !this.state.traceDetailLoading
+            !this.state.traceId ||
+            !this.state.traceInfo ||
+            "instructions" in this.state.traceInfo ||
+            this.state.traceDetailLoading
         ) {
-            this.state.traceDetailLoading = true;
-            try {
-                const [detail] = await this.orm.read(
-                    "ai.debug.trace",
-                    [this.state.traceId],
-                    ["instructions", "rag_context", "tools_definition"],
-                );
-                if (detail) {
-                    Object.assign(this.state.traceInfo, detail);
-                }
-            } catch {
-                // Non-fatal — section just shows empty.
-            } finally {
-                this.state.traceDetailLoading = false;
+            return;
+        }
+        this.state.traceDetailLoading = true;
+        try {
+            const [detail] = await this.orm.read(
+                "ai.debug.trace",
+                [this.state.traceId],
+                ["instructions", "rag_context", "tools_definition"],
+            );
+            if (detail) {
+                Object.assign(this.state.traceInfo, detail);
             }
+        } catch {
+            // Non-fatal — left panel sections just show empty.
+        } finally {
+            this.state.traceDetailLoading = false;
         }
     }
 
