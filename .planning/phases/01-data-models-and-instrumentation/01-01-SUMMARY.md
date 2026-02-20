@@ -126,3 +126,20 @@ None — no external service configuration required. The module installs via sta
 ---
 *Phase: 01-data-models-and-instrumentation*
 *Completed: 2026-02-20*
+
+## Self-Check: PASSED
+
+All created files verified present on disk:
+- FOUND: ai_debug/__manifest__.py
+- FOUND: ai_debug/__init__.py
+- FOUND: ai_debug/models/__init__.py
+- FOUND: ai_debug/models/ai_debug_trace.py
+- FOUND: ai_debug/models/ai_debug_iteration.py
+- FOUND: ai_debug/models/ai_debug_tool_call.py
+- FOUND: ai_debug/security/ir.model.access.csv
+- FOUND: .planning/phases/01-data-models-and-instrumentation/01-01-SUMMARY.md
+
+Task commits verified in git log:
+- d8cdc4c — feat(01-01): create ai_debug module scaffold
+- 9355fbc — feat(01-01): define ai.debug.trace, ai.debug.iteration, ai.debug.tool.call models
+- f3a3984 — docs(01-01): complete data models and module scaffold plan
