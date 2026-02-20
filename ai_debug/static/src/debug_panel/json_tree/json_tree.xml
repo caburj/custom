@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+  <t t-name="ai_debug.JsonTree">
+    <t t-if="isComplex">
+      <!-- Object or array node -->
+      <span class="ai-debug-json-node">
+        <!-- Toggle caret + bracket open -->
+        <button
+          class="ai-debug-json-toggle"
+          t-att-class="{ 'o_collapsed': state.collapsed }"
+          t-on-click.stop="toggle"
+          type="button"
+        >
+          <i t-att-class="state.collapsed ? 'fa fa-caret-right' : 'fa fa-caret-down'"/>
+        </button>
+
+        <!-- Key label (when rendered as a child entry) -->
+        <t t-if="props.label !== undefined">
+          <span class="ai-debug-json-key" t-esc="props.label"/>
+          <span class="ai-debug-json-punct">: </span>
+        </t>
+
+        <!-- Collapsed: show compact summary -->
+        <t t-if="state.collapsed">
+          <span class="ai-debug-json-bracket" t-esc="bracketOpen"/>
+          <span class="ai-debug-json-summary" t-esc="childSummary"/>
+          <span class="ai-debug-json-bracket" t-esc="bracketClose"/>
+        </t>
+
+        <!-- Expanded: show bracket open + copy button -->
+        <t t-else="">
+          <span class="ai-debug-json-bracket" t-esc="bracketOpen"/>
+          <button
+            class="ai-debug-json-copy"
+            title="Copy to clipboard"
+            t-on-click.stop="copyToClipboard"
+            type="button"
+          >
+            <i class="fa fa-clipboard"/>
+          </button>
+        </t>
+      </span>
+
+      <!-- Child entries (only when expanded) -->
+      <t t-if="!state.collapsed">
+        <div class="ai-debug-json-children">
+          <t t-foreach="entries" t-as="entry" t-key="entry[0]">
+            <div class="ai-debug-json-entry">
+              <JsonTree
+                value="entry[1]"
+                label="entry[0]"
+                depth="(props.depth ?? 0) + 1"
+                maxDepth="props.maxDepth ?? 2"
+              />
+            </div>
+          </t>
+        </div>
+        <span class="ai-debug-json-bracket ai-debug-json-bracket-close" t-esc="bracketClose"/>
+      </t>
+    </t>
+
+    <t t-else="">
+      <!-- Scalar value node -->
+      <t t-if="props.label !== undefined">
+        <span class="ai-debug-json-key" t-esc="props.label"/>
+        <span class="ai-debug-json-punct">: </span>
+      </t>
+      <span t-att-class="'ai-debug-json-' + valueType" t-esc="scalarDisplay"/>
+    </t>
+  </t>
+
+</templates>

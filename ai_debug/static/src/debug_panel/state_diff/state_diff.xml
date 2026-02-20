@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+  <t t-name="ai_debug.StateDiff">
+    <div class="ai-debug-state-diff">
+
+      <!-- Header row -->
+      <div class="ai-debug-diff-header">
+        <div class="ai-debug-diff-col ai-debug-diff-col-key"></div>
+        <div class="ai-debug-diff-col ai-debug-diff-col-before">Before</div>
+        <div class="ai-debug-diff-col ai-debug-diff-col-after">After</div>
+      </div>
+
+      <!-- Changed entries (added / removed / changed) -->
+      <t t-foreach="changedEntries" t-as="entry" t-key="entry.key">
+        <t t-if="entry.status === 'added'">
+          <div class="ai-debug-diff-row ai-debug-diff-added">
+            <div class="ai-debug-diff-col ai-debug-diff-col-key" t-esc="entry.key"/>
+            <div class="ai-debug-diff-col ai-debug-diff-col-before ai-debug-diff-empty">—</div>
+            <div class="ai-debug-diff-col ai-debug-diff-col-after" t-esc="formatVal(entry.newVal)"/>
+          </div>
+        </t>
+        <t t-elif="entry.status === 'removed'">
+          <div class="ai-debug-diff-row ai-debug-diff-removed">
+            <div class="ai-debug-diff-col ai-debug-diff-col-key" t-esc="entry.key"/>
+            <div class="ai-debug-diff-col ai-debug-diff-col-before" t-esc="formatVal(entry.oldVal)"/>
+            <div class="ai-debug-diff-col ai-debug-diff-col-after ai-debug-diff-empty">—</div>
+          </div>
+        </t>
+        <t t-elif="entry.status === 'changed'">
+          <div class="ai-debug-diff-row ai-debug-diff-changed">
+            <div class="ai-debug-diff-col ai-debug-diff-col-key" t-esc="entry.key"/>
+            <div class="ai-debug-diff-col ai-debug-diff-col-before" t-esc="formatVal(entry.oldVal)"/>
+            <div class="ai-debug-diff-col ai-debug-diff-col-after" t-esc="formatVal(entry.newVal)"/>
+          </div>
+          <!-- Recursive children for nested object diffs -->
+          <t t-if="entry.children and entry.children.length">
+            <div class="ai-debug-diff-children">
+              <t t-foreach="entry.children" t-as="child" t-key="child.key">
+                <t t-if="child.status !== 'unchanged'">
+                  <div t-att-class="'ai-debug-diff-row ai-debug-diff-child ai-debug-diff-' + child.status">
+                    <div class="ai-debug-diff-col ai-debug-diff-col-key">
+                      <span class="ai-debug-diff-child-key" t-esc="entry.key + '.' + child.key"/>
+                    </div>
+                    <div class="ai-debug-diff-col ai-debug-diff-col-before" t-esc="child.status === 'added' ? '—' : formatVal(child.oldVal)"/>
+                    <div class="ai-debug-diff-col ai-debug-diff-col-after" t-esc="child.status === 'removed' ? '—' : formatVal(child.newVal)"/>
+                  </div>
+                </t>
+              </t>
+            </div>
+          </t>
+        </t>
+      </t>
+
+      <!-- Unchanged entries toggle -->
+      <t t-if="unchangedCount > 0">
+        <div class="ai-debug-diff-row ai-debug-diff-unchanged-toggle" t-on-click="toggleUnchanged">
+          <div class="ai-debug-diff-col ai-debug-diff-col-key">
+            <i t-att-class="state.showUnchanged ? 'fa fa-caret-down' : 'fa fa-caret-right'"/>
+            <span class="ai-debug-diff-unchanged-summary">
+              ... <t t-esc="unchangedCount"/> unchanged <t t-esc="unchangedCount === 1 ? 'key' : 'keys'"/>
+            </span>
+          </div>
+          <div class="ai-debug-diff-col ai-debug-diff-col-before"/>
+          <div class="ai-debug-diff-col ai-debug-diff-col-after"/>
+        </div>
+        <t t-if="state.showUnchanged">
+          <t t-foreach="unchangedEntries" t-as="entry" t-key="entry.key">
+            <div class="ai-debug-diff-row ai-debug-diff-unchanged">
+              <div class="ai-debug-diff-col ai-debug-diff-col-key" t-esc="entry.key"/>
+              <div class="ai-debug-diff-col ai-debug-diff-col-before" t-esc="formatVal(entry.oldVal)"/>
+              <div class="ai-debug-diff-col ai-debug-diff-col-after" t-esc="formatVal(entry.newVal)"/>
+            </div>
+          </t>
+        </t>
+      </t>
+
+      <!-- Empty state -->
+      <t t-if="diff.length === 0">
+        <div class="ai-debug-diff-empty-state">No state data available</div>
+      </t>
+
+    </div>
+  </t>
+
+</templates>
