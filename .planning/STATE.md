@@ -11,7 +11,7 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 
 Milestone: v1.0 AI Debugger MVP — SHIPPED 2026-02-20
 Status: Complete
-Last activity: 2026-02-20 — Milestone v1.0 archived
+Last activity: 2026-02-20 - Completed quick task 2: Add system prompt and tools definitions to ai_debug trace data
 
 Progress: [██████████] 100%
 
@@ -44,6 +44,12 @@ None.
 ### Blockers/Concerns
 
 None — v1.0 shipped.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 2 | Add system prompt and tools definitions to ai_debug trace data | 2026-02-20 | 0fffaf8 | [2-add-system-prompt-and-tools-definitions-](./quick/2-add-system-prompt-and-tools-definitions-/) |
 
 ## Session Continuity
 
