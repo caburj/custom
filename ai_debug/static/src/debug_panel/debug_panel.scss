@@ -199,39 +199,36 @@ body.o_ai_debug_standalone {
     }
 
     // =========================================================
-    // TRACE CONTEXT (collapsible)
+    // BODY: TWO-COLUMN LAYOUT
     // =========================================================
 
-    .ai-debug-trace-context {
-        border-bottom: 1px solid #e5e7eb;
-        background: #fff;
-    }
-
-    .ai-debug-trace-context-toggle {
+    .ai-debug-body {
         display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 20px;
-        cursor: pointer;
-        font-size: 12px;
-        font-weight: 600;
-        color: #374151;
-        transition: background-color 0.15s;
-
-        &:hover { background-color: #f3f4f6; }
-
-        .fa { font-size: 10px; color: #9ca3af; width: 12px; text-align: center; }
+        flex-direction: row;
+        flex: 1;
+        overflow: hidden;
+        min-height: 0; // Required for flex children to scroll independently
     }
 
-    .ai-debug-trace-context-hint {
-        font-weight: 400;
-        color: #9ca3af;
-        font-size: 11px;
+    .ai-debug-left-panel {
+        width: 50%;
+        overflow-y: auto;
+        padding: 16px 20px;
+        border-right: 1px solid #e5e7eb;
+        background: #fff;
+        min-height: 0;
     }
 
-    .ai-debug-trace-context-body {
-        padding: 0 20px 12px;
+    .ai-debug-right-panel {
+        width: 50%;
+        overflow-y: auto;
+        padding: 16px 0 80px;
+        min-height: 0;
     }
+
+    // =========================================================
+    // TRACE CONTEXT SECTIONS (used in left panel)
+    // =========================================================
 
     .ai-debug-trace-context-section {
         margin-bottom: 12px;
@@ -259,14 +256,8 @@ body.o_ai_debug_standalone {
     }
 
     // =========================================================
-    // TIMELINE
+    // TIMELINE (rail inside right panel)
     // =========================================================
-
-    .ai-debug-timeline {
-        flex: 1;
-        overflow-y: auto;
-        padding: 16px 0 80px;
-    }
 
     .ai-debug-rail-container {
         display: flex;
