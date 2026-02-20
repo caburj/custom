@@ -16,6 +16,6 @@ class IrWebsocket(models.AbstractModel):
         if not self.env.user.has_group('base.group_system'):
             channels = [
                 ch for ch in channels
-                if not (isinstance(ch, str) and ch.startswith('ai_debug:trace:'))
+                if not (isinstance(ch, str) and ch.startswith('ai_debug:'))
             ]
         return super()._build_bus_channel_list(channels)

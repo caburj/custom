@@ -1,4 +1,25 @@
 // ============================================================
+// Standalone mode — hide Odoo web client chrome
+// ============================================================
+// When the debug panel is active, body gets .o_ai_debug_standalone.
+// This hides the navbar, chat widget, and any other overlays so the
+// panel occupies the full viewport.
+
+body.o_ai_debug_standalone {
+    .o_main_navbar {
+        display: none !important;
+    }
+    .o-mail-ChatHub {
+        display: none !important;
+    }
+    // Remove top padding/margin the web client adds for the navbar.
+    .o_action_manager {
+        top: 0 !important;
+        padding-top: 0 !important;
+    }
+}
+
+// ============================================================
 // AI Debug Panel — Scoped styles under .o_ai_debug_panel
 // ============================================================
 // All selectors are prefixed with .o_ai_debug_panel to prevent
@@ -40,6 +61,11 @@
                 font-size: 12px;
                 color: #6c7086;
                 font-weight: 400;
+
+                &.ai-debug-listen-badge {
+                    color: #f9e2af;
+                    font-style: italic;
+                }
             }
         }
 
@@ -183,6 +209,8 @@
     }
 
     .ai-debug-rail-container {
+        display: flex;
+        flex-direction: column-reverse;
         position: relative;
         padding-left: 48px;
 

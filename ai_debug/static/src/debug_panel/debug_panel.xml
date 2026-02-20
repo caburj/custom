@@ -12,6 +12,9 @@
           <t t-if="state.traceId">
             <span class="ai-debug-header-trace-id">Trace #<t t-esc="state.traceId"/></span>
           </t>
+          <t t-elif="state.mode === 'listen'">
+            <span class="ai-debug-header-trace-id ai-debug-listen-badge">Listening</span>
+          </t>
         </div>
 
         <div class="ai-debug-header-meta">
@@ -73,16 +76,25 @@
       <!-- ===== TIMELINE ===== -->
       <div class="ai-debug-timeline" t-ref="timeline">
 
-        <!-- Empty / waiting state -->
-        <t t-if="state.iterations.length === 0 and state.traceStatus === 'waiting' and !state.errorMsg">
+        <!-- Listen mode: no trace_id, waiting for any new trace -->
+        <t t-if="state.mode === 'listen' and state.iterations.length === 0 and !state.errorMsg">
           <div class="ai-debug-waiting">
             <i class="fa fa-circle-o-notch fa-spin ai-debug-waiting-icon"/>
-            <p class="ai-debug-waiting-text">Waiting for agentic loop...</p>
-            <p class="ai-debug-waiting-hint">Trigger an AI interaction to see iterations stream in real time.</p>
+            <p class="ai-debug-waiting-text">Listening for traces...</p>
+            <p class="ai-debug-waiting-hint">Start an AI conversation in another tab. The debug panel will auto-attach when a new trace begins.</p>
           </div>
         </t>
 
-        <!-- Iteration nodes -->
+        <!-- Trace mode: attached to a trace, waiting for first iteration -->
+        <t t-if="state.mode === 'trace' and state.iterations.length === 0 and state.traceStatus === 'waiting' and !state.errorMsg">
+          <div class="ai-debug-waiting">
+            <i class="fa fa-circle-o-notch fa-spin ai-debug-waiting-icon"/>
+            <p class="ai-debug-waiting-text">Waiting for iterations...</p>
+            <p class="ai-debug-waiting-hint">Trace #<t t-esc="state.traceId"/> is connected. Iterations will appear as the agentic loop runs.</p>
+          </div>
+        </t>
+
+        <!-- Iteration nodes (latest first via CSS flex-direction: column-reverse) -->
         <t t-if="state.iterations.length > 0">
           <div class="ai-debug-rail-container">
             <t t-foreach="state.iterations" t-as="iteration" t-key="iteration.id">
@@ -123,77 +135,7 @@
                   </div>
                 </div>
 
-                <!-- Tool calls nested under iteration (always visible when present) -->
-                <t t-if="iteration.toolCalls.length > 0">
-                  <div class="ai-debug-tool-calls">
-                    <t t-foreach="iteration.toolCalls" t-as="toolCall" t-key="toolCall.id">
-                      <div class="ai-debug-tool-call-node">
-                        <!-- Tool call header -->
-                        <div
-                          class="ai-debug-tool-call-header"
-                          t-on-click="() => toggleToolCall(iteration_index, toolCall_index)"
-                        >
-                          <div class="ai-debug-tool-dot">
-                            <t t-if="toolCall.success === false">
-                              <i class="fa fa-times-circle ai-debug-tool-fail"/>
-                            </t>
-                            <t t-else="">
-                              <i class="fa fa-check-circle ai-debug-tool-ok"/>
-                            </t>
-                          </div>
-                          <span class="ai-debug-tool-name" t-esc="toolCall.name"/>
-                          <t t-if="toolCall.duration_ms">
-                            <span class="ai-debug-tool-duration" t-esc="formatDuration(toolCall.duration_ms)"/>
-                          </t>
-                          <i t-att-class="toolCall.expanded ? 'fa fa-chevron-down' : 'fa fa-chevron-right'"/>
-                        </div>
-
-                        <!-- Tool call detail (expanded) -->
-                        <t t-if="toolCall.expanded">
-                          <div class="ai-debug-tool-call-detail">
-                            <t t-if="toolCall.loading">
-                              <div class="ai-debug-loading"><i class="fa fa-spinner fa-spin"/> Loading...</div>
-                            </t>
-                            <t t-elif="toolCall.detail">
-                              <t t-if="toolCall.detail._error">
-                                <div class="ai-debug-error" t-esc="toolCall.detail._error"/>
-                              </t>
-                              <t t-else="">
-                                <div class="ai-debug-tool-section">
-                                  <div class="ai-debug-section-label">Arguments</div>
-                                  <JsonTree value="toolCall.detail.args" maxDepth="3"/>
-                                </div>
-                                <t t-if="toolCall.detail.result">
-                                  <div class="ai-debug-tool-section">
-                                    <div class="ai-debug-section-label">Result</div>
-                                    <pre class="ai-debug-tool-result" t-esc="toolCall.detail.result"/>
-                                  </div>
-                                </t>
-                                <t t-if="toolCall.detail.state_before or toolCall.detail.state_after">
-                                  <div class="ai-debug-tool-section">
-                                    <div class="ai-debug-section-label">State Diff</div>
-                                    <StateDiff
-                                      stateBefore="toolCall.detail.state_before"
-                                      stateAfter="toolCall.detail.state_after"
-                                    />
-                                  </div>
-                                </t>
-                                <t t-if="toolCall.detail.triggered_confirmation">
-                                  <div class="ai-debug-tool-section ai-debug-confirmation-info">
-                                    <i class="fa fa-shield"/> Confirmation required:
-                                    <span t-esc="toolCall.detail.confirmation_message"/>
-                                  </div>
-                                </t>
-                              </t>
-                            </t>
-                          </div>
-                        </t>
-                      </div>
-                    </t>
-                  </div>
-                </t>
-
-                <!-- Iteration detail tabs (expanded) -->
+                <!-- Iteration detail tabs (expanded) — directly below header -->
                 <t t-if="iteration.expanded">
                   <div class="ai-debug-iteration-detail">
                     <t t-if="iteration.loading">
@@ -254,6 +196,74 @@
                           </t>
                         </div>
                       </t>
+                    </t>
+                  </div>
+                </t>
+
+                <!-- Tool calls nested under iteration (always visible when present) -->
+                <t t-if="iteration.toolCalls.length > 0">
+                  <div class="ai-debug-tool-calls">
+                    <t t-foreach="iteration.toolCalls" t-as="toolCall" t-key="toolCall.id">
+                      <div class="ai-debug-tool-call-node">
+                        <div
+                          class="ai-debug-tool-call-header"
+                          t-on-click="() => toggleToolCall(iteration_index, toolCall_index)"
+                        >
+                          <div class="ai-debug-tool-dot">
+                            <t t-if="toolCall.success === false">
+                              <i class="fa fa-times-circle ai-debug-tool-fail"/>
+                            </t>
+                            <t t-else="">
+                              <i class="fa fa-check-circle ai-debug-tool-ok"/>
+                            </t>
+                          </div>
+                          <span class="ai-debug-tool-name" t-esc="toolCall.name"/>
+                          <t t-if="toolCall.duration_ms">
+                            <span class="ai-debug-tool-duration" t-esc="formatDuration(toolCall.duration_ms)"/>
+                          </t>
+                          <i t-att-class="toolCall.expanded ? 'fa fa-chevron-down' : 'fa fa-chevron-right'"/>
+                        </div>
+
+                        <t t-if="toolCall.expanded">
+                          <div class="ai-debug-tool-call-detail">
+                            <t t-if="toolCall.loading">
+                              <div class="ai-debug-loading"><i class="fa fa-spinner fa-spin"/> Loading...</div>
+                            </t>
+                            <t t-elif="toolCall.detail">
+                              <t t-if="toolCall.detail._error">
+                                <div class="ai-debug-error" t-esc="toolCall.detail._error"/>
+                              </t>
+                              <t t-else="">
+                                <div class="ai-debug-tool-section">
+                                  <div class="ai-debug-section-label">Arguments</div>
+                                  <JsonTree value="toolCall.detail.args" maxDepth="3"/>
+                                </div>
+                                <t t-if="toolCall.detail.result">
+                                  <div class="ai-debug-tool-section">
+                                    <div class="ai-debug-section-label">Result</div>
+                                    <pre class="ai-debug-tool-result" t-esc="toolCall.detail.result"/>
+                                  </div>
+                                </t>
+                                <t t-if="toolCall.detail.state_before or toolCall.detail.state_after">
+                                  <div class="ai-debug-tool-section">
+                                    <div class="ai-debug-section-label">State Diff</div>
+                                    <StateDiff
+                                      stateBefore="toolCall.detail.state_before"
+                                      stateAfter="toolCall.detail.state_after"
+                                    />
+                                  </div>
+                                </t>
+                                <t t-if="toolCall.detail.triggered_confirmation">
+                                  <div class="ai-debug-tool-section ai-debug-confirmation-info">
+                                    <i class="fa fa-shield"/> Confirmation required:
+                                    <span t-esc="toolCall.detail.confirmation_message"/>
+                                  </div>
+                                </t>
+                              </t>
+                            </t>
+                          </div>
+                        </t>
+                      </div>
                     </t>
                   </div>
                 </t>

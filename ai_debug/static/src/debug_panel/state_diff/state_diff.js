@@ -67,8 +67,8 @@ export class StateDiff extends Component {
     static template = "ai_debug.StateDiff";
 
     static props = {
-        stateBefore: { type: Object, optional: true },
-        stateAfter: { type: Object, optional: true },
+        stateBefore: { optional: true },
+        stateAfter: { optional: true },
     };
 
     setup() {

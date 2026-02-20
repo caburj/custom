@@ -112,6 +112,16 @@ class AiSessionDebug(models.TransientModel):
                 trace = env['ai.debug.trace'].create(vals)
                 trace_id = trace.id
                 bus_channel = trace.bus_channel
+                # Broadcast new trace on global channel so listening panels auto-attach.
+                try:
+                    env['bus.bus']._sendone('ai_debug:traces', 'ai_debug/new_trace', {
+                        'trace_id': trace_id,
+                        'bus_channel': bus_channel,
+                        'llm_model': vals.get('llm_model'),
+                        'state': vals.get('state', 'running'),
+                    })
+                except Exception:
+                    _logger.warning('ai_debug: failed to broadcast new trace', exc_info=True)
             return trace_id, bus_channel
         except Exception:
             _logger.warning('ai_debug: failed to write trace', exc_info=True)
@@ -130,6 +140,7 @@ class AiSessionDebug(models.TransientModel):
                 iteration = env['ai.debug.iteration'].create(vals)
                 iteration_id = iteration.id
                 self._debug_bus_send(env, 'ai_debug/iteration', {
+                    'trace_id': trace_id,
                     'iteration_id': iteration_id,
                     'index': vals.get('index'),
                     'duration_ms': vals.get('duration_ms'),
@@ -161,7 +172,7 @@ class AiSessionDebug(models.TransientModel):
         except Exception:
             _logger.warning('ai_debug: failed to update trace (trace_id=%s)', trace_id, exc_info=True)
 
-    def _debug_write_tool_call(self, iteration_id, vals):
+    def _debug_write_tool_call(self, trace_id, iteration_id, vals):
         """Create an ai.debug.tool.call record using a separate cursor.
 
         Returns the new record ID (int), or False on failure.
@@ -176,6 +187,7 @@ class AiSessionDebug(models.TransientModel):
                 tool_call = env['ai.debug.tool.call'].create(vals)
                 tool_call_id = tool_call.id
                 self._debug_bus_send(env, 'ai_debug/tool_call', {
+                    'trace_id': trace_id,
                     'tool_call_id': tool_call_id,
                     'iteration_id': iteration_id,
                     'tool_name': vals.get('tool_name'),
@@ -192,7 +204,12 @@ class AiSessionDebug(models.TransientModel):
     # -------------------------------------------------------------------------
 
     def _debug_bus_send(self, env, event_type, payload):
-        """Send a bus.bus notification on the trace's ai_debug channel.
+        """Send a bus.bus notification on the global ai_debug:traces channel.
+
+        All events are sent on the global channel so that listen-mode panels
+        (subscribed before any trace exists) receive them without race conditions.
+
+        The payload MUST already include trace_id (callers are responsible).
 
         Must be called inside a `with self.env.registry.cursor() as cr:` block
         using the `env` created from that cursor.  This ensures pg_notify fires
@@ -201,12 +218,10 @@ class AiSessionDebug(models.TransientModel):
         Payloads must be small (summary only) — do NOT include messages_sent,
         raw_response, state_before, or state_after.
         """
-        bus_channel = self.env.context.get('_debug_ctx', {}).get('bus_channel')
-        if bus_channel:
-            try:
-                env['bus.bus']._sendone(f'ai_debug:trace:{bus_channel}', event_type, payload)
-            except Exception:
-                _logger.warning('ai_debug: failed to send bus notification', exc_info=True)
+        try:
+            env['bus.bus']._sendone('ai_debug:traces', event_type, payload)
+        except Exception:
+            _logger.warning('ai_debug: failed to send bus notification', exc_info=True)
 
     # -------------------------------------------------------------------------
     # _run_agentic_loop override
@@ -376,6 +391,7 @@ class AiSessionDebug(models.TransientModel):
             )
             return
 
+        trace_id = debug_ctx['trace_id']
         iteration_id = debug_ctx.get('iteration_id')
 
         # Per-tool-call tracking state.
@@ -409,7 +425,7 @@ class AiSessionDebug(models.TransientModel):
                     None
                 )
                 if matching_tc:
-                    self._debug_write_tool_call(iteration_id, {
+                    self._debug_write_tool_call(trace_id, iteration_id, {
                         'tool_name': matching_tc.get('name'),
                         'call_id': str(triggered_call_id),
                         'args': matching_tc.get('args'),
@@ -430,7 +446,7 @@ class AiSessionDebug(models.TransientModel):
 
                 for tool_result in item['tool_results']:
                     tc = tool_result.get('tool_call', {})
-                    self._debug_write_tool_call(iteration_id, {
+                    self._debug_write_tool_call(trace_id, iteration_id, {
                         'tool_name': tc.get('name'),
                         'call_id': str(tc.get('call_id', '')),
                         'args': tc.get('args'),

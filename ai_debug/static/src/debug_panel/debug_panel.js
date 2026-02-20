@@ -16,16 +16,10 @@ import { StateDiff } from "./state_diff/state_diff";
 /**
  * DebugPanel — Live real-time view of the AI agentic loop.
  *
- * Registers as an ir.actions.client with tag "ai_debug.debug_panel".
- * Opens at /odoo/ai-debug?trace_id=N.
- *
- * Architecture:
- *   - Reads trace_id from action context or URL query string
- *   - Fetches bus_channel UUID and trace metadata via RPC on mount
- *   - Subscribes to ai_debug channel on bus.bus for real-time events
- *   - Renders a vertical timeline of iterations and tool calls
- *   - Lazily fetches full iteration/tool_call detail on expand
- *   - Auto-scrolls to follow latest event, pauses when user scrolls up
+ * Two modes:
+ *   1. Direct: /odoo/ai-debug?trace_id=N — shows that specific trace
+ *   2. Listen: /odoo/ai-debug (no trace_id) — subscribes to global channel,
+ *      auto-attaches to the next new trace that starts
  */
 export class DebugPanel extends Component {
     static template = "ai_debug.DebugPanel";
@@ -34,14 +28,15 @@ export class DebugPanel extends Component {
 
     setup() {
         this.busService = useService("bus_service");
-        this.rpc = useService("rpc");
+        this.orm = useService("orm");
 
         this.state = useState({
+            mode: "loading",       // "loading" | "listen" | "trace"
             iterations: [],
             traceStatus: "waiting",
             traceId: null,
             connectionStatus: "connecting",
-            traceInfo: null,  // { llm_model, agent_id, iteration_count, ... }
+            traceInfo: null,
             errorMsg: null,
         });
 
@@ -49,14 +44,20 @@ export class DebugPanel extends Component {
         this.userScrolledUp = false;
         this.channel = null;
 
-        // Bind handlers so they can be stored for unsubscribe/removeEventListener.
+        // Bind all handlers once.
         this._onIteration = this._onIteration.bind(this);
         this._onToolCall = this._onToolCall.bind(this);
         this._onTraceUpdate = this._onTraceUpdate.bind(this);
+        this._onNewTrace = this._onNewTrace.bind(this);
         this._onWorkerState = this._onWorkerState.bind(this);
         this._onScroll = this._onScroll.bind(this);
+        this.toggleIteration = this.toggleIteration.bind(this);
+        this.toggleToolCall = this.toggleToolCall.bind(this);
+        this.setActiveTab = this.setActiveTab.bind(this);
 
         onMounted(async () => {
+            // Hide Odoo web client chrome (navbar, chat widget) for standalone feel.
+            document.body.classList.add("o_ai_debug_standalone");
             await this._init();
         });
 
@@ -67,6 +68,7 @@ export class DebugPanel extends Component {
         });
 
         onWillUnmount(() => {
+            document.body.classList.remove("o_ai_debug_standalone");
             this._teardown();
         });
     }
@@ -76,6 +78,22 @@ export class DebugPanel extends Component {
     // -------------------------------------------------------------------------
 
     async _init() {
+        // Subscribe to ALL event types once upfront. The bus service dispatches
+        // by notification type regardless of which channel it came from.
+        this.busService.subscribe("ai_debug/iteration", this._onIteration);
+        this.busService.subscribe("ai_debug/tool_call", this._onToolCall);
+        this.busService.subscribe("ai_debug/trace_update", this._onTraceUpdate);
+        this.busService.subscribe("ai_debug/new_trace", this._onNewTrace);
+        this.busService.addEventListener("BUS:WORKER_STATE_UPDATED", this._onWorkerState);
+
+        if (this.scrollRef.el) {
+            this.scrollRef.el.addEventListener("scroll", this._onScroll);
+        }
+
+        // Always subscribe to the global traces channel so we can auto-switch
+        // to new traces even when viewing a completed one.
+        this.busService.addChannel("ai_debug:traces");
+
         // Resolve trace_id: action context first, then URL query string.
         let traceId = this.props.action?.context?.trace_id;
         if (!traceId) {
@@ -84,73 +102,144 @@ export class DebugPanel extends Component {
         }
 
         if (traceId) {
-            this.state.traceId = parseInt(traceId, 10);
+            await this._loadTrace(parseInt(traceId, 10));
+        } else {
+            this.state.mode = "listen";
         }
 
-        if (!this.state.traceId) {
-            this.state.errorMsg = "No trace_id provided in URL or action context.";
-            this.state.connectionStatus = "disconnected";
-            return;
+        this._syncConnectionStatus(this.busService.workerState);
+    }
+
+    /**
+     * Switch to a specific trace channel immediately (synchronous).
+     * Used by _onNewTrace to subscribe without any async gap.
+     */
+    _switchToTraceChannel(traceId, busChannel, traceInfo) {
+        // Unsubscribe from previous trace channel.
+        if (this.channel) {
+            this.busService.deleteChannel(`ai_debug:trace:${this.channel}`);
         }
 
-        // Fetch trace metadata and bus channel.
+        this.channel = busChannel;
+        this.state.traceId = traceId;
+        this.state.mode = "trace";
+        this.state.traceStatus = "running";
+        this.state.traceInfo = traceInfo;
+        this.state.iterations.splice(0);
+        this.state.errorMsg = null;
+
+        // Subscribe to the trace-specific channel — must happen ASAP.
+        this.busService.addChannel(`ai_debug:trace:${busChannel}`);
+    }
+
+    /**
+     * Load an existing trace by ID (async). For direct-link and history viewing.
+     */
+    async _loadTrace(traceId) {
+        this.state.mode = "trace";
+        this.state.traceId = traceId;
+        this.state.errorMsg = null;
+
         try {
-            const [traceRecord] = await this.rpc("/web/dataset/call_kw", {
-                model: "ai.debug.trace",
-                method: "read",
-                args: [
-                    [this.state.traceId],
-                    ["bus_channel", "state", "llm_model", "agent_id", "iteration_count"],
-                ],
-                kwargs: {},
-            });
+            const [traceRecord] = await this.orm.read(
+                "ai.debug.trace",
+                [traceId],
+                ["bus_channel", "state", "llm_model", "agent_id", "iteration_count"],
+            );
 
             if (!traceRecord) {
-                this.state.errorMsg = `Trace #${this.state.traceId} not found.`;
-                this.state.connectionStatus = "disconnected";
+                this.state.errorMsg = `Trace #${traceId} not found.`;
                 return;
+            }
+
+            // Unsubscribe from previous trace channel.
+            if (this.channel) {
+                this.busService.deleteChannel(`ai_debug:trace:${this.channel}`);
             }
 
             this.channel = traceRecord.bus_channel;
             this.state.traceInfo = traceRecord;
-            // If trace is already complete, reflect that immediately.
-            if (traceRecord.state && traceRecord.state !== "running") {
-                this.state.traceStatus = traceRecord.state;
+            this.state.traceStatus = traceRecord.state || "waiting";
+
+            // Subscribe to the trace channel (for still-running traces).
+            this.busService.addChannel(`ai_debug:trace:${this.channel}`);
+
+            // Load existing iterations.
+            this.state.iterations.splice(0);
+            await this._loadExistingIterations();
+            if (this.state.iterations.length > 0 && this.state.traceStatus === "waiting") {
+                this.state.traceStatus = "running";
             }
         } catch (err) {
             this.state.errorMsg = `Failed to load trace: ${err.message || err}`;
-            this.state.connectionStatus = "disconnected";
-            return;
         }
-
-        // Subscribe to bus events.
-        const fullChannel = `ai_debug:trace:${this.channel}`;
-        await this.busService.addChannel(fullChannel);
-        this.busService.subscribe("ai_debug/iteration", this._onIteration);
-        this.busService.subscribe("ai_debug/tool_call", this._onToolCall);
-        this.busService.subscribe("ai_debug/trace_update", this._onTraceUpdate);
-        this.busService.addEventListener("BUS:WORKER_STATE_UPDATED", this._onWorkerState);
-
-        // Add scroll tracking.
-        if (this.scrollRef.el) {
-            this.scrollRef.el.addEventListener("scroll", this._onScroll);
-        }
-
-        // Set initial connection status from current bus worker state.
-        this._syncConnectionStatus(this.busService.workerState);
     }
 
     _teardown() {
+        this.busService.unsubscribe("ai_debug/iteration", this._onIteration);
+        this.busService.unsubscribe("ai_debug/tool_call", this._onToolCall);
+        this.busService.unsubscribe("ai_debug/trace_update", this._onTraceUpdate);
+        this.busService.unsubscribe("ai_debug/new_trace", this._onNewTrace);
+        this.busService.removeEventListener("BUS:WORKER_STATE_UPDATED", this._onWorkerState);
+
         if (this.channel) {
-            this.busService.unsubscribe("ai_debug/iteration", this._onIteration);
-            this.busService.unsubscribe("ai_debug/tool_call", this._onToolCall);
-            this.busService.unsubscribe("ai_debug/trace_update", this._onTraceUpdate);
             this.busService.deleteChannel(`ai_debug:trace:${this.channel}`);
         }
-        this.busService.removeEventListener("BUS:WORKER_STATE_UPDATED", this._onWorkerState);
+        this.busService.deleteChannel("ai_debug:traces");
 
         if (this.scrollRef.el) {
             this.scrollRef.el.removeEventListener("scroll", this._onScroll);
+        }
+    }
+
+    async _loadExistingIterations() {
+        try {
+            const iterations = await this.orm.searchRead(
+                "ai.debug.iteration",
+                [["trace_id", "=", this.state.traceId]],
+                ["index", "duration_ms", "tool_call_count"],
+                { order: "index asc" },
+            );
+            if (!iterations.length) return;
+
+            const iterationIds = iterations.map((it) => it.id);
+            const toolCalls = await this.orm.searchRead(
+                "ai.debug.tool.call",
+                [["iteration_id", "in", iterationIds]],
+                ["iteration_id", "tool_name", "duration_ms", "success"],
+                { order: "id asc" },
+            );
+
+            const tcByIteration = {};
+            for (const tc of toolCalls) {
+                const itId = tc.iteration_id[0];
+                if (!tcByIteration[itId]) tcByIteration[itId] = [];
+                tcByIteration[itId].push({
+                    id: tc.id,
+                    name: tc.tool_name,
+                    duration_ms: tc.duration_ms,
+                    success: tc.success,
+                    expanded: false,
+                    loading: false,
+                    detail: null,
+                });
+            }
+
+            for (const it of iterations) {
+                this.state.iterations.push({
+                    id: it.id,
+                    index: it.index,
+                    duration_ms: it.duration_ms,
+                    tool_call_count: it.tool_call_count,
+                    toolCalls: tcByIteration[it.id] || [],
+                    expanded: false,
+                    loading: false,
+                    detail: null,
+                    activeTab: "messages",
+                });
+            }
+        } catch {
+            // Non-fatal.
         }
     }
 
@@ -174,7 +263,17 @@ export class DebugPanel extends Component {
     // Bus event handlers
     // -------------------------------------------------------------------------
 
+    _onNewTrace(payload) {
+        // A new trace started — immediately switch to its channel (no async).
+        if (!payload.trace_id || !payload.bus_channel) return;
+        this._switchToTraceChannel(payload.trace_id, payload.bus_channel, {
+            llm_model: payload.llm_model,
+            state: payload.state || "running",
+        });
+    }
+
     _onIteration(payload) {
+        if (payload.trace_id !== this.state.traceId) return;
         this.state.iterations.push({
             id: payload.iteration_id,
             index: payload.index,
@@ -190,6 +289,7 @@ export class DebugPanel extends Component {
     }
 
     _onToolCall(payload) {
+        if (payload.trace_id !== this.state.traceId) return;
         const iteration = this.state.iterations.find((it) => it.id === payload.iteration_id);
         if (iteration) {
             iteration.toolCalls.push({
@@ -206,6 +306,7 @@ export class DebugPanel extends Component {
     }
 
     _onTraceUpdate(payload) {
+        if (payload.trace_id !== this.state.traceId) return;
         if (payload.state) {
             this.state.traceStatus = payload.state;
         }
@@ -227,7 +328,6 @@ export class DebugPanel extends Component {
     _onScroll() {
         const el = this.scrollRef.el;
         if (!el) return;
-        // Near bottom = within 50px of the bottom edge.
         this.userScrolledUp = el.scrollTop + el.clientHeight < el.scrollHeight - 50;
     }
 
@@ -244,15 +344,11 @@ export class DebugPanel extends Component {
         if (iteration.expanded && iteration.detail === null && !iteration.loading) {
             iteration.loading = true;
             try {
-                const [detail] = await this.rpc("/web/dataset/call_kw", {
-                    model: "ai.debug.iteration",
-                    method: "read",
-                    args: [
-                        [iteration.id],
-                        ["messages_sent", "raw_response", "state_before", "state_after", "final_message"],
-                    ],
-                    kwargs: {},
-                });
+                const [detail] = await this.orm.read(
+                    "ai.debug.iteration",
+                    [iteration.id],
+                    ["messages_sent", "raw_response", "state_before", "state_after", "final_message"],
+                );
                 iteration.detail = detail || null;
             } catch (err) {
                 iteration.detail = { _error: `Failed to load: ${err.message || err}` };
@@ -273,15 +369,11 @@ export class DebugPanel extends Component {
         if (toolCall.expanded && toolCall.detail === null && !toolCall.loading) {
             toolCall.loading = true;
             try {
-                const [detail] = await this.rpc("/web/dataset/call_kw", {
-                    model: "ai.debug.tool.call",
-                    method: "read",
-                    args: [
-                        [toolCall.id],
-                        ["args", "result", "state_before", "state_after", "confirmation_message", "triggered_confirmation", "success"],
-                    ],
-                    kwargs: {},
-                });
+                const [detail] = await this.orm.read(
+                    "ai.debug.tool.call",
+                    [toolCall.id],
+                    ["args", "result", "state_before", "state_after", "confirmation_message", "triggered_confirmation", "success"],
+                );
                 toolCall.detail = detail || null;
             } catch (err) {
                 toolCall.detail = { _error: `Failed to load: ${err.message || err}` };
