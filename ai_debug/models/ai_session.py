@@ -251,11 +251,24 @@ class AiSessionDebug(models.TransientModel):
         captured_instructions = self.env.context.get('_debug_instructions') or instructions
         captured_rag = self.env.context.get('_debug_rag_context') or ''
 
+        # Build tools definition summary from the tools recordset.
+        # We serialize name, description, and schema for each tool — this is the
+        # "what tools were available" companion to the already-captured instructions.
+        tools_definition = []
+        if tools:
+            for tool in tools:
+                tools_definition.append({
+                    'name': tool.name,
+                    'description': (tool.ai_tool_description or '').strip(),
+                    'schema': tool.ai_tool_schema or '',
+                })
+
         trace_id, bus_channel = self._debug_write_trace({
             'llm_model': model,
             'state': 'running',
             'instructions': captured_instructions,
             'rag_context': captured_rag,
+            'tools_definition': tools_definition or False,
         })
 
         if not trace_id:

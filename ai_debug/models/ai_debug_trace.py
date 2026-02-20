@@ -24,9 +24,10 @@ class AiDebugTrace(models.Model):
         index=True,
     )
 
-    # System prompt + RAG (captured from _generate_next_response)
+    # System prompt, RAG, and tools (captured from _generate_next_response / _run_agentic_loop)
     instructions = fields.Text(string='System Instructions')
     rag_context = fields.Text(string='RAG Context')
+    tools_definition = fields.Json(string='Tools Definition')
 
     # Loop outcome
     state = fields.Selection([
