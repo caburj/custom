@@ -1,14 +1,38 @@
 # Feature Research
 
-**Domain:** AI/LLM agentic loop debugger — Odoo-native developer tool
+**Domain:** Live agentic loop tracer — sidebar tree / master-detail layout (v1.1)
 **Researched:** 2026-02-20
-**Confidence:** MEDIUM-HIGH (ecosystem tools well-documented; Odoo-native translation is original reasoning based on verified ecosystem patterns)
+**Confidence:** MEDIUM-HIGH (ecosystem patterns from LangSmith, Langfuse, Jaeger, VS Code are well-documented; Odoo OWL translation is original reasoning from verified source code)
+
+---
+
+## Context: What v1.0 Already Provides
+
+These features exist and must NOT be re-implemented — they are dependencies, not deliverables.
+
+- Live iteration streaming via bus.bus (iterations arrive in real time)
+- Tool call tracking with args/results (lazy-loaded on expand)
+- System prompt, RAG context, tools definition display (left panel)
+- JsonTree recursive renderer with Ctrl+click recursive fold
+- StateDiff viewer (changed/added/removed keys, unchanged collapsible)
+- Two-column layout: left trace context + right timeline
+- Connection status indicator
+- Listen mode (auto-attaches to next new trace)
+
+The v1.1 deliverable replaces the timeline + manual expand model with a sidebar tree + detail panel model. The existing OWL components (JsonTree, StateDiff) are reused in the new detail panel.
 
 ---
 
 ## Reference Ecosystem
 
-Tools studied: LangSmith, Braintrust, Arize Phoenix, Langfuse. These are the gold standard for LLM observability and define what the domain expects. The Odoo AI Debugger translates these concepts into an Odoo-native module — no external infrastructure, data in ORM models, UI in OWL.
+**Patterns studied:**
+- **VS Code debugger sidebar** — multi-session call stack as a tree; selecting a frame in the left sidebar updates variables/watch panels on the right. Multiple debug sessions appear as top-level tree roots.
+- **Jaeger trace UI** — traces collapsed by default; clicking a span expands detail inline OR opens a detail panel; tree indentation communicates parent/child span relationships. Waterfall timing is the primary visual.
+- **Langfuse new trace view (2025)** — tree/timeline toggle; tree reconstructed from `parent_observation_id`; clicking a span shows input/output in a right-side detail pane. Search within the tree by type, ID, or name.
+- **LangSmith run tree** — collapsible tree nodes per agent step; status badges (running/success/error) inline with each node; clicking opens detail with input/output, metadata, latency.
+- **Browser DevTools (Network panel)** — left list is the "master"; clicking a request reveals headers/preview/response/timing tabs in the right detail area. Arrow-key navigation moves selection up/down.
+
+**Key pattern synthesis:** The canonical live-tracer UX is a persistent left sidebar tree (master) and a right detail panel (detail). Selection in the sidebar drives content in the detail panel. The tree nodes carry status badges inline (spinner for running, checkmark for done, X for error). Multiple concurrent runs become top-level nodes in the same sidebar.
 
 ---
 
@@ -16,123 +40,124 @@ Tools studied: LangSmith, Braintrust, Arize Phoenix, Langfuse. These are the gol
 
 ### Table Stakes (Users Expect These)
 
-Features users assume exist. Missing these = product feels incomplete.
+Features a developer opening a live tracer sidebar expects without being told they exist. Missing any of these makes the tool feel broken or incomplete.
 
 | Feature | Why Expected | Complexity | Notes |
 |---------|--------------|------------|-------|
-| **Trace capture** — one record per agentic loop run | Every LLM observability tool (LangSmith, Langfuse, Braintrust, Phoenix) organizes data around traces. Developers won't call it a debugger if it doesn't have this. | LOW | `ai.debug.trace` model. Already designed in PROJECT.md. |
-| **Iteration records** — one record per LLM call within a loop | The loop runs 1–20 times per trace. Collapsing iterations loses the most critical diagnostic signal: which call went wrong. | LOW | `ai.debug.iteration` model. Already designed. |
-| **Tool call records** — per-execution capture of name, args, result, success, duration | Every tool-call-capable agent debugger captures this. Without it, you can't tell what the agent actually did. | LOW | `ai.debug.tool.call` model. Already designed. |
-| **Full LLM input capture** — exact messages array sent to the provider | The messages sent are often different from what you expect (system prompt injection, RAG context, previous turn history). Must see exactly what the LLM received. | LOW | `messages_sent` Json field on iteration. |
-| **Raw LLM response capture** — provider JSON verbatim | Diagnosing malformed tool calls, unexpected stop reasons, or refusal messages requires the raw response, not a parsed summary. | LOW | `raw_response` Json field on iteration. |
-| **Loop termination reason** — why the loop stopped | The three outcomes (final message, max iterations hit, confirmation pause) have completely different implications. Must be explicit. | LOW | Covered by `state` on trace + `final_message` on iteration + `triggered_confirmation` on tool call. |
-| **Timing data** — duration_ms on trace, iteration, and tool call | Latency debugging is the most common first question ("why is this slow?"). All three tools studied expose per-span timing. | LOW | Fields already designed. |
-| **Backend list + form views** — searchable history of all traces | Developers need post-mortem inspection without writing ORM queries. Standard Odoo views make traces first-class data. | LOW | Standard Odoo list/form/search views. No novel complexity. |
-| **Enable/disable switch** — `ir.config_parameter` master toggle | Running full capture in a production environment with real users would be unacceptable overhead and a privacy risk. The switch must exist before anyone can use the module safely. | LOW | `ai_debugger.enabled` config param. |
-| **Trace retention / auto-cleanup** — configurable TTL with scheduled deletion | Debug data accumulates fast (every AI interaction). Without TTL, the database fills up. All production observability tools have this (Langfuse, LangSmith). | LOW | `ai_debugger.retention_days` + scheduled action. |
+| **Sidebar tree with 3-level hierarchy** — Loop > Iteration > Tool Call | Every live tracer (Jaeger, LangSmith, Langfuse, VS Code) organizes data as a tree. A flat timeline is a v1.0 debugging aid; the tree is how inspectors work. | MEDIUM | OWL component: `TracerSidebar`. Each level: loop node > iteration nodes > tool call leaf nodes. All 3 levels visible simultaneously via collapse/expand. |
+| **Click-to-select drives detail panel** | The entire point of a master/detail layout. Clicking a node in the sidebar must immediately replace the detail panel content with that node's data. | LOW | Selection state: `{ type: 'loop' \| 'iteration' \| 'tool_call', id }`. Detail panel is a single OWL component that switches content based on type. |
+| **Status badge inline with each tree node** | VS Code shows a spinner next to the active stack frame. LangSmith puts running/success/error badges on each node. Developers need to see "what's happening right now" without opening the detail panel. | LOW | CSS-only: spinner icon for running, checkmark for done, X for error. Loop node shows running state while any iteration is in flight. |
+| **Auto-select the latest running node** | When a new iteration or tool call arrives over bus.bus, the sidebar selection should auto-advance to it — unless the user has manually selected a different node. Equivalent to how a debugger's call stack auto-selects the current frame. | MEDIUM | "User has manually selected" flag. Clear flag when a new loop starts. Auto-select only the newest node from bus.bus events. |
+| **Loop node as first-class citizen** — labeled by agent name | The loop (trace) must be a visible, selectable root node in the tree — not just a header. Selecting it shows the loop-level context (system prompt, RAG, tools). This is equivalent to Jaeger's root span. | LOW | Loop node: `[agent_name] — [model] — [status]`. Clicking it shows the left-panel content from v1.0 (system prompt, RAG, tools) in the detail panel. |
+| **Multiple loops as top-level tree roots** | When two agentic loops run in the same session (sequentially or concurrently), both appear as top-level nodes in the sidebar. VS Code debugger shows multiple debug sessions as siblings in the call stack tree. | MEDIUM | State: `loops[]`, each with nested iterations. Sidebar renders one tree root per loop. No tabs — all roots are always visible in the sidebar. |
+| **Ephemeral session-scoped data** — refresh clears all | The v1.1 tracer has no database. All state lives in frontend memory. Refresh = empty sidebar. Users of developer tools understand this (DevTools network panel, VS Code debug session). Must be explicit: no "save trace" in v1.1. | LOW | Frontend-only state. No ORM reads for trace data (full payloads come over bus.bus). |
+| **Full payloads over bus.bus** — no lazy ORM reads | The v1.0 model lazy-loaded detail via `orm.read()` on expand. v1.1 has no DB models. Every bus.bus event must carry the full payload needed to populate the detail panel. | MEDIUM | Bus payload schema design: iteration events carry `messages_sent`, `raw_response`, `state_before`, `state_after`. Tool call events carry `args`, `result`, confirmation fields. This is a backend instrumentation task, not just frontend. |
+| **Connection status indicator** | Already exists in v1.0. Must be retained. Developers watching a live trace must know if the WebSocket is connected or reconnecting. | LOW | Carry forward from v1.0 debug_panel.js `_syncConnectionStatus`. |
 
 ### Differentiators (Competitive Advantage)
 
-Features that set the product apart. Not required, but valued.
+Features that make this tracer better than a generic span-tree inspector, specifically because it is Odoo-native and domain-specific.
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| **Live real-time debug panel** — OWL UI updated via bus.bus as the loop runs | External tools (LangSmith, Langfuse) show traces only after completion. Watching the loop live — seeing tool calls appear one by one as they execute — is not available in any Odoo-native tool and is the core development-time value proposition. | HIGH | OWL component + bus.bus channel per session. Most complex part of the module. |
-| **State diff viewer** — visual diff of `tools_context['state']` between iterations | State mutation across iterations is a primary source of bugs (a tool sets state incorrectly, corrupting all downstream calls). Phoenix and LangSmith show state, but not diffs. Showing exactly what changed each iteration is a direct debugging accelerant. | MEDIUM | JSON diff on `state_before` / `state_after`. Can use Python `deepdiff` or a simple JS renderer. |
-| **Confirmation flow tracking** — explicit capture of pause/resume state | The Odoo `ai` module has a unique two-phase confirmation pattern (`tool_request_message`, `pending_tool_call_id`). External tools have no concept of this. Surfacing which tool triggered a confirmation pause and what the pending call ID is has no analogue in LangSmith/Langfuse. | LOW | `triggered_confirmation` + `confirmation_message` fields already designed. |
-| **JSON tree renderer** — collapsible, syntax-highlighted inline JSON viewer | Raw JSON blobs (messages array, raw LLM response) are unreadable in a plain `<textarea>`. A custom OWL JSON tree component makes the data explorable without copy-pasting to an external viewer. | MEDIUM | OWL component. Reusable across message viewer and state diff. |
-| **System prompt + RAG context capture** — full instructions and injected chunks per trace | LangSmith captures this as the first span's input. Odoo-native access to `_get_instructions()` and `_get_context_input()` output is the most direct way to answer "why did the agent say X?" | MEDIUM | Requires instrumentation at `_generate_next_response()` entry in addition to `_run_agentic_loop()`. |
-| **Per-agent filter in history views** — filter traces by `ai.agent` | Comparing traces across agent configurations (e.g., GPT-4o vs Gemini, different system prompts) is a primary workflow. Standard OWL search + `domain` on `agent_id` makes this trivial. | LOW | Standard Odoo search view filter. Trivially added. |
-| **Error surfacing** — explicit `state = 'error'` with exception capture | The loop can fail with a Python exception (provider timeout, malformed response). An `error` state with the exception message stored lets developers see failures without reading server logs. | LOW | Try/except in the inherited generator methods. |
+| **Agent name as loop label** — reads from `ai.agent` record | LangSmith/Langfuse show trace IDs or operation names. The Odoo AI module has named agents (the `ai.agent` model). Labeling each loop root with the agent name ("Sales Assistant", "HR Bot") is instantly meaningful to developers. Generic tracers cannot do this. | LOW | Bus payload includes `agent_name` from `ai.agent.name` at loop start. Displayed as the primary label on the loop tree node. |
+| **Subagent-ready tree design** — parent/child loop relationship anticipated | The Odoo `ai` module is expected to support subagents (a nested agentic loop spawned inside a parent loop). The tree data model should carry a `parent_loop_id` field from day one, even though subagent nesting is not yet implemented upstream. This avoids a data model migration later. | LOW | Data model: `loops[].parent_loop_id`. When populated, the child loop node renders as a child of the parent in the sidebar tree (4-level hierarchy: parent loop > child loop > iteration > tool call). In v1.1 this field is always null. |
+| **Iteration-level timing waterfall** — duration_ms as a visual bar in the sidebar node | LangSmith and Jaeger show timing as a waterfall bar next to each node. Even a simple text duration (`1.2s`) next to each iteration node gives immediate "which call was slow" signal without opening the detail panel. | LOW | Format: `formatDuration(ms)` already exists in debug_panel.js. Display inline on each iteration tree node. |
+| **Confirmation pause state** — explicit "Paused: waiting for user" node status | Odoo's AI module has a unique two-phase confirmation pattern. When a tool triggers a confirmation pause, the current iteration's status must clearly show "Paused" — not "Running" and not "Done". No external tracer has this concept. | LOW | Bus payload `state = 'paused'` on the loop update event. Loop node shows a "paused" badge (distinct from running/done/error). |
+| **Detail panel tabs match node type** — different tab sets for loop vs iteration vs tool call | Selecting a loop shows: System Prompt / RAG Context / Tools Definition tabs. Selecting an iteration shows: Messages Sent / Raw Response / State Diff tabs. Selecting a tool call shows: Args / Result / State Diff tabs. This is type-aware context — better than a generic key/value viewer. | MEDIUM | Single `DetailPanel` OWL component with `t-if` branches on selected node type. Reuses existing JsonTree and StateDiff components for content rendering. |
+| **Listen mode preserved** — auto-attaches to next loop | v1.0's "listen" mode (no trace_id in URL, auto-attaches to the next `ai_debug/new_trace` bus event) must survive the v1.1 redesign. Developers leave the tracer open in a tab and watch loops arrive automatically. | LOW | Carry forward from v1.0 `_onNewTrace` handler. In v1.1: add the new loop as a tree root and auto-select it. |
+| **Keyboard navigation in sidebar tree** — arrow keys to move selection | W3C ARIA tree pattern: Down Arrow moves to next visible node, Up Arrow moves to previous, Right Arrow expands a collapsed node, Left Arrow collapses or moves to parent. This matches DevTools and VS Code behavior developers already know. | MEDIUM | OWL `t-on-keydown` on sidebar container. ARIA `role="tree"`, `role="treeitem"` on nodes. Adds accessibility without changing visual design. |
 
 ### Anti-Features (Commonly Requested, Often Problematic)
 
-Features that seem good but create problems.
-
 | Feature | Why Requested | Why Problematic | Alternative |
 |---------|---------------|-----------------|-------------|
-| **HTTP-level LLM traffic interception** — proxy or monkey-patch the provider HTTP client | "I want to see the exact HTTP request/response." Sounds thorough. | Monkey-patching `requests` or `httpx` in Odoo is fragile, breaks with provider library updates, and risks intercepting unrelated traffic. MODEL.md explicitly rules this out. The Odoo model layer already captures everything needed. | Capture at the `ai.session` model layer via `_inherit`. The provider formats the data before sending; capture it there. Confidence: HIGH — Odoo inheritance gives full access without HTTP-layer hacks. |
-| **Prompt editing / replay** — edit a captured trace's messages and re-run | LangSmith and Arize Phoenix both have this (Phoenix calls it "span replay"). Users will ask for it. | Requires UI to construct and fire a new `ai.session` run with modified inputs. Odoo's session lifecycle (`TransientModel`, tied to a chat channel) makes replay non-trivial — there is no "dry run" mode. Building this safely is a significant scope expansion for v1. | Defer to v2. For now, copy the messages JSON to use in manual testing. Add a "copy messages JSON" button as a stepping stone. |
-| **Evaluation / scoring framework** — automated LLM-as-judge scoring of traces | LangSmith, Braintrust, and Langfuse all have this. It's the logical next step after tracing. | This is a separate product category (LLMOps eval pipeline). It requires prompt templates for judges, a scoring data model, dataset management, and experiment comparison. Out of scope for a single-developer debugger module. | Log `result` and `success` from tool calls. Let developers do qualitative review via the history views. Evaluation is v3+. |
-| **Multi-instance / distributed tracing** — trace across multiple Odoo workers or instances | Sounds like proper observability. | The agentic loop in Odoo is single-process (one worker handles one request). Distributed tracing adds OpenTelemetry complexity that provides no value for the single-instance local development target. PROJECT.md explicitly out-of-scopes this. | If distributed tracing ever matters, bolt on OpenTelemetry export at the trace level. Build the data model cleanly so it can emit OTLP spans later. |
-| **Real-time token streaming capture** — capture the LLM token stream mid-generation | "I want to see tokens as they appear." | Odoo's `generate_response` endpoint uses line-delimited JSON, not true SSE with token-level streaming. The `ai.session` model receives complete chunks, not individual tokens. There is no obvious hook for true per-token capture without modifying the provider layer. | Capture full response chunks at `provider._format_from_llm()` return. Iteration-level timing (duration_ms) tells you how long the LLM took to respond. Per-token streaming is false precision for debugging purposes. |
-| **Mobile / responsive UI for the live panel** | Developers sometimes work on tablets. | The live debug panel is a developer tool. It shows raw JSON, state diffs, multi-column iteration cards. Responsive layout for this level of data density is a design rabbit hole. PROJECT.md explicitly out-of-scopes mobile. | Desktop-only with a minimum width. Enforce with CSS `min-width`. |
+| **Tabs for multiple loops** — a tab bar where each loop is a tab | Feels familiar (Chrome tabs, VS Code editor tabs). Easy to implement. | When two loops run simultaneously or in rapid succession, a tab bar means only one loop is visible at a time. The sidebar tree shows all loops simultaneously, giving a more complete picture. Tabs also break keyboard navigation and don't scale past ~5 loops in a session. | Top-level tree roots in the sidebar. All loops visible simultaneously. Most recent is auto-selected. |
+| **Persistent traces across refreshes** — localStorage or IndexedDB cache | Developers lose traces on refresh and ask for persistence. | v1.1 is explicitly ephemeral. Persistence via localStorage creates stale data problems (events from a previous session polluting a new one), schema migration headaches, and privacy concerns (sensitive LLM payloads cached in browser storage). | Database persistence is a v2 feature. For now: document that traces are session-scoped. A clear "Session" label in the sidebar header sets the expectation. |
+| **Search / filter within the sidebar tree** | Large loops with 20+ iterations and 50+ tool calls are hard to scan. | Adds significant UI complexity (filter input, match highlighting, collapsed-but-matching state) for a developer tool where the tree depth is bounded (3–4 levels, typically 1–20 iterations). Adding search now would require rebuilding the tree state model to track "match" status. | Defer to v1.x. Sorting (latest first vs chronological) is a simpler first step. Ctrl+F browser search works for text already visible in the sidebar. |
+| **Live token streaming** — show LLM response tokens as they arrive | "I want to see the response being generated." | The Odoo AI module's `generate_response` endpoint delivers complete chunks, not per-token SSE. There is no token-level hook without modifying the provider layer — explicitly out of scope. Any attempt to fake streaming (polling for partial response) would require DB persistence. | Show the raw response in the detail panel as soon as the iteration completes. Display duration_ms so developers know how long the LLM took. |
+| **Editable trace replay** — click a node and re-run with modified messages | LangSmith has this, users will ask. | Requires constructing and firing a new `ai.session` run from within the frontend — which requires knowing the session context, record ID, channel ID, and other runtime state that the tracer does not control. The Odoo session lifecycle (TransientModel tied to a chat channel) makes safe replay non-trivial. | Defer to v2+. For now: add a "Copy JSON" button to the detail panel for messages_sent. Developers can paste into their own test script. |
+| **Graph visualization** — Langfuse-style DAG view of spans | Langfuse added a graph view for LangGraph traces. Looks impressive. | The Odoo agentic loop is strictly sequential (loop > iteration > tool call) — not a DAG. Graph visualization adds visual complexity with no benefit for a linear execution model. When subagents arrive (parent/child loops), the tree already expresses the hierarchy correctly. | The sidebar tree IS the graph for this domain. Invest in making the tree readable (badges, timing, clear indentation) rather than a DAG renderer. |
 
 ---
 
 ## Feature Dependencies
 
 ```
-[Trace capture model]
-    └──required-by──> [Backend list/form views]
-    └──required-by──> [Live real-time debug panel]
-    └──required-by──> [State diff viewer]
-    └──required-by──> [Error surfacing]
+[Sidebar tree component]
+    └──requires──> [Full bus.bus payloads] (no ORM reads means all data must arrive in events)
+    └──requires──> [Loop node as tree root] (tree cannot render without a root)
+    └──enhances-with──> [Status badges]
+    └──enhances-with──> [Timing waterfall display]
 
-[Iteration records model]
-    └──required-by──> [State diff viewer]  (needs state_before / state_after)
-    └──required-by──> [JSON tree renderer] (renders messages_sent, raw_response)
+[Detail panel component]
+    └──requires──> [Click-to-select state] (nothing to show without a selection)
+    └──reuses──> [JsonTree] (existing component — messages, args, result, raw response)
+    └──reuses──> [StateDiff] (existing component — state_before / state_after)
+    └──branches-on──> [Node type: loop | iteration | tool_call]
 
-[Tool call records model]
-    └──required-by──> [Confirmation flow tracking]
+[Auto-select latest node]
+    └──requires──> [Click-to-select state] (needs "user manually selected" flag)
+    └──listens-to──> [bus.bus iteration events]
+    └──listens-to──> [bus.bus tool_call events]
 
-[Enable/disable switch]
-    └──must-precede──> [All capture features] (safety gate before any data is recorded)
+[Agent name label]
+    └──requires──> [agent_name in new_trace bus payload] (backend must include it)
 
-[Live real-time debug panel]
-    └──requires──> [bus.bus channel setup]
-    └──requires──> [Trace capture model] (needs trace ID for channel name)
-    └──enhances-with──> [JSON tree renderer]
-    └──enhances-with──> [State diff viewer]
+[Multiple loops as tree roots]
+    └──requires──> [Loop node as tree root]
+    └──requires-change-to──> [State shape: loops[] array instead of single trace]
 
-[System prompt + RAG context capture]
-    └──requires──> [Trace capture model] (stored on ai.debug.trace)
-    └──requires-instrumentation-at──> [_generate_next_response hook] (different from _run_agentic_loop hook)
+[Subagent-ready data design]
+    └──requires──> [parent_loop_id field in loop state]
+    └──does-not-require──> [Actual subagent nesting] (field is null in v1.1)
 
-[Trace retention / auto-cleanup]
-    └──requires──> [Trace capture model] (nothing to clean without traces)
+[Confirmation pause state]
+    └──requires──> [Status badge system]
+    └──requires──> [loop state update bus event carrying state='paused']
+
+[Keyboard navigation]
+    └──requires──> [Sidebar tree component]
+    └──requires──> [Click-to-select state] (arrow keys move selection, same state)
 ```
 
 ### Dependency Notes
 
-- **Trace capture is the root dependency.** Everything else — views, live panel, state diff — flows from having a `ai.debug.trace` record.
-- **Live panel depends on trace capture and bus.bus, not on iteration/tool records.** The panel can start working with a "trace opened" event and add iterations incrementally. This means the live panel can be built before iteration details are polished.
-- **State diff requires both state_before and state_after fields.** These are set at the iteration level by the instrumentation. The diff viewer can only be built after the data model captures both snapshots.
-- **Enable/disable must be respected before any instrumentation fires.** The inherited `_run_agentic_loop()` must check the config param at the top. This is trivially cheap and blocks accidental capture in production.
-- **System prompt + RAG capture requires a separate instrumentation hook.** The `_generate_next_response()` method sits above `_run_agentic_loop()` in the call stack. Capturing system prompt requires inheriting or wrapping at that level, which is a separate `_inherit` override.
+- **Full bus.bus payloads are the foundational backend change.** The v1.0 instrumentation saved data to DB and let the frontend lazy-load via ORM. v1.1 removes the DB, so the backend must embed all detail data in each bus.bus event payload. This is a backend instrumentation task that must land before the detail panel can be built.
+- **State shape must change from single-trace to loops array.** v1.0 had `state.traceId` + `state.iterations[]`. v1.1 needs `state.loops[]`, where each loop has its own `iterations[]`. This is the central structural change; all other features compose on top of it.
+- **JsonTree and StateDiff are reused unchanged.** These existing components slot directly into the new detail panel. No modifications needed.
+- **Listen mode logic is preserved but must feed the new loops[] state.** When `_onNewTrace` fires, it appends to `state.loops[]` rather than replacing a single trace.
 
 ---
 
 ## MVP Definition
 
-### Launch With (v1)
+### Launch With (v1.1)
 
-Minimum viable product — what's needed to make the module useful as a debugging tool.
+Minimum viable for replacing the v1.0 timeline model. The tracer is usable the moment a developer can navigate the tree and see the right detail for whatever they clicked.
 
-- [ ] **Trace capture** (`ai.debug.trace`) — one record per agentic loop run with agent, model, total duration, iteration count, termination state
-- [ ] **Iteration records** (`ai.debug.iteration`) — one per LLM call with full messages sent, raw response, state snapshots, timing
-- [ ] **Tool call records** (`ai.debug.tool.call`) — per-execution with name, args, result, success, timing, confirmation flags
-- [ ] **Enable/disable config param** — master switch checked before any capture; safe to deploy
-- [ ] **Trace retention / auto-cleanup** — scheduled action with configurable TTL; required before first real use
-- [ ] **Backend list + form views** — searchable, filterable trace history; usable immediately for post-mortem inspection
-- [ ] **Error surfacing** — `state = 'error'` with exception message; makes failures visible without reading server logs
+- [ ] **Full bus.bus payloads** (backend) — iteration events carry messages_sent, raw_response, state_before, state_after; tool call events carry args, result, confirmation fields
+- [ ] **Loops-array state model** — `state.loops[]` replaces `state.traceId` + single-trace state; each loop has nested iterations and tool calls
+- [ ] **Sidebar tree — 3-level hierarchy** — Loop > Iteration > Tool Call; expand/collapse per node; status badge (running/done/error/paused) inline
+- [ ] **Click-to-select drives detail panel** — selecting any node replaces the detail panel; selection is a single `{ type, id }` object
+- [ ] **Detail panel with type-aware tabs** — Loop: System Prompt / RAG / Tools; Iteration: Messages / Response / State Diff; Tool Call: Args / Result / State Diff; reuses JsonTree and StateDiff
+- [ ] **Agent name as loop label** — agent_name in new_trace bus payload; rendered as primary node label
+- [ ] **Auto-select latest running node** — new bus events auto-advance selection unless user has manually selected
+- [ ] **Multiple loops as top-level sidebar roots** — sequential and concurrent loops both appear as siblings in the sidebar
+- [ ] **subagent-ready: parent_loop_id in loop data model** — field exists and is null in v1.1; tree renders parent/child when populated
 
-### Add After Validation (v1.x)
+### Add After Validation (v1.1.x)
 
-Features to add once core instrumentation is confirmed working.
-
-- [ ] **Live real-time debug panel** — OWL component subscribing to bus.bus; add once data model is proven correct; this is where most development time will go
-- [ ] **State diff viewer** — JSON diff rendered in the live panel and history form; add once live panel exists
-- [ ] **JSON tree renderer** — collapsible JSON for messages and raw responses; add alongside live panel for UX quality
-- [ ] **System prompt + RAG context capture** — hook into `_generate_next_response()`; straightforward addition once the instrumentation pattern is established
+- [ ] **Keyboard navigation** — arrow keys move sidebar selection; ARIA tree roles; add once base tree is working and selection is stable
+- [ ] **Confirmation pause badge** — 'paused' status distinct from 'running'; add once pause/resume events are confirmed to fire correctly in the instrumentation
+- [ ] **Timing display on iteration nodes** — formatDuration inline; add once tree is rendered correctly; trivial once tree node template exists
 
 ### Future Consideration (v2+)
 
-Features to defer until core is validated.
-
-- [ ] **Prompt replay / re-run** — requires designing a safe "re-execute with modified input" flow; significant scope
-- [ ] **Export to OTLP / OpenTelemetry** — would allow piping traces to Jaeger, Grafana, etc.; only useful if the module outlives local development
-- [ ] **Evaluation / scoring** — LLM-as-judge scoring of captured traces; a separate product category
+- [ ] **Database persistence of traces** — session-scoped is the explicit v1.1 design; persistence is a separate milestone
+- [ ] **Search / filter within sidebar** — bounded tree depth makes this low-priority; add only if developers report navigation pain with 50+ iterations
+- [ ] **Trace export** — OTLP / JSON export of a captured loop; deferred from v1.1 per PROJECT.md
+- [ ] **Replay / re-run with modified messages** — requires session lifecycle integration; deferred to v2+
 
 ---
 
@@ -140,62 +165,61 @@ Features to defer until core is validated.
 
 | Feature | User Value | Implementation Cost | Priority |
 |---------|------------|---------------------|----------|
-| Trace capture model | HIGH | LOW | P1 |
-| Iteration records model | HIGH | LOW | P1 |
-| Tool call records model | HIGH | LOW | P1 |
-| Enable/disable switch | HIGH | LOW | P1 |
-| Trace retention / auto-cleanup | HIGH | LOW | P1 |
-| Backend list + form views | HIGH | LOW | P1 |
-| Error surfacing | HIGH | LOW | P1 |
-| Live real-time debug panel | HIGH | HIGH | P1 (v1.x — core differentiator) |
-| State diff viewer | HIGH | MEDIUM | P2 |
-| JSON tree renderer | MEDIUM | MEDIUM | P2 |
-| System prompt + RAG capture | MEDIUM | LOW | P2 |
-| Confirmation flow tracking | MEDIUM | LOW | P2 (fields already in model) |
-| Per-agent filter in history | LOW | LOW | P2 (trivial to add) |
-| Prompt replay / re-run | MEDIUM | HIGH | P3 |
-| OTLP export | LOW | HIGH | P3 |
-| Evaluation / scoring | LOW | HIGH | P3 |
+| Full bus.bus payloads (backend) | HIGH | MEDIUM | P1 — blocks everything else |
+| Loops-array state model | HIGH | MEDIUM | P1 — structural foundation |
+| Sidebar tree (3-level) | HIGH | MEDIUM | P1 — the core UX |
+| Click-to-select + detail panel | HIGH | LOW | P1 — makes tree useful |
+| Detail panel type-aware tabs | HIGH | LOW | P1 — immediate value |
+| Agent name as loop label | HIGH | LOW | P1 — trivial with payload field |
+| Auto-select latest running node | MEDIUM | LOW | P1 — key for live-watching |
+| Multiple loops as tree roots | MEDIUM | LOW | P1 — correctness for concurrent runs |
+| Subagent-ready parent_loop_id | LOW | LOW | P1 — do it now, costs nothing |
+| Timing display on iteration nodes | MEDIUM | LOW | P2 — easy, not blocking |
+| Keyboard navigation | MEDIUM | MEDIUM | P2 — nice polish, not MVP |
+| Confirmation pause badge | MEDIUM | LOW | P2 — needs confirmed bus events |
+| DB persistence | HIGH | HIGH | P3 (v2+) |
+| Search/filter sidebar | LOW | HIGH | P3 |
+| Trace export | LOW | MEDIUM | P3 |
 
 **Priority key:**
-- P1: Must have for launch
-- P2: Should have, add when possible
-- P3: Nice to have, future consideration
+- P1: Must have for v1.1 launch
+- P2: Should have, add when core is stable
+- P3: Future milestone
 
 ---
 
-## Competitor Feature Analysis
+## Competitor / Reference Analysis
 
-| Feature | LangSmith | Arize Phoenix | Langfuse | Odoo AI Debugger (this module) |
-|---------|-----------|---------------|----------|-------------------------------|
-| Trace / span hierarchy | Yes — full tree | Yes — graph visualization | Yes — trace > span > observation | Yes — trace > iteration > tool call |
-| Real-time streaming view | Yes (live updates) | Partial | No (post-completion) | Yes via bus.bus — unique advantage |
-| State diff across iterations | No | No | No | Yes — differentiator |
-| Tool call capture | Yes | Yes | Yes | Yes |
-| Loop termination reason | Partial (stop reason) | Partial | Partial | Yes — explicit (final message / max iterations / confirmation pause) |
-| Confirmation pause tracking | No | No | No | Yes — unique to Odoo AI module |
-| Backend ORM queryable data | No (external SaaS) | No (external) | Yes (self-hosted) | Yes — standard Odoo models |
-| No external infrastructure | No | No (requires Phoenix server) | No (requires Langfuse server) | Yes — installs as standard Odoo module |
-| Evaluation / scoring | Yes | Yes | Yes | No (explicitly out of scope for v1) |
-| Prompt replay | Yes | Yes (span replay) | No | No (v2+) |
-| Cost tracking | Yes | Yes | Yes | No — not applicable (local dev target; no billing data) |
+| Feature | VS Code Debugger | Jaeger UI | LangSmith | Langfuse | Odoo AI Tracer v1.1 |
+|---------|-----------------|-----------|-----------|----------|---------------------|
+| Sidebar tree | Yes — call stack | Yes — span waterfall tree | Yes — run tree | Yes — observation tree | Yes — loop/iteration/tool call |
+| Multi-session/multi-trace roots | Yes — top-level siblings | Yes — search + open multiple | Yes — trace list | Yes — trace list | Yes — loops[] array as siblings |
+| Click-to-select + detail panel | Yes | Yes | Yes | Yes | Yes |
+| Status badge inline | Yes (spinner/arrow) | Yes (error highlighting) | Yes (running/success/error) | Yes | Yes |
+| Agent/service name label | Session name | Service name | Run name | Trace name | ai.agent.name — specific Odoo field |
+| Auto-select current frame | Yes | No | Partial | No | Yes — newest bus event auto-selects |
+| Keyboard navigation | Yes | Partial | No | No | v1.1.x (after base) |
+| Domain-specific tabs | No (generic) | Logs/Tags/Process | Input/Output/Metadata | Input/Output/Metadata | System Prompt/RAG/Tools; Messages/Response/StateDiff |
+| Confirmation pause state | No | No | No | No | Yes — Odoo-specific pattern |
+| Session-scoped ephemeral | Yes (debug session) | No (persisted) | No (persisted) | No (persisted) | Yes — explicit v1.1 design |
+| Subagent / nested loop | Nested call stacks | Nested spans | Yes | Yes | Anticipated (parent_loop_id) |
 
 ---
 
 ## Sources
 
-- [LangSmith Observability — langchain.com](https://www.langchain.com/langsmith/observability) — MEDIUM confidence (official product page, marketing-adjacent)
 - [Debugging Deep Agents with LangSmith — blog.langchain.com](https://blog.langchain.com/debugging-deep-agents-with-langsmith/) — MEDIUM confidence (official blog)
-- [Arize Phoenix docs — arize.com](https://arize.com/docs/phoenix) — MEDIUM confidence (official docs)
-- [Langfuse data model — langfuse.com](https://langfuse.com/docs/observability/data-model) — HIGH confidence (official OSS docs)
-- [Langfuse observability overview — langfuse.com](https://langfuse.com/docs/observability/overview) — HIGH confidence (official OSS docs)
-- [Braintrust observability tools — braintrust.dev](https://www.braintrust.dev/articles/best-ai-observability-tools-2026) — LOW confidence (vendor-written comparison)
-- [LLM observability best practices 2025 — getmaxim.ai](https://www.getmaxim.ai/articles/llm-observability-best-practices-for-2025/) — LOW confidence (third-party blog)
-- [Odoo bus.bus real-time communication — cybrosys.com](https://www.cybrosys.com/blog/how-to-setup-real-time-communication-in-odoo-using-bus-service) — MEDIUM confidence (Odoo ecosystem blog; pattern verified against known Odoo source structure)
-- PROJECT.md — HIGH confidence (direct project specification, verified against enterprise `ai` module source)
-- ai_debugger.md — HIGH confidence (detailed design spec derived from reading actual source code)
+- [New Trace View — Langfuse changelog, 2025-03-19](https://langfuse.com/changelog/2025-03-19-new-trace-view) — MEDIUM confidence (official changelog)
+- [Langfuse Tracing Data Model — langfuse.com](https://langfuse.com/docs/observability/data-model) — HIGH confidence (official OSS docs)
+- [VS Code Debugger Documentation — code.visualstudio.com](https://code.visualstudio.com/docs/debugtest/debugging) — HIGH confidence (official docs)
+- [VS Code multi-session call stack — github.com/microsoft/vscode issue #194881](https://github.com/microsoft/vscode/issues/194881) — HIGH confidence (official issue tracker)
+- [W3C ARIA TreeView Pattern — w3.org](https://www.w3.org/WAI/ARIA/apg/patterns/treeview/) — HIGH confidence (W3C standard)
+- [Jaeger UI features — jaegertracing.io](https://www.jaegertracing.io/) — MEDIUM confidence (official docs, UI inferred from described behavior)
+- [PatternFly Primary-detail pattern — patternfly.org](https://www.patternfly.org/patterns/primary-detail/design-guidelines/) — HIGH confidence (open design system)
+- ai_debug source code (debug_panel.js, json_tree.js, state_diff.js) — HIGH confidence (direct code review)
+- PROJECT.md (v1.1 requirements) — HIGH confidence (direct project specification)
 
 ---
 
-*Feature research for: AI/LLM agentic loop debugger (Odoo-native module)*
+*Feature research for: Live agentic loop tracer — sidebar tree / master-detail layout (Odoo AI Debugger v1.1)*
 *Researched: 2026-02-20*

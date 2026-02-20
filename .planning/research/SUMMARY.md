@@ -1,215 +1,258 @@
 # Project Research Summary
 
-**Project:** AI Debugger — Custom Odoo module for agentic loop instrumentation
-**Domain:** Odoo-native LLM observability and developer tooling
+**Project:** AI Debugger v1.1 — Standalone OWL App at /ai-debug
+**Domain:** Odoo custom module — live agentic loop tracer, DB-backed to ephemeral migration
 **Researched:** 2026-02-20
-**Confidence:** HIGH
+**Confidence:** HIGH (all patterns verified against Odoo master source code at `/Users/joseph/clones/odoo/`)
 
 ## Executive Summary
 
-The AI Debugger is a custom Odoo module that instruments the enterprise `ai` module's agentic loop to provide real-time visibility into each LLM call, tool execution, and loop termination — all within the Odoo ORM and frontend stack with no external infrastructure. The module is implemented through three clean layers: a generator yield passthrough that wraps `ai.session._run_agentic_loop()` via `_inherit`, persistent ORM models (`ai.debug.trace`, `ai.debug.iteration`, `ai.debug.tool.call`) that capture every event, and an OWL panel delivered via `ir.actions.client` that shows the loop running live using `bus.bus` WebSocket notifications. All patterns are verified against Odoo master source code. No external libraries, no monkey-patching, no custom HTTP endpoints.
+AI Debugger v1.1 is a targeted refactor of a working v1.0 developer tool. The migration replaces three things: a DB-backed backend client action panel becomes a true standalone OWL app at `/ai-debug` (own HTML page, own asset bundle, own HTTP controller — the POS self-order pattern); lazy ORM-on-click trace data loading becomes full payloads embedded in bus.bus events; and a flat timeline view becomes a 3-level sidebar tree (Loop > Iteration > Tool Call) with a master/detail right panel. The technical patterns are all well-documented in Odoo master source — the primary reference is `pos_self_order` for the standalone app scaffold and the existing v1.0 `ai_session.py` for the bus send mechanics.
 
-The recommended build order follows component dependencies: data models first, then the `ai.session` instrumentation override, then backend XML views (immediately useful for verifying captured data), then the real-time OWL panel with bus integration, and finally polish (JSON tree viewer, state diff, configuration UI). This order allows incremental verification at each phase and avoids building a UI before the underlying data model is confirmed correct. The existing `ai` module already shows every bus pattern needed; this module is principally a consumer and observer, not a producer of novel infrastructure.
+The recommended approach is to treat this as a migration with four sequential work blocks: (1) infrastructure — delete DB models with a proper migration script, scaffold the standalone app so `/ai-debug` loads, fix the bus channel access group from `group_system` to `group_user`; (2) backend instrumentation — rewrite the agentic loop instrumentation to emit full payloads over bus.bus using a separate cursor per send; (3) sidebar tree component — implement the 3-level OWL component tree with reactive Map-based state in the root component; (4) detail panel — wire the type-aware detail panel using existing `JsonTree` and `StateDiff` components. The dependency chain is strict: Phase 3 cannot start until Phase 2's bus payloads are verified in the browser, and Phase 4 cannot start until Phase 3's selection state is stable.
 
-The primary risks are behavioral — not architectural. The generator wrapping must preserve streaming semantics or it breaks the confirmation flow silently. Bus channel design must use per-trace channels rather than user-partner channels, or every open browser tab receives debug payloads. JSON payloads must not be sent over the bus directly; only a reference should be sent, with the frontend fetching detail on demand. These risks are well-defined and avoidable with established patterns from `spreadsheet_edition`, `im_livechat`, `hr_attendance`, and `google_calendar` in the Odoo codebase.
+The key risk is payload size. The PITFALLS research identifies that sending full LLM conversation history (50-500 KB) in a single bus event causes main-thread jank via SharedWorker `postMessage` and risks browser WebSocket close code 1009. The mitigation is to cap payloads at approximately 32 KB and split large iteration data into meta (always sent) and detail (sent separately or fetched on demand). A secondary risk is the DB model removal: Odoo does not drop tables on module uninstall, so orphaned tables require an explicit `pre-migrate.py` with `DROP TABLE IF EXISTS ... CASCADE`. Both risks are well-understood and have clear prevention strategies documented in PITFALLS.md.
 
 ## Key Findings
 
 ### Recommended Stack
 
-All stack choices are Odoo-native and verified against master source. There are no npm installs, no external Python packages, and no custom websocket servers needed.
+All v1.1 stack additions follow the POS self-order pattern, verified against Odoo master source. The standalone app is served by an HTTP controller (`auth='user'`) that renders a QWeb HTML template injecting `odoo.__session_info__` and `csrf_token` as a JS global, then loads a dedicated asset bundle via `t-call-assets="ai_debug.assets_app"`. The bundle uses `('include', 'point_of_sale.base_app')` to pull in OWL, `@web/_assets_core`, Bootstrap SCSS, and all bus service files — this is the correct and minimal dependency graph for a standalone OWL app that uses `bus_service`. The app is booted via `whenReady(() => mountComponent(AiDebugApp, document.body))`. `mountComponent` from `@web/env` (not bare `mount` from `@odoo/owl`) is mandatory because it calls `makeEnv()` and `startServices(env)`, bootstrapping the full service registry including `bus_service`.
 
 **Core technologies:**
-- **Python ORM (`models.Model`, `_inherit`):** Generator yield passthrough for instrumentation; persistent models for debug data. The only Odoo-idiomatic way to wrap generator methods without breaking the caller.
-- **OWL 2.8.1 (bundled):** Live debug panel as an `ir.actions.client` component. Imports from `@odoo/owl` and `@web/core/*` — no npm install needed.
-- **`bus.bus` / `bus_service`:** Real-time push from backend to frontend via `env['bus.bus']._sendone()` + `bus_service.subscribe()`. Use a per-trace channel (not user-partner) to avoid fan-out to all tabs.
-- **`ir.websocket._build_bus_channel_list`:** Override to authorize per-trace bus channels. Must include an access check — follow the `spreadsheet_edition` pattern exactly.
-- **`ir.config_parameter` + `@api.autovacuum`:** Enable/disable switch and auto-vacuuming of old trace records. Both are stable, lightweight Odoo patterns.
+- `mountComponent` from `@web/env`: Bootstrap standalone OWL app — starts all registered services automatically; required for `bus_service` access; mirrors `pos_self_order/static/src/app/root.js`
+- `ai_debug.assets_app` (dedicated bundle): Isolates standalone app from backend; `('include', 'point_of_sale.base_app')` provides OWL + bus + web core without pulling in the full webclient
+- HTTP controller (`type='http'`, `auth='user'`): Serves `/ai-debug` with session info injection and internal-user gate; mirrors `PosController.pos_web()` exactly
+- QWeb HTML template (`ai_debug.index`): Full `<!DOCTYPE html>` document with `odoo` JS global and empty `<body>`; no Odoo navbar chrome
+- `bus_service.addChannel()` + `subscribe()`: Receives full-payload events; auto-starts WebSocket connection; must be called in `onMounted`, not `setup()`
+- `uuid.uuid4()` for all IDs: No DB autoincrement available; UUIDs are collision-free and make payloads self-describing
+- Separate `registry.cursor()` per bus send: Required for real-time per-iteration delivery — main cursor defers all notifications until HTTP request end
 
-**Critical version constraints:**
-- `bus_service.subscribe()` / `bus_service.start()` — Odoo 16+ (master) API. Older `addEventListener` pattern is not current.
-- `registry.category("actions").add(tag, Component)` — OWL 2 client action registration (Odoo 16+).
-
-See `.planning/research/STACK.md` for verified import paths and code examples.
+See `.planning/research/STACK.md` for verified code examples and source references.
 
 ### Expected Features
 
-LangSmith, Langfuse, Arize Phoenix, and Braintrust define the domain expectations. This module translates those patterns to Odoo-native, adding two unique differentiators: live real-time streaming (none of the external tools show the loop mid-execution) and confirmation-flow tracking (unique to Odoo's two-phase tool confirmation pattern).
+v1.0's timeline model gave developers a flat, per-iteration view requiring explicit "expand" clicks to load data from the DB. v1.1's sidebar tree model follows the canonical live-tracer UX established by VS Code debugger, LangSmith, Langfuse, and Jaeger: a persistent left sidebar drives a right detail panel. The UX research is decisive — the tree model is the expert pattern for this domain and no external tracer surveyed used a flat timeline as its primary view.
 
 **Must have (table stakes):**
-- Trace capture (`ai.debug.trace`) — one record per agentic loop run
-- Iteration records (`ai.debug.iteration`) — one per LLM call, with full messages sent and raw response
-- Tool call records (`ai.debug.tool.call`) — per-execution with args, result, success, timing
-- Enable/disable config param — must exist before any data is captured in any environment
-- Trace retention / auto-cleanup — configurable TTL; required before first real deployment
-- Backend list + form views — searchable trace history for post-mortem inspection
-- Error surfacing — `state = 'error'` with exception message visible without reading server logs
+- Sidebar tree with 3-level hierarchy (Loop > Iteration > Tool Call) — the canonical live-tracer structure; every comparable tool organizes data as a tree
+- Click-to-select drives detail panel — the entire value proposition of the master/detail layout
+- Status badge inline with each tree node (running/done/error/paused) — live state at a glance without opening detail
+- Full bus.bus payloads — iteration events carry `messages_sent`, `raw_response`; tool call events carry `args`, `result`, `state_before`, `state_after`; all fields needed for the detail panel must arrive in the bus event
+- Loops-array state model (`state.traces` Map) — replaces single-trace state; each loop has nested iterations and tool calls
+- Agent name as loop label — `ai.agent.name` from the bus payload, Odoo-specific context not available in any external tracer
+- Auto-select latest running node — follows live execution unless user has manually selected a node
+- Multiple loops as top-level sidebar roots — correctness for sequential and concurrent agentic runs
+- `parent_loop_id` in loop data model (null in v1.1) — subagent-ready without implementation cost; field must be in the schema from day one
+- Ephemeral session-scoped data — refresh clears all; no DB persistence; explicit design choice
 
-**Should have (differentiators):**
-- Live real-time debug panel — the core development-time value proposition; no equivalent in any Odoo-native tool
-- State diff viewer — shows exactly what changed in `tools_context['state']` between iterations
-- JSON tree renderer — collapsible, syntax-highlighted inline viewer for messages and raw responses
-- System prompt + RAG context capture — hook into `_generate_next_response()` in addition to `_run_agentic_loop()`
-- Confirmation flow tracking — explicit capture of which tool triggered a pause and the pending call ID
+**Should have (competitive advantage):**
+- Iteration timing display (`duration_ms` inline on each tree node) — immediate "which call was slow" signal without opening detail
+- Keyboard navigation (W3C ARIA tree pattern, arrow keys) — matches VS Code and DevTools behavior developers already know
+- Confirmation pause badge (distinct from running/done/error) — Odoo-specific two-phase confirmation pattern that no external tracer has
+- Connection status indicator — carry forward from v1.0; developers watching a live trace must know WebSocket state
 
 **Defer (v2+):**
-- Prompt replay / re-run — significant scope; requires safe re-execution flow
-- OTLP / OpenTelemetry export — only useful if the module outlives local development
-- Evaluation / scoring — a separate product category (LLM-as-judge pipeline)
+- Database persistence of traces — session-scoped is the explicit v1.1 design
+- Search/filter within sidebar — bounded tree depth makes this low-priority; Ctrl+F browser search covers the common case
+- Trace export (OTLP / JSON) — deferred per PROJECT.md
+- Replay / re-run with modified messages — requires session lifecycle integration; significant scope
 
-See `.planning/research/FEATURES.md` for the full prioritization matrix and competitor analysis.
+See `.planning/research/FEATURES.md` for the full prioritization matrix, dependency graph, and competitor comparison table.
 
 ### Architecture Approach
 
-The module has three layers connected by two clean interfaces: the generator yield passthrough writes to ORM models and schedules bus sends; the OWL panel subscribes to per-trace bus channels and renders state reactively. The architecture is intentionally read-only at the instrumentation level — the inherited methods observe and re-yield without modifying any yielded item.
+The v1.1 architecture cleanly separates concerns into four layers: instrumentation (Python generator wrapping, unchanged from v1.0), notification (bus.bus with full payloads and separate cursors for real-time delivery), HTTP/template (new standalone page controller mirroring POS self-order), and OWL app (root component owns all state and bus subscriptions; sidebar and detail panel are purely presentational). State lives in a single `useState` object in the root component using `Map` for O(1) lookup by UUID — there is one entity type (traces) and four event handlers, so no Vuex-style store service is warranted. OWL's reactive `Map` (confirmed in OWL source) triggers re-renders on `.set()` mutations, making it the right collection type for live append-only data.
 
 **Major components:**
-1. **`AiSessionDebug` (`_inherit = 'ai.session'`)** — wraps `_run_agentic_loop()` and `_handle_tool_calls()` generators; writes to debug models; schedules bus sends via `postcommit` hook with a separate cursor
-2. **Persistent debug models** (`ai.debug.trace`, `ai.debug.iteration`, `ai.debug.tool.call`) — the trace hierarchy; all `models.Model` (not TransientModel) to survive session cleanup
-3. **`IrWebsocket` (`_inherit = 'ir.websocket'`)** — adds per-trace channels to the bus subscription list with access validation
-4. **`DebugPanel` (OWL `ir.actions.client`)** — subscribes to the trace-scoped channel on mount; renders iterations and tool calls as they arrive; unsubscribes on unmount
-5. **Backend XML views** — standard list/form views for `ai.debug.trace`; no custom frontend code; useful from day one
+1. `AiDebugController` + `ai_debug.index` template — serves the page at `/ai-debug`; injects session info and CSRF token; no Odoo navbar chrome
+2. `ai_debug.assets_app` bundle — self-contained; includes all required services via `point_of_sale.base_app`; `main.js` is added last via remove/re-add pattern
+3. `AiDebugApp` (root) — owns `useState({ traces: Map, selection, connectionStatus })`; subscribes to 4 bus event types in `onMounted`; handles auto-selection of new traces
+4. `TraceList` (sidebar) — purely presentational; receives `traces` Map and `setSelection` callback; renders 3-level hierarchy with `t-key` on all node types
+5. `DetailPanel` (right pane) — receives `selectedNode`; switches between `LoopDetail`, `IterationDetail`, `ToolCallDetail` via `t-if`/`t-elif`
+6. `JsonTree` + `StateDiff` — carry over from v1.0 unchanged; slot directly into detail sub-components with no modification needed
 
-The most architecturally subtle point is the bus notification timing: `_sendone()` fires via `postcommit` on the outer `thoughts_generator` cursor, meaning all notifications would arrive at the end of the loop if sent directly. Real-time (per-iteration) notifications require a separate `registry.cursor()` inside a `postcommit` hook, following the `google_calendar` sync pattern.
+**Data flow:** Python yield boundary -> `_debug_send_event()` with separate cursor -> `bus.bus._sendone()` commits immediately -> pg_notify -> Odoo WebSocket dispatcher -> browser SharedWorker -> `bus_service.subscribe()` callback -> `AiDebugApp` mutates `state.traces` Map -> OWL reactive re-render -> sidebar tree grows and detail panel updates.
 
-See `.planning/research/ARCHITECTURE.md` for the full data flow diagrams and build-order analysis.
+See `.planning/research/ARCHITECTURE.md` for full component code examples, build order, and anti-patterns.
 
 ### Critical Pitfalls
 
-1. **Generator wrapping that collapses streaming** — calling `list(super()._run_agentic_loop(...))` destroys streaming and silently breaks the tool confirmation flow (`pending_tool_call_id` is never set). Always use `for item in super()...: yield item` with `try/except` around capture logic so instrumentation errors never surface to the user.
+1. **Wrong asset bundle / missing services** — If `ai_debug.assets_app` does not include bus service files (via `point_of_sale.base_app`), `useService('bus_service')` throws on startup with `Cannot find service 'bus_service'`. Never add standalone app files to `web.assets_backend` — that bundle is invisible to the standalone HTML page. Prevention: use `('include', 'point_of_sale.base_app')` and verify that navigating to `/ai-debug` shows the app (not a blank page with console errors) before proceeding.
 
-2. **Bus notifications sent over the user-partner channel** — `env.user._bus_send()` delivers to all browser tabs for that user, including unrelated production workflows. Use a per-trace channel (`ai_debugger_{trace_uuid}`) and override `ir.websocket._build_bus_channel_list` with an access check. Never use sequential integer IDs as channel names (enumerable); use UUIDs.
+2. **Missing `session_info` in controller context** — Without `odoo.__session_info__` embedded in the standalone HTML, the bus WebSocket handshake fails with session expired (WebSocket close code 4001). `session.uid` will be undefined. Prevention: call `request.env['ir.http'].session_info()` in the controller, embed in the template JS global, add `Cache-Control: no-store`.
 
-3. **Full JSON payloads in bus notifications** — `bus.bus` truncates payloads above 8 KB (`NOTIFY_PAYLOAD_MAX_LENGTH`). Sending a full LLM response (potentially 50-200 KB) will be silently truncated. Send only `{trace_id, event_type, iteration_idx}` via bus; have the frontend fetch full payload via RPC on demand.
+3. **Orphaned DB tables after model deletion** — Odoo does not drop tables on module uninstall — it removes `ir.model` records only. Removing the three model files leaves `ai_debug_trace`, `ai_debug_iteration`, `ai_debug_tool_call` tables in PostgreSQL forever. Prevention: write `migrations/<version>/pre-migrate.py` with `DROP TABLE IF EXISTS ... CASCADE` before shipping the v1.1 upgrade.
 
-4. **`TransientModel` vacuumed mid-session** — `ai.session` records are cleaned up by Odoo's autovacuum cron. An instrumented generator can be suspended at a `yield` boundary when the vacuum runs, causing `MissingError` on the next iteration. Never hold `self` (the session recordset) across yield boundaries; copy `session_id = self.id` before the first yield.
+4. **Oversized bus payloads causing jank and WebSocket close 1009** — Full LLM conversation history (50-500 KB) in a single bus event blocks the main thread via SharedWorker `postMessage` (20-100 ms per iteration) and can trigger browser WebSocket close 1009. The 8 KB `NOTIFY_PAYLOAD_MAX_LENGTH` is a common misread — it applies to the pg_notify channel list, not message content. Prevention: cap payloads at approximately 32 KB; split into meta (index, duration, tool count) and detail (messages_sent, raw_response).
 
-5. **Missing `onWillUnmount` unsubscribe in OWL** — `bus_service.subscribe()` does not auto-cleanup on component destruction. Store the callback as `this.handleEvent` (not an inline arrow function) and call `bus_service.unsubscribe(type, this.handleEvent)` in `onWillUnmount`. Same reference must be used for both calls.
+5. **Bus events batching instead of streaming** — Calling `bus.bus._sendone()` on the main cursor (`self.env.cr`) means all notifications fire at HTTP request end, not at each yield boundary. Prevention: always use `with self.env.registry.cursor() as cr:` for each bus send; the cursor commits immediately and triggers pg_notify per iteration.
 
-6. **`_build_bus_channel_list` without access check** — any authenticated user knowing the channel name can subscribe and receive full debug payloads (which contain LLM prompts, tool args, and internal state). Follow `spreadsheet_edition/models/ir_websocket.py` exactly: parse the channel string, resolve the trace record, call `has_access('read')`, reject if it fails.
+6. **Access group wrong (`group_system` not `group_user`)** — The existing `ir_websocket.py` override restricts `ai_debug:*` channels to `base.group_system`. The v1.1 requirement is any internal user (`base.group_user`). Must be corrected in Phase 1 atomically with any channel naming changes.
 
-See `.planning/research/PITFALLS.md` for the full checklist including the `_handle_tool_calls` early-return trap and SQL index requirements.
+7. **Sidebar loses selection on every bus event** — Without stable `t-key` on tree nodes and in-place mutation (`.push()` not array replacement), OWL unmounts all nodes on each bus event, resetting selected/expanded state. Prevention: `t-key="loop.id"`, `t-key="iter.id"`, `t-key="tc.id"`; use `Map.set()` for O(1) mutation; never assign `state.traces = newMap`.
+
+See `.planning/research/PITFALLS.md` for the full checklist including security mistakes, UX pitfalls, performance traps, and the "Looks Done But Isn't" verification checklist.
+
+---
 
 ## Implications for Roadmap
 
-### Phase 1: Data Models and Generator Instrumentation
+Based on the strict dependency chain identified across all four research files, four phases are the right structure. The ordering is non-negotiable: Phase 2 cannot start until Phase 1's `/ai-debug` route resolves cleanly and the DB migration is verified; Phase 3 cannot start until Phase 2's bus payloads are confirmed arriving in the browser; Phase 4 cannot start until Phase 3's selection state is stable under concurrent bus events.
 
-**Rationale:** Trace capture is the root dependency for everything else — views, live panel, state diff. The generator instrumentation is the highest-risk component (behavioral correctness) and must be proven correct before adding UI. This phase has no frontend dependencies.
+### Phase 1: Infrastructure — DB Migration + Standalone App Scaffold
 
-**Delivers:** A working instrumentation layer that captures traces, iterations, and tool calls to persistent ORM models. Verifiable via Odoo shell queries or the Phase 2 views.
+**Rationale:** Everything downstream depends on two things: (a) the old DB models being cleanly removed without orphaned tables or broken references in `ai_session.py`, and (b) `/ai-debug` returning a working HTML page that boots an OWL app and connects `bus_service`. Both are blocking foundations with no other dependencies. They can be worked in parallel within Phase 1 but must both be complete and verified before Phase 2 begins.
 
-**Addresses:** All P1 table-stakes features (trace capture, iteration records, tool call records, enable/disable switch, error surfacing, auto-cleanup).
+**Delivers:** A navigable `/ai-debug` URL that mounts a stub `AiDebugApp`, connects to `bus_service`, logs received events to the browser console, and leaves no trace of the old DB models in the database or codebase. The `ir_websocket.py` access group is corrected to `group_user`.
 
-**Avoids:** Generator yield contract breakage (Pitfall 1), TransientModel vacuum mid-session (Pitfall 5), large JSON in model fields (Pitfall 4 — design fields conservatively from the start).
+**Addresses:** Ephemeral session-scoped data (table stakes), connection status indicator (carry forward).
 
-**Research flag:** Standard pattern. No additional research needed. The generator override pattern is fully documented in STACK.md and ARCHITECTURE.md with verified source examples.
+**Avoids:** Pitfalls 1 (wrong bundle), 2 (missing session_info), 3 (orphaned DB tables), 6 (wrong access group), and the generator-references-deleted-model failure mode.
 
-### Phase 2: Backend Views and Security
+**Key tasks:**
+- Write `migrations/<version>/pre-migrate.py` with `DROP TABLE IF EXISTS ... CASCADE` for all three tables
+- Remove `ai_debug_trace.py`, `ai_debug_iteration.py`, `ai_debug_tool_call.py` and `security/ir.model.access.csv`
+- Stub out DB write calls in `ai_session.py` (replace with `pass` temporarily; do not delete the bus send path)
+- Add `controllers/main.py` with `AiDebugController.ai_debug_index()` following the POS self-order pattern
+- Add `views/templates.xml` with `ai_debug.index` QWeb template (includes session_info, csrf_token, `loadMenusPromise = Promise.resolve({})`)
+- Add `ai_debug.assets_app` bundle to `__manifest__.py` using `('include', 'point_of_sale.base_app')`
+- Add stub `main.js`, `ai_debug_app.js`, `ai_debug_app.xml` (mounts, logs "AI Debug loaded", subscribes to bus channel)
+- Update `ir_websocket.py`: change `group_system` to `group_user`; verify channel prefix still matches `ai_debug:`
+- Remove old backend views, menus, and their `__manifest__.py` data references
 
-**Rationale:** Backend XML views have zero JS dependencies and can be built immediately after models exist. They provide the first real verification that captured data looks correct. Security (ir.model.access.csv) is a prerequisite for any view to load.
+### Phase 2: Backend Instrumentation — Full Bus Payloads
 
-**Delivers:** A searchable, filterable history of all debug traces visible in the Odoo backend. Usable for post-mortem debugging without any live panel work.
+**Rationale:** The frontend cannot display meaningful data until the backend emits correctly structured, complete bus payloads. The bus event schema (UUID IDs, `parent_loop_id` field, payload size discipline) must be locked before the frontend state model is built — changing the schema after Phase 3 requires synchronized changes to both Python and JavaScript. The payload split decision (meta-only vs. capped full payload) must also be made here, before any frontend code depends on a particular shape.
 
-**Addresses:** Backend list + form views feature, trace retention UI (via Settings), per-agent filter (trivial search filter).
+**Delivers:** A running agentic loop that emits 4 well-structured bus events (`ai_debug/new_trace`, `ai_debug/iteration`, `ai_debug/tool_call`, `ai_debug/trace_update`) with verified payloads, confirmed arriving one-by-one in the browser console during loop execution. Payload size discipline enforced.
 
-**Avoids:** No significant pitfall exposure in this phase. Standard Odoo XML view patterns.
+**Addresses:** Full bus.bus payloads (table stakes), agent name label, iteration timing data, confirmation pause state signal, `parent_loop_id` in schema.
 
-**Research flag:** Skip. Fully standard Odoo views — well-documented patterns.
+**Avoids:** Pitfalls 4 (oversized payloads), 5 (batch-fire instead of streaming), 8 (subagent events arrive with unknown parent), 11 (bus_bus disk accumulation).
 
-### Phase 3: Bus Integration and Live Panel
+**Key tasks:**
+- Finalize bus event schema for all 4 event types (include `parent_loop_id: null`, `agent_name`, UUID IDs, `state` field on loop)
+- Decide and implement payload split strategy: recommended is `ai_debug/iteration_meta` (index, duration, tool_count — tiny) plus either a capped `messages_sent`/`raw_response` or a separate `ai_debug/iteration_detail` event
+- Rewrite `ai_session.py` instrumentation: replace stubbed DB write calls with `_debug_send_event()` using a separate cursor per send
+- Carry forward `_debug_strip_binaries()` for multimodal content in `messages_sent`
+- Verify real-time delivery: trigger agentic loop, confirm events arrive one-by-one in browser console during execution
+- Verify payload size: `SELECT max(length(message)) FROM bus_bus WHERE channel LIKE '%ai_debug%'` must return < 65536 after a RAG-enabled session
 
-**Rationale:** The live debug panel is the core differentiator but depends on both the data model (Phase 1) and confidence that the captured data is correct (Phase 2 validation). Bus channel design is the most security-sensitive part of the module and must be done carefully.
+### Phase 3: Sidebar Tree Component
 
-**Delivers:** A real-time OWL panel showing the agentic loop as it runs — iterations and tool calls appearing one by one as the backend yields them.
+**Rationale:** The sidebar is the primary UX deliverable of v1.1. It depends entirely on Phase 2's proven bus payloads. The OWL reactive Map state model and the 3-level component tree are the structural core — everything in Phase 4 (detail panel) slots into the selection state established here. Selection stability (stable `t-key`, `Map.set()` not array replacement) must be confirmed under live bus events before Phase 4 is added.
 
-**Uses:** `ir.websocket._build_bus_channel_list` override with UUID channel names and access checks. `bus_service.addChannel()` + `bus_service.subscribe()` in OWL with full lifecycle management. Separate `registry.cursor()` in a `postcommit` hook for per-iteration bus sends.
+**Delivers:** A working sidebar that populates in real time as bus events arrive, with Loop > Iteration > Tool Call hierarchy, inline status badges, agent name labels, timing display, and stable selection state under concurrent bus updates. Multiple concurrent loops appear as siblings.
 
-**Implements:** `DebugPanel` OWL component, `IrWebsocket` override, bus notification sender.
+**Addresses:** Sidebar tree (table stakes), click-to-select state (table stakes), status badges, auto-select latest running node, multiple loops as top-level roots, timing display on iteration nodes, `parent_loop_id` tree rendering logic.
 
-**Avoids:** Fan-out to all tabs via user-partner channel (Pitfall 3), full payloads in bus (Pitfall 4 — send reference only), missing OWL unsubscribe (Pitfall 7), channel without access check (Pitfall 6).
+**Avoids:** Pitfalls 7 (sidebar loses selection on bus events), 8 (subagent events with unknown parent loop).
 
-**Research flag:** Needs careful implementation. The separate cursor / postcommit pattern is documented in ARCHITECTURE.md but subtle. Recommend tracing through the `thoughts_generator` execution model during task breakdown to confirm notification timing.
+**Key tasks:**
+- Implement `AiDebugApp` root component with `useState({ traces: Map, selection, connectionStatus })`; include `loopsById` index for O(1) lookup and subagent-ready parent/child insertion
+- Wire 4 bus event handlers (`_onNewTrace`, `_onIteration`, `_onToolCall`, `_onTraceUpdate`) in `onMounted`
+- Implement `TraceList` + `LoopItem` + `IterationItem` + `ToolCallItem` OWL components; all use `setSelection` callback upward (no EventBus)
+- Add `t-key` on all `t-foreach` nodes (loop.id, iter.id, tc.id)
+- Add status badge CSS classes (running spinner, done checkmark, error X, paused indicator)
+- Add `formatDuration(ms)` inline display on `IterationItem` nodes
+- Verify stability: click iteration #1 detail, trigger new tool call via a second agentic run, confirm iteration #1 remains selected and detail does not blank
 
-### Phase 4: Polish and Differentiators
+### Phase 4: Detail Panel + Polish
 
-**Rationale:** JSON tree viewer and state diff are enhancements to the live panel; they are only valuable once the panel is working correctly. System prompt capture requires a separate `_generate_next_response()` instrumentation hook — straightforward but a distinct concern.
+**Rationale:** The detail panel is the payoff for sidebar selection. It reuses existing `JsonTree` and `StateDiff` components from v1.0 — implementation cost is low once Phase 3's selection state is stable. Polish items (keyboard navigation, connection status, listening state copy) complete the v1.1 feature set with no new architectural dependencies.
 
-**Delivers:** Collapsible JSON viewer for messages and raw responses. State diff showing exactly what changed in `tools_context['state']` between iterations. System prompt + RAG context captured per trace. Configuration UI in Settings.
+**Delivers:** A fully working AI Debugger v1.1 where clicking any sidebar node shows type-appropriate detail content, with keyboard navigation, connection status display, and listen mode (auto-attach to next incoming loop).
 
-**Addresses:** All P2 differentiator features (state diff viewer, JSON tree renderer, system prompt capture, confirmation flow tracking fields are already in the model by Phase 1).
+**Addresses:** Detail panel type-aware tabs, `JsonTree` and `StateDiff` integration, keyboard navigation, connection status carry-forward, confirmation pause badge visual, listen mode preservation.
 
-**Avoids:** No new architectural risks. Incremental additions to established patterns.
+**Avoids:** UX pitfalls — sidebar collapses on reconnect (sessionStorage restore), no visual distinction for running loops, no timeout indicator in listening state.
 
-**Research flag:** Skip. Standard OWL component patterns; no novel integration.
+**Key tasks:**
+- Implement `DetailPanel` switcher with `t-if`/`t-elif` on selected node type (loop / iteration / tool_call)
+- Implement `LoopDetail` (System Prompt / RAG Context / Tools tabs using `JsonTree`)
+- Implement `IterationDetail` (Messages Sent / LLM Response / State Diff tabs using `JsonTree` and `StateDiff`)
+- Implement `ToolCallDetail` (Args / Result / State Diff tabs)
+- Port `JsonTree` and `StateDiff` from `static/src/debug_panel/` to `static/src/app/components/`; no source changes expected
+- Add keyboard navigation (W3C ARIA tree pattern: Down/Up Arrow moves selection, Right/Left Arrow expands/collapses)
+- Add connection status indicator (carry forward `_syncConnectionStatus` logic from v1.0)
+- Add confirmation pause badge distinct from running/done/error
+- Add "Listening for next session... (Xs elapsed)" copy in the empty state
+- Final cleanup: delete all v1.0-only source files; verify module upgrades cleanly from a fresh database
 
 ### Phase Ordering Rationale
 
-- **Models before UI:** Every frontend component and XML view depends on the schema. Building the schema first also forces the developer to think through what data is needed before writing capture code.
-- **Backend views before live panel:** Backend views give immediate feedback on captured data quality with no WebSocket complexity. If the generator instrumentation has a bug, it's much easier to diagnose from a list view than from a live panel.
-- **Bus channel design before component:** The channel naming scheme (UUID vs integer, user-scoped vs trace-scoped) must be decided before any frontend subscribes. Changing it later requires synchronized frontend and backend changes.
-- **Polish last:** JSON tree viewer and state diff require accurate data to be useful. Building them before validating data correctness wastes effort.
+- Phase 1 before Phase 2: The standalone app must resolve at `/ai-debug` before the browser can receive bus events. DB cleanup must happen before instrumentation is rewritten to avoid `KeyError: 'ai.debug.trace'` at runtime.
+- Phase 2 before Phase 3: The sidebar component cannot be verified without real bus events arriving. The event schema (payload shape, UUID keys, `parent_loop_id`) must be locked before the frontend state model is built against it.
+- Phase 3 before Phase 4: The `DetailPanel` reads `state.selection` — that selection state object is established in Phase 3. The `selectedNode` getter and component tree topology must exist before detail panel rendering is meaningful.
+- No phase should be merged without passing the PITFALLS.md "Looks Done But Isn't" verification checklist.
 
 ### Research Flags
 
-Phases needing deeper research during task breakdown:
-- **Phase 3 (Bus Integration):** The `postcommit` hook with a separate cursor is the subtle part — verify the exact commit timing by tracing through `thoughts_generator` → `_run_agentic_loop` → each yield → cursor exit. The ARCHITECTURE.md documents this but implementation will surface edge cases.
+Phases with standard, well-documented patterns (skip `/gsd:research-phase`):
+- **Phase 1 (Scaffold):** Every pattern is verified against Odoo master source at specific file paths. The controller, template, and bundle structure are direct adaptations of `pos_self_order` — no unknowns.
+- **Phase 4 (Detail Panel):** `JsonTree` and `StateDiff` are already written and working. The detail panel is a type-switch with existing components — standard OWL component composition.
 
-Phases with standard patterns (no additional research needed):
-- **Phase 1:** Generator override pattern is fully specified with working code in STACK.md and ARCHITECTURE.md.
-- **Phase 2:** Standard Odoo XML views. Nothing novel.
-- **Phase 4:** Standard OWL component composition. JSON diff is a library function or simple recursive comparison.
+Phases that would benefit from a targeted spike before task breakdown:
+- **Phase 2 (Bus Payload Size Decision):** The meta/detail payload split strategy has two viable options (split events vs. single capped payload). The right choice depends on actual production payload sizes. A quick empirical check — instrument `len(json.dumps(payload))` in a test session with RAG enabled — would resolve this in 30 minutes and prevent a costly refactor later.
+- **Phase 3 (OWL Map Reactivity Proof-of-Concept):** OWL's reactive `Map` behavior (`.set()` triggers re-render, `[...map.values()]` in template spreads reactively) is confirmed in OWL source comments but is an uncommon pattern. A 30-minute standalone OWL proof-of-concept with a Map in `useState` would confirm the pattern before the full sidebar is built on it.
+
+---
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All patterns verified against Odoo master source code at specific file paths and line numbers. No inference — direct reads. |
-| Features | MEDIUM-HIGH | Table-stakes features are HIGH confidence (translated from well-documented external tools). Live panel differentiator is HIGH confidence (core project goal). v2+ features are LOW confidence (intentionally deferred). |
-| Architecture | HIGH | Grounded in direct source inspection of `ai_session.py`, `thoughts_generator`, `bus.bus`, `ir_websocket`, and multiple reference modules. Separate cursor / postcommit pattern has a verified precedent in `google_calendar`. |
-| Pitfalls | HIGH | All pitfalls are derived from direct source inspection, not inference. The generator yield contract, bus payload limits, and TransientModel vacuum behavior are all verified against actual Odoo code. |
+| Stack | HIGH | All patterns verified against Odoo master source at specific file paths and line numbers. No inference from documentation alone — direct source reads of `pos_self_order`, `bus_service.js`, `env.js`, `bus.py`. |
+| Features | HIGH | Table stakes features derived from direct comparison with VS Code debugger, LangSmith, Langfuse, and Jaeger (official documentation). Odoo-specific features (confirmation pause, agent name label, ephemeral design) derived from direct v1.0 code review and PROJECT.md requirements. |
+| Architecture | HIGH | Component decomposition mirrors the verified POS self-order architecture. OWL reactive Map confirmed in OWL source. Data flow matches existing v1.0 bus send mechanics (separate cursor pattern already proven in production). |
+| Pitfalls | HIGH | Each pitfall includes the exact source file, mechanism, and verified fix. Not inferred — all confirmed by reading `bus.py`, `websocket.py`, `ir_module.py`, `pos_assets_index.xml`, and the existing v1.0 module source. |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **State diff implementation:** The research identifies `state_before` / `state_after` fields as the mechanism. The actual diff algorithm (Python `deepdiff` vs simple key comparison vs JS-side rendering) is not specified. Decide during Phase 4 task breakdown — `deepdiff` is not in Odoo's Python env; a simple recursive comparison or JSON patch format is safer.
+- **Payload size empirical baseline:** The research recommends capping at approximately 32 KB but does not have production data on typical Odoo AI session payload sizes. Before finalizing the Phase 2 payload split strategy, run a test session with RAG enabled and measure `SELECT max(length(message)) FROM bus_bus WHERE channel LIKE '%ai_debug%'`. If payloads are consistently under 32 KB, the split adds unnecessary complexity; if they routinely exceed it, the split is mandatory.
 
-- **`busService.removeChannel()` API name:** ARCHITECTURE.md notes "check actual API name" for removing a channel on component unmount. This must be verified against `bus_service.js` before implementing the OWL panel. Likely `busService.deleteChannel()` or similar — look up during Phase 3.
+- **`loadMenusPromise` requirement with `base_app` bundle:** STACK.md recommends `point_of_sale.base_app` and notes the bundle does not include menu services. PITFALLS.md notes POS adds `loadMenusPromise = Promise.resolve()` as a guard. During Phase 1 scaffold, verify whether the `base_app` bundle includes anything that triggers menu loading — if not, the guard is unnecessary; if yes, it must be added to the template. This is a 5-minute check.
 
-- **`_generate_next_response` hook depth:** System prompt and RAG context capture requires instrumenting a level above `_run_agentic_loop`. The exact hook point and what data is available at that level is documented in FEATURES.md but not fully code-verified. Needs source read during Phase 4 task breakdown.
+- **`bus_service.unsubscribe()` API availability:** The architecture uses `unsubscribe()` in `onWillUnmount`. Verify this method exists in the current `bus_service.js` at the time of Phase 3 implementation. The v1.0 panel did not use it, and the API may have been added recently. If the method is absent, use the named-handler pattern with `addChannel`/`deleteChannel` alone.
 
-- **Auto-vacuum: `@api.autovacuum` vs `ir.cron`:** STACK.md recommends `@api.autovacuum`. ARCHITECTURE.md mentions `data/ir_cron_data.xml`. The decision should be finalized in Phase 1: `@api.autovacuum` is simpler (no XML data record) and correct for this use case; `ir.cron` is only needed if configurable scheduling is required.
+---
 
 ## Sources
 
-### Primary (HIGH confidence — direct Odoo source reads)
+### Primary (HIGH confidence — direct Odoo master source inspection)
 
-- `enterprise/ai/models/ai_session.py` — `_run_agentic_loop` generator, `_handle_tool_calls`, yield structure, tool confirmation early return
-- `enterprise/ai/controllers/thread.py` — `thoughts_generator` cursor management, how the generator is consumed
-- `addons/bus/models/bus.py` — `_sendone` precommit/postcommit, `NOTIFY_PAYLOAD_MAX_LENGTH`
-- `addons/bus/models/bus_listener_mixin.py` — `_bus_send()` / `BusListenerMixin` implementation
-- `addons/bus/models/ir_websocket.py` — `_build_bus_channel_list`, `_prepare_subscribe_data` security model
-- `addons/bus/models/res_users.py` — `res.users._bus_channel()` routes to `partner_id`
-- `addons/bus/static/src/services/bus_service.js` — `subscribe()`, `unsubscribe()`, `addChannel()`, `start()` JS API
-- `addons/web/static/src/core/utils/hooks.js` — `useService()` hook
-- `enterprise/spreadsheet_edition/models/ir_websocket.py` — reference `_build_bus_channel_list` with access check
-- `addons/google_calendar/models/google_sync.py` — `@postcommit.add` with separate `registry.cursor()` precedent
-- `addons/hr_attendance/models/ir_websocket.py` — custom string channel + `_build_bus_channel_list` override example
-- `enterprise/ai/static/src/ai_natural_language_service.js` — `bus_service.subscribe()` + `bus_service.start()` in a service; `ai_session_identifier` tab-scoping pattern
-- `addons/web/static/lib/owl/owl.js` — OWL version 2.8.1 confirmed
-- `odoo/orm/models_transient.py` — `_transient_vacuum` and TransientModel lifecycle
+- `addons/point_of_sale/controllers/main.py` — HTTP controller pattern, `session_info()`, `_is_internal()`, `Cache-Control: no-store`
+- `addons/point_of_sale/views/pos_assets_index.xml` — standalone HTML template, `odoo` JS global, `__session_info__`, `loadMenusPromise`
+- `addons/point_of_sale/__manifest__.py` — `point_of_sale.base_app` bundle, bus service file list, `main.js` remove+re-add pattern
+- `addons/point_of_sale/static/src/app/main.js` — `mountComponent(Chrome, document.body)` boot pattern
+- `addons/pos_self_order/views/pos_self_order.index.xml` — minimal standalone template without POS session complexity
+- `addons/pos_self_order/static/src/app/root.js` — cleanest `whenReady(async () => { await mountComponent(...) })` example
+- `addons/pos_self_order/__manifest__.py` — `('include', 'point_of_sale.base_app')` in custom bundle
+- `addons/web/static/src/env.js` — `mountComponent`, `makeEnv`, `startServices` implementations (lines 226-250)
+- `addons/bus/models/bus.py` — `_sendone` precommit/postcommit; `NOTIFY_PAYLOAD_MAX_LENGTH` applies to pg_notify channel list only, not message content; messages fetched from `bus_bus` table by ID
+- `addons/bus/static/src/services/bus_service.js` — `addChannel()` calls `ensureWorkerStarted()` and `BUS:START` (lines 174-181)
+- `addons/bus/websocket.py` — `MESSAGE_MAX_SIZE = 2**20` is inbound frame limit only; outbound frames have no server-side size check
+- `odoo/addons/base/models/ir_module.py` — `module_uninstall` removes `ir_model_data` entries but does NOT drop PostgreSQL tables
+- `ai_debug/models/ai_session.py` (v1.0) — existing instrumentation, separate cursor pattern, `_debug_strip_binaries`
+- `ai_debug/models/ir_websocket.py` (v1.0) — existing `_build_bus_channel_list` override with `group_system` check (must change to `group_user`)
+- `enterprise/spreadsheet_edition/models/ir_websocket.py` — reference implementation of `_build_bus_channel_list` with access check pattern
 
-### Secondary (MEDIUM confidence — official ecosystem documentation)
+### Secondary (MEDIUM confidence — official documentation and changelogs)
 
-- [Langfuse data model](https://langfuse.com/docs/observability/data-model) — trace/span/observation hierarchy
-- [Langfuse observability overview](https://langfuse.com/docs/observability/overview) — feature expectations
-- [LangSmith Observability](https://www.langchain.com/langsmith/observability) — competitor feature baseline
-- [Arize Phoenix docs](https://arize.com/docs/phoenix) — competitor feature baseline
+- [Langfuse Tracing Data Model](https://langfuse.com/docs/observability/data-model) — observation tree pattern, `parent_observation_id` for nested traces
+- [Langfuse New Trace View changelog 2025-03-19](https://langfuse.com/changelog/2025-03-19-new-trace-view) — tree/timeline toggle UX, right-side detail pane design
+- [LangSmith Debugging Deep Agents](https://blog.langchain.com/debugging-deep-agents-with-langsmith/) — run tree, status badges, input/output tabs
+- [VS Code Debugger Documentation](https://code.visualstudio.com/docs/debugtest/debugging) — call stack tree, multi-session sidebar behavior
+- [W3C ARIA TreeView Pattern](https://www.w3.org/WAI/ARIA/apg/patterns/treeview/) — keyboard navigation specification (Down/Up/Left/Right arrow behavior)
+- [PatternFly Primary-detail pattern](https://www.patternfly.org/patterns/primary-detail/design-guidelines/) — master/detail layout design guidelines
 
-### Tertiary (LOW confidence — vendor/community blogs)
+### Tertiary (LOW confidence — inferred from architecture, needs runtime validation)
 
-- [Braintrust observability tools](https://www.braintrust.dev/articles/best-ai-observability-tools-2026) — vendor-written comparison
-- [LLM observability best practices](https://www.getmaxim.ai/articles/llm-observability-best-practices-for-2025/) — third-party blog
+- OWL `Map` inside `useState` reactivity on `.set()` — confirmed in OWL source comments and mentioned in OWL documentation but no dedicated test coverage found; validate with a Phase 3 proof-of-concept before committing the full sidebar to this pattern
+- `bus_service.unsubscribe()` availability — referenced in STACK.md research reasoning but not line-verified in current `bus_service.js` source; confirm during Phase 3 implementation
 
 ---
 *Research completed: 2026-02-20*

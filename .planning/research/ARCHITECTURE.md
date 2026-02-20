@@ -1,8 +1,17 @@
 # Architecture Research
 
-**Domain:** Odoo instrumentation module — AI agentic loop debugger
+**Domain:** Odoo standalone OWL app — AI agentic loop live tracer (v1.1)
 **Researched:** 2026-02-20
-**Confidence:** HIGH (grounded in actual source code at verified paths)
+**Confidence:** HIGH (grounded in actual source at verified paths)
+
+## What Changed in v1.1
+
+v1.0 used: persistent DB models + backend XML views + OWL client action panel.
+v1.1 replaces that with: no DB models + standalone OWL app at `/ai-debug` + full bus payloads.
+
+This document focuses on the v1.1 target architecture. v1.0 patterns that carry over unchanged (generator yield passthrough, separate cursor bus sends) are referenced but not re-explained in full.
+
+---
 
 ## Standard Architecture
 
@@ -10,410 +19,662 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                     INSTRUMENTATION LAYER                            │
+│                     INSTRUMENTATION LAYER (unchanged)                │
 │                                                                      │
-│  ai.session (TransientModel) — inherited, not modified               │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  AiSessionDebug (_inherit = 'ai.session')                    │   │
-│  │  ├── _run_agentic_loop()  → wraps super() generator          │   │
-│  │  └── _handle_tool_calls() → wraps super() generator          │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│           │ writes to                  │ sends via separate cursor   │
-│           ▼                            ▼                             │
-├───────────────────────────┬────────────────────────────────────────-─┤
-│      PERSISTENCE LAYER    │       REAL-TIME NOTIFICATION LAYER       │
-│                           │                                          │
-│  ai.debug.trace           │  bus.bus._sendone()                      │
-│  ai.debug.iteration       │  via registry.cursor() in postcommit     │
-│  ai.debug.tool.call       │  channel: 'ai_debugger_{trace_id}'       │
-│                           │                                          │
-├───────────────────────────┴──────────────────────────────────────────┤
-│                      FRONTEND LAYER                                  │
+│  AiSessionDebug (_inherit = 'ai.session')                            │
+│  ├── _run_agentic_loop()   — wraps super(), captures events          │
+│  ├── _handle_tool_calls()  — wraps super(), captures tool events     │
+│  └── _generate_next_response() — captures instructions + RAG        │
+│           │                                                          │
+│           │  No DB writes. Sends via separate cursor:                │
+│           ▼                                                          │
+├──────────────────────────────────────────────────────────────────────┤
+│                  REAL-TIME NOTIFICATION LAYER                        │
 │                                                                      │
-│  ┌──────────────────────────────┐  ┌───────────────────────────┐    │
-│  │  Live Debug Panel (OWL)      │  │  Backend History Views     │    │
-│  │  ir.actions.client           │  │  (List + Form XML views)   │    │
-│  │  busService.addChannel()     │  │  ai.debug.trace model      │    │
-│  │  busService.subscribe()      │  │  Odoo backend standard     │    │
-│  └──────────────────────────────┘  └───────────────────────────┘    │
+│  bus.bus._sendone('ai_debug:traces', event_type, FULL_PAYLOAD)       │
+│                                                                      │
+│  Events (all carry full data — no lazy DB reads):                    │
+│  ├── ai_debug/new_trace    — loop start, instructions, tools def     │
+│  ├── ai_debug/iteration    — messages_sent, raw_response, timing     │
+│  ├── ai_debug/tool_call    — args, result, state_before/after        │
+│  └── ai_debug/trace_update — state, termination_reason              │
+│                                                                      │
+├──────────────────────────────────────────────────────────────────────┤
+│                       HTTP LAYER (new in v1.1)                       │
+│                                                                      │
+│  AiDebugController                                                   │
+│  └── GET /ai-debug  →  renders 'ai_debug.index' template            │
+│                         (auth='user', internal users only)           │
+│                                                                      │
+├──────────────────────────────────────────────────────────────────────┤
+│                   STANDALONE OWL APP LAYER (new)                     │
+│                                                                      │
+│  ai_debug.index (QWeb template — full HTML page, no Odoo chrome)     │
+│  └── loads asset bundle: ai_debug.assets                            │
+│      └── main.js → mountComponent(AiDebugApp, document.body)        │
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐     │
+│  │  AiDebugApp  (root OWL component)                           │     │
+│  │  ├── TraceList  (sidebar — loops, with agent label)         │     │
+│  │  │   ├── LoopItem (clickable, shows status badge)          │     │
+│  │  │   │   ├── IterationItem (LLM call, duration)           │     │
+│  │  │   │   │   └── ToolCallItem (tool name, success badge)  │     │
+│  │  │   │   └── ...                                          │     │
+│  │  │   └── ...                                              │     │
+│  │  └── DetailPanel  (right pane — context for selection)     │     │
+│  │      ├── LoopDetail  (system prompt, tools definition)     │     │
+│  │      ├── IterationDetail  (messages sent, raw response)    │     │
+│  │      └── ToolCallDetail  (args, result, state diff)        │     │
+│  └─────────────────────────────────────────────────────────────┘     │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Component Responsibilities
 
-| Component | Responsibility | Typical Implementation |
-|-----------|----------------|------------------------|
-| `AiSessionDebug` | Wraps generator methods to capture every loop event | `TransientModel`, `_inherit = 'ai.session'`, generator `yield from` passthrough |
-| `ai.debug.trace` | One record per agentic loop run; root of trace hierarchy | Persistent `Model`, FK to `ai.agent`, stores loop-level metadata |
-| `ai.debug.iteration` | One record per LLM API call within a loop; stores messages sent + raw response | Persistent `Model`, `Many2one → ai.debug.trace` |
-| `ai.debug.tool.call` | One record per tool execution; stores args, result, timing | Persistent `Model`, `Many2one → ai.debug.iteration` |
-| `ir.websocket` (inherit) | Adds `ai_debugger_{trace_id}` to bus channel list when debug panel is open | `AbstractModel`, `_inherit = 'ir.websocket'`, override `_build_bus_channel_list` |
-| Bus notification sender | Sends incremental events from within the generator loop | Separate `registry.cursor()` inside a `@postcommit` hook to avoid batching |
-| Live Debug Panel | OWL component; subscribes to bus channel, renders trace in real time | `ir.actions.client` registered component, `busService.addChannel()` + `busService.subscribe()` |
-| Backend History Views | Standard Odoo list/form views for post-mortem inspection | XML view definitions, menu entries under Settings or dedicated AI menu |
+| Component | Responsibility | Implementation |
+|-----------|----------------|----------------|
+| `AiSessionDebug` | Generator yield passthrough; emits full bus payloads | `TransientModel`, `_inherit = 'ai.session'`, unchanged from v1.0 except payload content |
+| `ir.websocket` (inherit) | Restricts `ai_debug:*` channels to `group_system` users | `AbstractModel`, `_build_bus_channel_list` override — carried over from v1.0 |
+| `AiDebugController` | Serves the standalone app HTML page at `/ai-debug` | `http.Controller`, `auth='user'`, renders `ai_debug.index` QWeb template |
+| `ai_debug.index` (template) | Full HTML page: CSRF token, `__session_info__`, asset bundle | QWeb template declared in views XML; bootstraps OWL app |
+| `ai_debug.assets` (bundle) | JS + CSS for the standalone app | Declared in `__manifest__.py`; includes OWL, web core services, bus service |
+| `main.js` | Boots the OWL app | `mountComponent(AiDebugApp, document.body)` from `@web/env` |
+| `AiDebugApp` | Root component; owns bus subscription and all trace state | OWL `Component`; `useState` for traces map; `useService('bus_service')` |
+| `TraceList` | Sidebar tree: loop > iteration > tool call | Receives traces from parent; emits selection events upward |
+| `DetailPanel` | Right pane; renders context for selected item | Receives `selection` prop (type + data); switches between sub-components |
+| `JsonTree` | Collapsible JSON tree renderer | Pure presentational; carries over from v1.0 |
+| `StateDiff` | Before/after state comparison | Pure presentational; carries over from v1.0 |
 
-## Recommended Project Structure
+---
+
+## Recommended Project Structure (v1.1)
 
 ```
-ai_debugger/
-├── __manifest__.py              # depends: ['ai', 'bus'], assets wiring
+ai_debug/
+├── __manifest__.py                   # updated: no models data, new assets bundle, new controller
 ├── __init__.py
+├── controllers/
+│   ├── __init__.py
+│   └── main.py                       # NEW: AiDebugController — serves /ai-debug
 ├── models/
 │   ├── __init__.py
-│   ├── ai_debug_trace.py        # ai.debug.trace — persistent Model
-│   ├── ai_debug_iteration.py    # ai.debug.iteration — persistent Model
-│   ├── ai_debug_tool_call.py    # ai.debug.tool.call — persistent Model
-│   ├── ai_session.py            # _inherit = 'ai.session', wraps generators
-│   └── ir_websocket.py          # _inherit = 'ir.websocket', adds debug channel
-├── security/
-│   └── ir.model.access.csv      # CRUD access for debug models (admin only)
-├── data/
-│   └── ir_cron_data.xml         # auto-vacuum cron for old traces
-├── controllers/
-│   └── __init__.py              # empty (no custom HTTP routes needed initially)
+│   ├── ai_session.py                 # unchanged: generator instrumentation
+│   └── ir_websocket.py               # unchanged: channel access control
+├── views/
+│   └── templates.xml                 # NEW: ai_debug.index QWeb template
 ├── static/src/
-│   ├── components/
-│   │   ├── DebugPanel/
-│   │   │   ├── DebugPanel.js    # root OWL component, manages bus subscription
-│   │   │   ├── DebugPanel.xml
-│   │   │   └── DebugPanel.scss
-│   │   ├── TraceView/
-│   │   │   ├── TraceView.js     # displays one trace (iterations list)
-│   │   │   └── TraceView.xml
-│   │   ├── IterationCard/
-│   │   │   ├── IterationCard.js # one LLM call — messages, tool calls, timing
-│   │   │   └── IterationCard.xml
-│   │   ├── ToolCallCard/
-│   │   │   ├── ToolCallCard.js  # one tool execution — args, result, success
-│   │   │   └── ToolCallCard.xml
-│   │   └── JsonViewer/
-│   │       ├── JsonViewer.js    # collapsible JSON tree renderer
-│   │       └── JsonViewer.xml
-│   └── debug_panel_action.js    # registers ir.actions.client tag
-└── views/
-    ├── ai_debug_trace_views.xml # list + form view for ai.debug.trace
-    ├── ai_debug_menus.xml       # menu item under Settings > Technical or AI menu
-    └── templates.xml            # QWeb asset bundle registration
+│   ├── app/
+│   │   ├── main.js                   # NEW: app boot — mountComponent(AiDebugApp)
+│   │   ├── ai_debug_app.js           # NEW: root component — state, bus, selection
+│   │   ├── ai_debug_app.xml          # NEW: root template
+│   │   ├── ai_debug_app.scss         # NEW: full-page layout styles
+│   │   ├── sidebar/
+│   │   │   ├── trace_list.js         # NEW: sidebar tree component
+│   │   │   ├── trace_list.xml
+│   │   │   ├── loop_item.js          # NEW: one loop row
+│   │   │   ├── loop_item.xml
+│   │   │   ├── iteration_item.js     # NEW: one iteration row (nested)
+│   │   │   ├── iteration_item.xml
+│   │   │   ├── tool_call_item.js     # NEW: one tool call row (nested)
+│   │   │   └── tool_call_item.xml
+│   │   └── detail/
+│   │       ├── detail_panel.js       # NEW: right pane switcher
+│   │       ├── detail_panel.xml
+│   │       ├── loop_detail.js        # NEW: system prompt + tools def
+│   │       ├── loop_detail.xml
+│   │       ├── iteration_detail.js   # NEW: messages sent + raw response
+│   │       ├── iteration_detail.xml
+│   │       ├── tool_call_detail.js   # NEW: args + result + state diff
+│   │       └── tool_call_detail.xml
+│   └── components/
+│       ├── json_tree/               # carried over from v1.0
+│       │   ├── json_tree.js
+│       │   └── json_tree.xml
+│       └── state_diff/              # carried over from v1.0
+│           ├── state_diff.js
+│           └── state_diff.xml
+└── security/
+    └── ir.model.access.csv          # REMOVED in v1.1 (no DB models)
 ```
 
-### Structure Rationale
+**Files to delete from v1.0:**
+- `models/ai_debug_trace.py`
+- `models/ai_debug_iteration.py`
+- `models/ai_debug_tool_call.py`
+- `security/ir.model.access.csv`
+- `views/ai_debug_trace_views.xml`
+- `views/ai_debug_iteration_views.xml`
+- `views/ai_debug_tool_call_views.xml`
+- `views/debug_panel_action.xml`
+- `views/menus.xml`
 
-- **`models/ai_session.py` separate from debug models:** Keeps the instrumentation override clearly distinct from the data schema. Two concerns, two files.
-- **`ir_websocket.py` in models/:** Channel authorization belongs server-side with the other model code. This follows the pattern used by `im_livechat`, `hr_attendance`, and `mail` modules.
-- **No `controllers/` initially:** The live panel is an `ir.actions.client` — it doesn't need a custom route. A controller can be added later if a dedicated URL is wanted.
-- **`static/src/components/` split by component:** Each visual component gets its own folder so JS, XML, and SCSS stay co-located. Matches `mail` and `ai` module conventions.
+---
 
 ## Architectural Patterns
 
-### Pattern 1: Generator Yield Passthrough for Instrumentation
+### Pattern 1: Standalone OWL App — Controller + Template + Asset Bundle
 
-**What:** Override a generator method, intercept yielded items, then re-yield unchanged.
-**When to use:** Any time you need to observe without modifying behavior. This is THE pattern for this module.
-**Trade-offs:** Zero behavioral risk. The only overhead is the instrumentation code that runs between yields (model writes). If instrumentation code raises, it will break the loop — use `try/except` to log and continue.
+This is the POS Self Order pattern, which is simpler than full POS and has no session management complexity. The hr_attendance kiosk is even simpler (uses `web.layout`), but ai_debug should match `pos_self_order.index` since it needs `__session_info__` for the bus service.
 
-**Example:**
+**What:** A dedicated HTTP route renders a full HTML page (no Odoo chrome/navbar). The template inlines the CSRF token and `__session_info__` as a JS global, then loads a custom asset bundle. The bundle's `main.js` boots an OWL app via `mountComponent`.
+
+**When to use:** Any tool that should live in its own browser tab, free of the Odoo backend navbar.
+
+**Controller (HIGH confidence — from source):**
+
 ```python
-class AiSessionDebug(models.TransientModel):
-    _inherit = 'ai.session'
+# controllers/main.py
+from odoo import http
+from odoo.http import request
 
-    @api.model
-    def _run_agentic_loop(self, model, instructions, messages, temperature,
-                          tools, tools_context, record=None, schema=None,
-                          web_grounding=False):
-        if not self._debug_is_enabled():
-            yield from super()._run_agentic_loop(
-                model, instructions, messages, temperature,
-                tools, tools_context, record, schema, web_grounding
-            )
-            return
 
-        trace = self._debug_open_trace(model, instructions, messages, tools)
-        iteration_idx = 0
-        try:
-            for item in super()._run_agentic_loop(
-                model, instructions, messages, temperature,
-                tools, tools_context, record, schema, web_grounding
-            ):
-                self._debug_record_loop_event(trace, item, iteration_idx)
-                if 'tool_calls' in item:
-                    iteration_idx += 1
-                yield item
-        except Exception:
-            self._debug_mark_trace_error(trace)
-            raise
-        finally:
-            self._debug_close_trace(trace)
+class AiDebugController(http.Controller):
+
+    @http.route('/ai-debug', type='http', auth='user')
+    def ai_debug_index(self, **kwargs):
+        if not request.env.user._is_internal():
+            return request.not_found()
+        session_info = request.env['ir.http'].session_info()
+        return request.render('ai_debug.index', {
+            'session_info': session_info,
+        })
 ```
 
-### Pattern 2: Separate Cursor for Real-Time Bus Sends
+**Template — `views/templates.xml` (HIGH confidence — from source):**
 
-**What:** The generator runs in a long-lived transaction (the `with registry.cursor() as cr:` block in `thoughts_generator`). Bus notifications are sent via PostgreSQL NOTIFY on `postcommit`, which fires when the cursor context manager exits — i.e., after ALL loop iterations complete. For real-time updates, bus sends need their own short-lived cursor.
-
-**When to use:** Any bus notification that must arrive at the frontend before the outer transaction commits.
-
-**Trade-offs:** Slightly more complex. The separate cursor opens, writes, and commits independently. Failure in the bus send should never propagate to the main transaction.
-
-**Example:**
-```python
-def _debug_send_bus_event(self, trace_id, notification_type, payload):
-    """Send a bus notification using a separate cursor so it fires immediately."""
-    dbname = self.env.cr.dbname
-    uid = self.env.uid
-
-    @self.env.cr.postcommit.add
-    def send_bus():
-        # This fires at the end of the current savepoint, not the outer transaction.
-        # Using a fresh cursor ensures NOTIFY goes out immediately.
-        from odoo.modules.registry import Registry
-        registry = Registry(dbname)
-        with registry.cursor() as cr:
-            env = api.Environment(cr, uid, {})
-            env['bus.bus']._sendone(
-                f'ai_debugger_{trace_id}',
-                notification_type,
-                payload,
-            )
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="ai_debug.index" name="AI Debug">
+        &lt;!DOCTYPE html&gt;
+        <html>
+            <head>
+                <title>AI Debug</title>
+                <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
+                <meta http-equiv="content-type" content="text/html, charset=utf-8"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <script type="text/javascript">
+                    var odoo = <t t-out="json.dumps({
+                        'csrf_token': request.csrf_token(None),
+                        '__session_info__': session_info,
+                        'debug': request.session.debug,
+                    })"/>;
+                </script>
+                <t t-call-assets="ai_debug.assets"/>
+            </head>
+            <body>
+            </body>
+        </html>
+    </template>
+</odoo>
 ```
 
-Note: The `postcommit` hook pattern from `google_calendar` (see `google_sync.py`) is the precedent. However, for mid-loop granularity, the notification will fire at the end of each generator item's processing, not mid-item. This gives iteration-level granularity, which is sufficient.
+**Asset bundle in `__manifest__.py` (HIGH confidence — from source):**
 
-**Alternative: Write debug records with `env.cr.flush()` and let bus batch at session end.** This is simpler and acceptable for the history view. Use the separate cursor only for the live panel.
-
-### Pattern 3: `ir.websocket` Inheritance for Channel Authorization
-
-**What:** Override `_build_bus_channel_list` to add the debugger's channel when the frontend requests it. The client sends the channel name as a string; the server validates and resolves it to a real channel record or string.
-
-**When to use:** Any time a module needs its own named channels beyond the default user/partner/group channels.
-
-**Trade-offs:** Straightforward. The `im_livechat`, `hr_attendance`, and `mail` modules all use this exact pattern. No surprises.
-
-**Example:**
 ```python
-class IrWebsocket(models.AbstractModel):
-    _inherit = 'ir.websocket'
-
-    def _build_bus_channel_list(self, channels):
-        new_channels = list(channels)
-        for channel in list(new_channels):
-            if isinstance(channel, str) and channel.startswith('ai_debugger_'):
-                # Validate the trace_id belongs to the current user before subscribing
-                trace_id_str = channel[len('ai_debugger_'):]
-                if trace_id_str.isdigit():
-                    # Channel is a plain string — no record needed
-                    # Keep as-is; _sendone will send to (dbname, channel_str)
-                    pass
-                else:
-                    new_channels.remove(channel)
-        return super()._build_bus_channel_list(new_channels)
+'assets': {
+    'ai_debug.assets': [
+        # OWL + web infrastructure (mirrors pos_self_order.assets pattern)
+        ('include', 'web._assets_helpers'),
+        ('include', 'web._assets_backend_helpers'),
+        'web/static/src/scss/pre_variables.scss',
+        'web/static/lib/bootstrap/scss/_variables.scss',
+        'web/static/lib/bootstrap/scss/_variables-dark.scss',
+        'web/static/lib/bootstrap/scss/_maps.scss',
+        ('include', 'web._assets_bootstrap_backend'),
+        ('include', 'web._assets_core'),
+        # Bus service (needed for WebSocket)
+        'bus/static/src/services/bus_service.js',
+        'bus/static/src/services/worker_service.js',
+        'bus/static/src/bus_parameters_service.js',
+        'bus/static/src/multi_tab_service.js',
+        'bus/static/src/multi_tab_shared_worker_service.js',
+        'bus/static/src/multi_tab_fallback_service.js',
+        'bus/static/src/workers/*',
+        # App files
+        'ai_debug/static/src/**/*.js',
+        'ai_debug/static/src/**/*.xml',
+        'ai_debug/static/src/**/*.scss',
+    ],
+},
 ```
 
-### Pattern 4: OWL Client Action for Standalone Debug Panel
+**main.js (HIGH confidence — from pos_self_order and POS source):**
 
-**What:** Register a component as an `ir.actions.client` tag. Open it via `actionService.doAction({ type: 'ir.actions.client', tag: 'ai_debugger.debug_panel' })`. The component manages its own bus subscription lifecycle via `onMounted` / `onWillUnmount`.
-
-**When to use:** Any standalone page not tied to a specific record. The `mail.action_discuss` action is the canonical example.
-
-**Trade-offs:** Clean separation. The panel is a real Odoo action — bookmarkable, openable from menus, targetable as `target: 'new'` for a separate window.
-
-**Example:**
 ```javascript
-import { Component, onMounted, onWillUnmount, useState } from "@odoo/owl";
-import { useService } from "@web/core/utils/hooks";
-import { registry } from "@web/core/registry";
+// static/src/app/main.js
+import { mountComponent } from "@web/env";
+import { whenReady } from "@odoo/owl";
+import { AiDebugApp } from "./ai_debug_app";
 
-class DebugPanel extends Component {
-    static template = "ai_debugger.DebugPanel";
-    static props = { traceId: { type: Number, optional: true } };
+whenReady(async () => {
+    await mountComponent(AiDebugApp, document.body, {
+        name: "AI Debug",
+    });
+});
+```
+
+`mountComponent` from `@web/env` calls `makeEnv()` + `startServices(env)` internally, which initializes the Odoo service registry (including `bus_service`, `orm`, `rpc`, `notification`). All services registered in `web.assets_backend` service registry are available. This is the key benefit over raw `App` mounting.
+
+### Pattern 2: Full Bus Payloads — No Lazy ORM Reads
+
+**What:** The v1.0 bus payloads were summaries (IDs only). The OWL panel then made ORM read calls on expand. In v1.1 there are no DB models, so all data must travel in the bus payload at event time.
+
+**When to use:** Always, when there is no DB to fall back to.
+
+**Trade-offs:** Payloads can be large. `messages_sent` for a multi-turn conversation can be tens of KB. The `bus_bus` table stores each payload as JSONB — this is fine. The pg_notify NOTIFY payload has a limit (default 8000 bytes) but this is for the notification *channel list*, not the message payload. The message itself is stored in `bus_bus` rows and fetched by the polling/WS client — no size constraint from pg_notify.
+
+**What each event type must carry (inferred from v1.0 DB schema):**
+
+```python
+# ai_debug/new_trace  — fires when _run_agentic_loop starts
+{
+    'trace_id': str,           # UUID, client-generated, never a DB id
+    'llm_model': str,
+    'state': 'running',
+    'instructions': str,       # system prompt (was lazy in v1.0)
+    'rag_context': str,        # RAG text (was lazy in v1.0)
+    'tools_definition': list,  # full tool schemas (was lazy in v1.0)
+    'started_at': float,       # time.time(), for display
+}
+
+# ai_debug/iteration  — fires after each LLM yield
+{
+    'trace_id': str,
+    'iteration_id': str,       # UUID, client-generated
+    'index': int,
+    'messages_sent': list,     # full message list (was lazy in v1.0)
+    'raw_response': dict,      # full provider response (was lazy in v1.0)
+    'final_message': dict,     # present if loop terminating
+    'duration_ms': int,
+}
+
+# ai_debug/tool_call  — fires for each tool result
+{
+    'trace_id': str,
+    'iteration_id': str,
+    'tool_call_id': str,       # UUID, client-generated
+    'tool_name': str,
+    'call_id': str,            # LLM-assigned call_id
+    'args': dict,              # full args (was lazy in v1.0)
+    'result': str,
+    'success': bool,
+    'state_before': dict,      # full state snapshot (was lazy in v1.0)
+    'state_after': dict,       # full state snapshot (was lazy in v1.0)
+    'triggered_confirmation': bool,
+    'confirmation_message': str,
+    'duration_ms': int,
+}
+
+# ai_debug/trace_update  — fires on state change (done/error/paused)
+{
+    'trace_id': str,
+    'state': str,              # 'done' | 'error' | 'paused'
+    'termination_reason': str,
+    'error_message': str,
+    'iteration_count': int,
+    'total_duration_ms': int,
+}
+```
+
+**ID strategy:** Since there are no DB records, IDs must be client-meaningful strings. Generate a `trace_id` UUID in Python at loop start. Generate `iteration_id` and `tool_call_id` UUIDs as each event fires. The client uses these as dict keys for O(1) lookup.
+
+**Binary stripping:** The existing `_debug_strip_binaries` helper in `ai_session.py` already handles large base64 content in `messages_sent`. Carry it forward unchanged.
+
+### Pattern 3: OWL App State Management — Reactive Store in Root Component
+
+**What:** The root component `AiDebugApp` owns the entire application state as a single `useState` object. Child components receive state slices as props. This avoids the complexity of a separate store service for an app this small.
+
+**When to use:** Apps with a single data entity type (traces) and simple selection state. For comparison: POS uses a complex service-based store because it has dozens of entity types. ai_debug has one.
+
+**Trade-offs:** All bus event handlers live in the root component. This is acceptable because there are only 4 event types. The sidebar and detail panel are purely presentational — they receive data and emit selection events upward via callbacks.
+
+**Root component state shape:**
+
+```javascript
+// static/src/app/ai_debug_app.js
+import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
+import { useService } from "@web/core/utils/hooks";
+import { TraceList } from "./sidebar/trace_list";
+import { DetailPanel } from "./detail/detail_panel";
+
+export class AiDebugApp extends Component {
+    static template = "ai_debug.AiDebugApp";
+    static components = { TraceList, DetailPanel };
+    static props = {};
 
     setup() {
         this.busService = useService("bus_service");
-        this.state = useState({ iterations: [], status: "idle" });
+
+        // All application state in one reactive object.
+        // traces: Map<traceId, TraceNode>
+        // TraceNode: { id, llm_model, state, instructions, tools_definition,
+        //              iterations: Map<iterationId, IterationNode> }
+        // IterationNode: { id, index, messages_sent, raw_response, final_message,
+        //                  duration_ms, toolCalls: Map<toolCallId, ToolCallNode> }
+        // ToolCallNode:  { id, tool_name, args, result, state_before, state_after,
+        //                  success, duration_ms }
+        this.state = useState({
+            traces: new Map(),
+            selection: null,   // { type: 'loop'|'iteration'|'tool_call', id: str }
+            connectionStatus: 'connecting',
+        });
+
+        // Bind handlers once.
+        this._onNewTrace = this._onNewTrace.bind(this);
+        this._onIteration = this._onIteration.bind(this);
+        this._onToolCall = this._onToolCall.bind(this);
+        this._onTraceUpdate = this._onTraceUpdate.bind(this);
 
         onMounted(() => {
-            const channel = `ai_debugger_${this.props.traceId}`;
-            this.busService.addChannel(channel);
-            this.busService.subscribe("ai_debug_iteration", this._onIteration.bind(this));
-            this.busService.subscribe("ai_debug_tool_call", this._onToolCall.bind(this));
+            this.busService.addChannel("ai_debug:traces");
+            this.busService.subscribe("ai_debug/new_trace", this._onNewTrace);
+            this.busService.subscribe("ai_debug/iteration", this._onIteration);
+            this.busService.subscribe("ai_debug/tool_call", this._onToolCall);
+            this.busService.subscribe("ai_debug/trace_update", this._onTraceUpdate);
         });
 
         onWillUnmount(() => {
-            // removeChannel is the symmetric call
-            // busService.removeChannel(channel); — check actual API name
-            this.busService.unsubscribe("ai_debug_iteration", this._onIteration.bind(this));
-            this.busService.unsubscribe("ai_debug_tool_call", this._onToolCall.bind(this));
+            this.busService.deleteChannel("ai_debug:traces");
+            this.busService.unsubscribe("ai_debug/new_trace", this._onNewTrace);
+            this.busService.unsubscribe("ai_debug/iteration", this._onIteration);
+            this.busService.unsubscribe("ai_debug/tool_call", this._onToolCall);
+            this.busService.unsubscribe("ai_debug/trace_update", this._onTraceUpdate);
         });
     }
 
-    _onIteration({ payload }) {
-        this.state.iterations.push(payload);
+    _onNewTrace(payload) {
+        this.state.traces.set(payload.trace_id, {
+            id: payload.trace_id,
+            llm_model: payload.llm_model,
+            state: payload.state,
+            instructions: payload.instructions,
+            rag_context: payload.rag_context,
+            tools_definition: payload.tools_definition,
+            started_at: payload.started_at,
+            iterations: new Map(),
+        });
+        // Auto-select the new trace's loop node.
+        this.state.selection = { type: 'loop', id: payload.trace_id };
+    }
+
+    _onIteration(payload) {
+        const trace = this.state.traces.get(payload.trace_id);
+        if (!trace) return;
+        trace.iterations.set(payload.iteration_id, {
+            id: payload.iteration_id,
+            index: payload.index,
+            messages_sent: payload.messages_sent,
+            raw_response: payload.raw_response,
+            final_message: payload.final_message,
+            duration_ms: payload.duration_ms,
+            toolCalls: new Map(),
+        });
+    }
+
+    _onToolCall(payload) {
+        const trace = this.state.traces.get(payload.trace_id);
+        if (!trace) return;
+        const iteration = trace.iterations.get(payload.iteration_id);
+        if (!iteration) return;
+        iteration.toolCalls.set(payload.tool_call_id, {
+            id: payload.tool_call_id,
+            tool_name: payload.tool_name,
+            args: payload.args,
+            result: payload.result,
+            success: payload.success,
+            state_before: payload.state_before,
+            state_after: payload.state_after,
+            duration_ms: payload.duration_ms,
+        });
+    }
+
+    _onTraceUpdate(payload) {
+        const trace = this.state.traces.get(payload.trace_id);
+        if (!trace) return;
+        trace.state = payload.state;
+        trace.termination_reason = payload.termination_reason;
+        trace.total_duration_ms = payload.total_duration_ms;
+        trace.iteration_count = payload.iteration_count;
+    }
+
+    setSelection(selection) {
+        this.state.selection = selection;
+    }
+
+    get selectedNode() {
+        if (!this.state.selection) return null;
+        const { type, id, traceId, iterationId } = this.state.selection;
+        if (type === 'loop') return { type, data: this.state.traces.get(id) };
+        if (type === 'iteration') {
+            const trace = this.state.traces.get(traceId);
+            return { type, data: trace?.iterations.get(id) };
+        }
+        if (type === 'tool_call') {
+            const trace = this.state.traces.get(traceId);
+            const iter = trace?.iterations.get(iterationId);
+            return { type, data: iter?.toolCalls.get(id) };
+        }
+        return null;
     }
 }
-
-registry.category("actions").add("ai_debugger.debug_panel", DebugPanel);
 ```
+
+**OWL Map reactivity note:** OWL's `useState` makes objects reactive by proxy. `Map` objects inside `useState` ARE reactive — mutations (`.set`, `.delete`) trigger re-renders. This is confirmed by OWL source. Use `Map` for O(1) lookup by ID; the sidebar renders by iterating `.values()`.
+
+### Pattern 4: Sidebar Tree — 3-Level Collapsible List
+
+**What:** The sidebar is a pure presentational component tree. It receives the `traces` Map and a `setSelection` callback as props. Each level (loop, iteration, tool call) is its own component that renders its children.
+
+**When to use:** Hierarchical data with 3 levels and selection state managed by a parent.
+
+**Template structure:**
+
+```xml
+<!-- sidebar/trace_list.xml -->
+<templates>
+    <t t-name="ai_debug.TraceList">
+        <div class="ai-debug-sidebar">
+            <t t-foreach="[...props.traces.values()]" t-as="trace" t-key="trace.id">
+                <LoopItem
+                    trace="trace"
+                    isSelected="props.selection?.id === trace.id"
+                    onSelect="props.setSelection"
+                />
+            </t>
+        </div>
+    </t>
+
+    <t t-name="ai_debug.LoopItem">
+        <!-- Clickable header — selects loop node -->
+        <div class="ai-debug-loop-item" t-on-click="onClickLoop">
+            <span class="badge" t-att-class="statusBadgeClass">
+                <t t-esc="props.trace.state"/>
+            </span>
+            <span t-esc="props.trace.llm_model"/>
+        </div>
+        <!-- Always expanded; iterations always visible under their loop -->
+        <t t-foreach="[...props.trace.iterations.values()]" t-as="iter" t-key="iter.id">
+            <IterationItem
+                trace="props.trace"
+                iteration="iter"
+                isSelected="props.selection?.id === iter.id"
+                onSelect="props.onSelect"
+            />
+        </t>
+    </t>
+</templates>
+```
+
+**Selection protocol:** The sidebar emits `setSelection({ type, id, traceId?, iterationId? })` upward. The root component updates `state.selection`. The `DetailPanel` receives the resolved `selectedNode` as a prop and switches between `LoopDetail`, `IterationDetail`, or `ToolCallDetail`.
+
+---
 
 ## Data Flow
 
-### Capture Flow (Write Path)
+### Capture Flow (Python — write path, v1.1)
 
 ```
-HTTP POST /ai/generate_response
+HTTP call triggers agentic loop
     ↓
-thoughts_generator() — opens registry.cursor() [long transaction]
-    ↓
-ai_session_sudo._add_user_message()
-    ↓
-_generate_next_response()
-    ↓
-AiSessionDebug._run_agentic_loop()   ← instrumentation starts here
+AiSessionDebug._run_agentic_loop()
     │
-    ├── _debug_open_trace()          → CREATE ai.debug.trace (buffered in ORM)
+    ├── Generate trace_id = uuid.uuid4()
+    ├── _debug_bus_send_full('ai_debug/new_trace', {full trace payload})
+    │     → separate registry.cursor() → bus.bus._sendone()
     │
-    ├── for each LLM call:
-    │   ├── super()._run_agentic_loop() yields {'tool_calls': ..., 'metadata': response}
-    │   ├── _debug_record_iteration()  → CREATE ai.debug.iteration (buffered)
-    │   ├── _debug_send_bus_event()    → postcommit hook schedules separate cursor send
+    ├── for each LLM yield:
+    │   ├── Generate iteration_id = uuid.uuid4()
+    │   ├── _debug_bus_send_full('ai_debug/iteration', {full iteration payload})
     │   │
-    │   └── for each tool result:
-    │       ├── super() yields {'tool_results': ...}
-    │       └── _debug_record_tool_call() → CREATE ai.debug.tool.call (buffered)
+    │   └── for each tool result (via _handle_tool_calls):
+    │       ├── Generate tool_call_id = uuid.uuid4()
+    │       └── _debug_bus_send_full('ai_debug/tool_call', {full tool payload})
     │
-    └── _debug_close_trace()         → WRITE ai.debug.trace.state = 'done'
+    └── _debug_bus_send_full('ai_debug/trace_update', {state: 'done', ...})
 
-thoughts_generator cursor exits → all ORM writes commit → NOTIFY fires (bus sends)
+No DB writes. All data exists only in the browser until page refresh.
 ```
 
-### Live Panel Flow (Read Path)
+### Live App Flow (OWL — read path, v1.1)
 
 ```
-User opens debug panel (ir.actions.client action)
+User navigates to /ai-debug
     ↓
-DebugPanel.onMounted()
-    ├── busService.addChannel('ai_debugger_{traceId}')
-    │     → WebSocket sends 'subscribe' event with channel name
-    │     → ir.websocket._build_bus_channel_list() validates channel
-    │
-    └── busService.subscribe('ai_debug_iteration', handler)
-        busService.subscribe('ai_debug_tool_call', handler)
+AiDebugController.ai_debug_index()
+    → renders ai_debug.index template
+    → browser loads ai_debug.assets bundle
+    → main.js: mountComponent(AiDebugApp, document.body)
+    → makeEnv() + startServices(env) boot all registered services
+    → AiDebugApp.setup() runs
+    → busService.addChannel('ai_debug:traces')
+    → WebSocket connects
+    → ir.websocket._build_bus_channel_list() validates group_system
 
-NOTIFY 'imbus' arrives (from bus.bus postcommit)
-    → ImDispatch.loop() relays to subscribed websockets
-    → WebSocket delivers notification to browser
-    → busService notificationBus.trigger(type, payload)
-    → handler updates component state
-    → OWL reactivity re-renders
-```
+Agentic loop fires on another tab/user
+    → bus.bus._sendone('ai_debug:traces', 'ai_debug/new_trace', {FULL_PAYLOAD})
+    → PostgreSQL NOTIFY → ImDispatch → WebSocket → browser
+    → busService dispatches to AiDebugApp._onNewTrace(payload)
+    → AiDebugApp updates state.traces Map
+    → OWL reactivity: TraceList re-renders sidebar, DetailPanel shows loop detail
 
-### History View Flow
-
-```
-User navigates to AI Debugger menu
-    → Odoo backend loads ai.debug.trace list view (XML definition)
-    → ORM query: SELECT * FROM ai_debug_trace ORDER BY create_date DESC
-    → Click trace → form view with One2many → iterations → tool_calls
+Subsequent iterations/tool calls arrive the same way.
+    → Map mutations trigger OWL re-renders
+    → Sidebar tree grows in real time
+    → Selection state preserved across updates
 ```
 
 ### Key Data Flows
 
-1. **Trace creation to persistence:** ORM buffered writes commit at generator cursor exit. Not visible until the full agentic response completes. Acceptable for the history view, not for live.
+1. **New trace auto-selection:** On `_onNewTrace`, the app immediately sets `state.selection` to the new loop node. The detail panel shows the system prompt and tools definition without any user action.
 
-2. **Live bus notifications:** Postcommit hooks using a separate cursor send NOTIFY before the main transaction's postcommit fires. This achieves mid-loop granularity at the cost of a second DB connection per notification.
+2. **Session scope:** Refreshing the browser clears `state.traces` (empty Map). There is no persistence and no way to load historical traces. This is by design.
 
-3. **State diff:** Captured by snapshotting `tools_context['state']` before and after each LLM call in `_run_agentic_loop`. The diff is computed Python-side before storing.
+3. **Subagent anticipation:** When a subagent loop fires, it emits its own `ai_debug/new_trace` event with a distinct `trace_id`. The sidebar shows it as a second top-level loop. The data model carries a `parent_trace_id` field (null for now) that the frontend can use later to indent subagent loops under their parent.
 
-## Scaling Considerations
-
-This is a single-developer local tool. Scaling is not a concern. Notes for completeness:
-
-| Scale | Architecture Adjustments |
-|-------|--------------------------|
-| 1 developer | Current design is correct. No changes. |
-| Small team (2-10) | Add `ai_debugger.retention_days` config param. Add index on `trace_id` FK columns. |
-| Production (never recommended) | Disable via `ai_debugger.enabled = False`. The module adds DB writes and a separate cursor per loop event. |
-
-### First Bottleneck
-
-If the module is accidentally left enabled in production: the extra DB writes per iteration add latency to every agentic loop call. Detection: `ai.debug.trace` table grows unbounded. Fix: the `ir.cron` auto-vacuum deletes records older than `retention_days`.
-
-## Anti-Patterns
-
-### Anti-Pattern 1: Modifying Yielded Items
-
-**What people do:** Alter the dict returned by `super()._run_agentic_loop()` before yielding.
-**Why it's wrong:** The caller (`_generate_next_response`) and the HTTP controller both read from yielded items. Modifying `'metadata'`, `'tool_calls'`, or `'final_message'` breaks the loop's state management or the streaming response.
-**Do this instead:** Read from yielded items, write to debug models, then `yield item` unchanged.
-
-### Anti-Pattern 2: Calling `bus.bus._sendone` Inside the Main Transaction
-
-**What people do:** Call `self.env['bus.bus']._sendone(...)` directly inside the generator override methods.
-**Why it's wrong:** `_sendone` queues the NOTIFY in `postcommit.data`, which fires when the outer `registry.cursor()` context manager in `thoughts_generator` exits — i.e., after all iterations complete. The "real-time" panel would only update once, at the end.
-**Do this instead:** Use a separate `registry.cursor()` in a postcommit hook (see Pattern 2 above), or accept that notifications are batched per iteration and sent after each yield.
-
-### Anti-Pattern 3: Inheriting `ai.session` as a Persistent Model
-
-**What people do:** Change `_name = 'ai.session'` to `_name = 'ai.debug.session'` or try to make the session persist.
-**Why it's wrong:** `ai.session` is a `TransientModel`. Its records are cleaned up by Odoo's `_gc_transient_models` cron. Debug data stored on the transient model will disappear.
-**Do this instead:** Use `_inherit = 'ai.session'` (TransientModel inheritance) for the instrumentation override. Store all debug data in separate persistent `Model` classes (`ai.debug.trace`, etc.).
-
-### Anti-Pattern 4: Using a Named String Bus Channel Without Server-Side Validation
-
-**What people do:** Send to `'ai_debugger_general'` or any unvalidated channel string, and allow any client to subscribe.
-**Why it's wrong:** Any user who knows the channel name can subscribe and see all debug traces.
-**Do this instead:** Include the trace ID in the channel name and validate in `ir.websocket._build_bus_channel_list` that the requesting user owns that trace (e.g., `trace.create_uid == self.env.user`).
-
-### Anti-Pattern 5: Putting Instrumentation Logic in `_add_user_message` or `_generate_next_response`
-
-**What people do:** Override the higher-level methods to capture data because they're easier to understand.
-**Why it's wrong:** These methods handle confirmation flows, session state, and message posting — they don't have direct access to the per-iteration data (raw LLM response, iteration index, tool_results list).
-**Do this instead:** Override `_run_agentic_loop` and `_handle_tool_calls`. These are the methods with direct access to every data point needed.
+---
 
 ## Integration Points
 
-### External Services
+### Between Python Instrumentation and Bus
 
-| Service | Integration Pattern | Notes |
-|---------|---------------------|-------|
-| `ai.session` (enterprise) | Model inheritance (`_inherit`) | Zero modification to `ai` module. The debugger is a pure consumer. |
-| `bus.bus` | `_sendone()` via separate cursor | See Pattern 2. The debugger is a producer; OWL panel is the consumer. |
-| `ir.websocket` | Abstract model inheritance | Channel authorization must validate trace ownership. |
+| Concern | v1.0 | v1.1 |
+|---------|------|------|
+| Payload size | Small summaries (IDs only) | Full payloads (messages, args, state snapshots) |
+| ID source | DB autoincrement | `uuid.uuid4()` — no DB |
+| Bus channel | `ai_debug:traces` (global) | `ai_debug:traces` (global, unchanged) |
+| DB writes | Separate cursor per event | None |
 
-### Internal Boundaries
+### Between OWL App and Odoo Backend Services
 
-| Boundary | Communication | Notes |
-|----------|---------------|-------|
-| `AiSessionDebug` → `ai.debug.trace` | Direct ORM write (`env['ai.debug.trace'].create(...)`) | Buffered in transaction; committed at cursor exit. |
-| `AiSessionDebug` → `bus.bus` | `postcommit` hook with separate cursor | Achieves pre-main-commit delivery for live updates. |
-| `DebugPanel` (OWL) → server | `busService.addChannel()` + `busService.subscribe()` | WebSocket; standard Odoo bus consumer pattern. |
-| Backend views → `ai.debug.*` | ORM read via standard Odoo list/form view | No custom controllers needed; standard XML views suffice. |
+The standalone app gets Odoo services (bus_service, rpc, orm, notification) for free via `mountComponent` + `startServices`. No special wiring needed. The `session` object is injected via `odoo.__session_info__` in the template (same pattern as POS self-order and POS).
 
-## Build Order Implications
+| Service | Used by | Notes |
+|---------|---------|-------|
+| `bus_service` | `AiDebugApp` | WebSocket connection, channel subscription |
+| `rpc` | Not used in v1.1 | No backend data fetching |
+| `orm` | Not used in v1.1 | No DB models |
 
-The component dependencies enforce this build order:
+### Auth and Access
 
-1. **Data models first** (`ai.debug.trace`, `ai.debug.iteration`, `ai.debug.tool.call`) — everything else depends on the schema existing. Security (ir.model.access.csv) and auto-vacuum cron ship alongside.
+- Route: `auth='user'` — Odoo session required. Not public.
+- Channel access: `ir.websocket` override restricts `ai_debug:*` channels to `group_system` (carried from v1.0). Any internal user can open the page, but only system users receive bus events.
+- If the target access should be relaxed to `base.group_user`, change the channel guard in `ir_websocket.py` to `has_group('base.group_user')`.
 
-2. **`ai.session` instrumentation** (`_inherit = 'ai.session'`) — depends on models existing to write to. Can be verified by calling agentic loop and checking `ai.debug.trace` records via the Odoo shell.
+---
 
-3. **Backend XML views** — depends on models. No JS dependencies. Immediately useful for verifying captured data without any frontend work.
+## Anti-Patterns
 
-4. **`ir.websocket` extension + OWL panel** — depends on models (to know what data to display) and the backend views (for context on what a trace looks like). Bus send code in the instrumentation layer ships here.
+### Anti-Pattern 1: Storing Full Payload in pg_notify NOTIFY Call
 
-5. **Polish** — JSON tree viewer, state diff component, filtering UI, configuration parameters UI.
+**What people do:** Assume the bus payload (the full messages_sent, state_before, etc.) flows through pg_notify directly.
+**Why it's wrong:** pg_notify has an 8000-byte default limit for the NOTIFY payload — but this limit applies to the *channel list* notification, not the bus message content. The actual bus event data is written to the `bus_bus` table as JSONB and fetched separately. Full payloads are safe in `bus.bus._sendone()` messages.
+**Do this instead:** Send full payloads via `bus.bus._sendone()` without concern for pg_notify size limits. The bus infrastructure handles chunking of the NOTIFY channel list if needed.
+
+### Anti-Pattern 2: Using DB Integer IDs in Bus Payloads
+
+**What people do:** Generate IDs server-side as sequential integers (mimicking DB autoincrement) since there are no DB records.
+**Why it's wrong:** Sequential integers create ordering dependencies — if two tool calls fire concurrently, the client can't distinguish them by arrival order. UUIDs are collision-free and make payloads self-describing.
+**Do this instead:** `trace_id = str(uuid.uuid4())` at loop start. Same for `iteration_id` and `tool_call_id`.
+
+### Anti-Pattern 3: Including the Odoo Backend Navbar in the Standalone App
+
+**What people do:** Use `ir.actions.client` in the backend for "standalone" feel.
+**Why it's wrong:** The backend navbar, debug toolbar, and chat widget are always rendered. CSS hacks (like v1.0's `o_ai_debug_standalone` class) to hide them are fragile — every Odoo update can break them.
+**Do this instead:** Serve a full HTML page from a dedicated controller. The page has no `<t t-call="web.layout"/>` — it is its own document root.
+
+### Anti-Pattern 4: Fetching Data On Selection (ORM Read on Click)
+
+**What people do:** Store only IDs in state and fetch full data when the user clicks a node.
+**Why it's wrong:** In v1.1 there is no DB to fetch from. All data must be in the bus payload, in memory, at selection time.
+**Do this instead:** Store complete data in the state Map at event receipt time. Selection is purely a pointer into already-held state — zero network requests on click.
+
+### Anti-Pattern 5: One Asset Bundle Per Page That Includes All of `web.assets_backend`
+
+**What people do:** Set `'assets': {'web.assets_backend': ['ai_debug/static/src/**/*']}` for the standalone app files.
+**Why it's wrong:** `web.assets_backend` loads only in the Odoo backend webclient. The standalone app at `/ai-debug` renders its own HTML page with its own `<t t-call-assets="ai_debug.assets"/>`. Files added to `web.assets_backend` are invisible there.
+**Do this instead:** Declare a dedicated bundle `ai_debug.assets` in `__manifest__.py`. Include it in the `ai_debug.index` template. Keep backend-only files (menu XML, action XML) in `web.assets_backend` if they still exist, but the app files go in `ai_debug.assets`.
+
+---
+
+## Build Order for v1.1
+
+Dependencies determine this order:
+
+1. **Controller + template** (`controllers/main.py`, `views/templates.xml`) — the URL must resolve before any frontend can load. Can be verified by hitting `/ai-debug` in a browser (should render a blank page with asset errors, not a 404).
+
+2. **Asset bundle + `main.js` + root `AiDebugApp`** — stub component that mounts and logs "AI Debug loaded". Verifies the entire bootstrap chain (route → template → bundle → OWL env → services). Confirms `bus_service` is available.
+
+3. **Python instrumentation update** (`ai_session.py`) — strip DB model writes, generate UUIDs, emit full payloads. Verifiable by triggering an agentic loop and watching browser console for bus events (add `console.log` in handlers temporarily).
+
+4. **Sidebar `TraceList` and `LoopItem`** — receive bus events, render trace rows. First visible output.
+
+5. **`IterationItem` and `ToolCallItem`** — complete the 3-level tree. Nesting requires iteration and tool_call payloads proven in step 3.
+
+6. **`DetailPanel` with sub-components** — `LoopDetail`, `IterationDetail`, `ToolCallDetail`. Depends on sidebar selection being wired (step 4-5).
+
+7. **`JsonTree` and `StateDiff` integration** — port from v1.0, plug into detail components. These are self-contained presentational components.
+
+8. **Cleanup** — delete all v1.0-only files (`models/ai_debug_*.py`, `security/`, `views/ai_debug_*_views.xml`, `views/menus.xml`). Update `__manifest__.py` to remove their data declarations and the old `web.assets_backend` assets entry.
+
+---
 
 ## Sources
 
-- Source: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/ai/models/ai_session.py` — generator structure, yield items, `tools_context` keys (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/ai/controllers/thread.py` — `thoughts_generator` cursor management, how generator is consumed (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/bus/models/bus.py` — `_sendone` precommit/postcommit mechanism, NOTIFY timing (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/bus/models/bus_listener_mixin.py` — `_bus_send` and `_bus_channel` pattern (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/bus/models/ir_websocket.py` — `_build_bus_channel_list` extension point (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/im_livechat/models/ir_websocket.py` — string channel validation pattern (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/bus/static/src/services/bus_service.js` — `addChannel`, `subscribe`, `unsubscribe` OWL API (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/mail/static/src/core/web/mail_core_web_service.js` — `busService.subscribe()` pattern in practice (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/google_calendar/models/google_sync.py` — `@postcommit.add` with separate `registry.cursor()` (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/mail/views/discuss_channel_views.xml` — `ir.actions.client` XML definition pattern (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/ai/__manifest__.py` — asset bundle registration, module dependencies (HIGH confidence — direct source read)
+- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/controllers/main.py` — `pos_web` controller, `request.render('point_of_sale.index', context)`, `session_info` injection (HIGH confidence — direct source read)
+- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/views/pos_assets_index.xml` — `point_of_sale.index` template structure, `odoo` JS global with `__session_info__`, `t-call-assets` (HIGH confidence — direct source read)
+- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/__manifest__.py` — `point_of_sale.assets_prod`, `base_app` bundle structure including bus service files (HIGH confidence — direct source read)
+- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/static/src/app/main.js` — `mountComponent(Chrome, document.body)` boot pattern (HIGH confidence — direct source read)
+- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/pos_self_order/views/pos_self_order.index.xml` — simpler template: inlines `__session_info__`, single `t-call-assets` (HIGH confidence — direct source read)
+- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/pos_self_order/static/src/app/root.js` — `mountComponent(Index, document.body)` — cleanest boot example (HIGH confidence — direct source read)
+- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/hr_attendance/views/hr_attendance_kiosk_templates.xml` — `web.layout` alternative, inline script calling `createPublicKioskAttendance` (HIGH confidence — direct source read)
+- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/hr_attendance/static/src/public_kiosk/public_kiosk_app.js` — `makeEnv()` + `startServices()` + `new App(...)` explicit boot (HIGH confidence — direct source read)
+- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/static/src/env.js` — `mountComponent`, `makeEnv`, `startServices` implementations (HIGH confidence — direct source read)
+- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/bus/models/bus.py` — `NOTIFY_PAYLOAD_MAX_LENGTH` applies to channel list, not bus message content; `_sendone` stores payload in JSONB `bus_bus` table (HIGH confidence — direct source read)
+- Source: `/Users/joseph/clones/odoo/custom/ai_debug/models/ai_session.py` — existing v1.0 instrumentation, `_debug_strip_binaries`, `_debug_bus_send`, separate cursor pattern (HIGH confidence — direct source read)
+- Source: `/Users/joseph/clones/odoo/custom/ai_debug/models/ir_websocket.py` — channel access control for `ai_debug:*` channels (HIGH confidence — direct source read)
+- Source: `/Users/joseph/clones/odoo/custom/ai_debug/static/src/debug_panel/debug_panel.js` — v1.0 OWL bus subscription patterns, state shape, event handler structure (HIGH confidence — direct source read)
 
 ---
-*Architecture research for: Odoo AI debugger instrumentation module*
+*Architecture research for: Odoo AI debugger v1.1 — standalone OWL app conversion*
 *Researched: 2026-02-20*
