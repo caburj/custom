@@ -50,9 +50,10 @@ None — v1.0 shipped.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 2 | Add system prompt and tools definitions to ai_debug trace data | 2026-02-20 | 0fffaf8 | [2-add-system-prompt-and-tools-definitions-](./quick/2-add-system-prompt-and-tools-definitions-/) |
+| 3 | Ctrl/Cmd+click recursive expand/collapse on JsonTree nodes | 2026-02-20 | da8c6c8 | [3-ctrl-cmd-click-on-folded-json-tree-node-](./quick/3-ctrl-cmd-click-on-folded-json-tree-node-/) |
 
 ## Session Continuity
 
 Last session: 2026-02-20
-Stopped at: Completed quick task 2 — tools_definition field added to ai.debug.trace
+Stopped at: Completed quick task 3 — Ctrl/Cmd+click recursive JsonTree toggle
 Resume file: None
