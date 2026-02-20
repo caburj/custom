@@ -1,0 +1,4 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_ai_debug_trace_system,ai.debug.trace admin,model_ai_debug_trace,base.group_system,1,1,1,1
+access_ai_debug_iteration_system,ai.debug.iteration admin,model_ai_debug_iteration,base.group_system,1,1,1,1
+access_ai_debug_tool_call_system,ai.debug.tool.call admin,model_ai_debug_tool_call,base.group_system,1,1,1,1
