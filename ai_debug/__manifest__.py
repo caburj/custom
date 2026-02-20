@@ -6,6 +6,10 @@
     'depends': ['ai'],
     'data': [
         'security/ir.model.access.csv',
+        'views/ai_debug_trace_views.xml',
+        'views/ai_debug_iteration_views.xml',
+        'views/ai_debug_tool_call_views.xml',
+        'views/menus.xml',
     ],
     'installable': True,
     'application': False,
