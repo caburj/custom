@@ -55,11 +55,11 @@ Plans:
   1. Opening the debug panel URL in a browser tab and then triggering an agentic loop shows iterations and tool calls appearing in the panel as the backend yields them — no page refresh required
   2. The panel shows a diff of what changed in `tools_context['state']` between each iteration
   3. Messages, raw provider responses, and state data are rendered as a collapsible JSON tree — large payloads can be expanded or collapsed inline
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: Implement `IrWebsocket` override for per-trace bus channel with UUID naming and access check; add backend bus send via postcommit with separate cursor
-- [ ] 03-02: Build `DebugPanel` OWL `ir.actions.client` component with bus subscription, iteration/tool call rendering, lifecycle cleanup, JSON tree renderer, and state diff viewer
+- [ ] 03-01-PLAN.md — Backend bus pipeline: bus_channel UUID field, IrWebsocket access check, _sendone in write helpers, ir.actions.client record, Open Live Panel button
+- [ ] 03-02-PLAN.md — Frontend OWL debug panel: DebugPanel with bus subscription + timeline, JsonTree recursive renderer, StateDiff side-by-side viewer, SCSS styling
 
 ## Progress
 
