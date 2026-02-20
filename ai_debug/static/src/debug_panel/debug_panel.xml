@@ -73,6 +73,58 @@
         </div>
       </t>
 
+      <!-- ===== TRACE CONTEXT (collapsible) ===== -->
+      <t t-if="state.traceInfo and state.mode === 'trace'">
+        <div class="ai-debug-trace-context">
+          <div class="ai-debug-trace-context-toggle" t-on-click="toggleTraceDetail">
+            <i t-att-class="state.traceDetailExpanded ? 'fa fa-chevron-down' : 'fa fa-chevron-right'"/>
+            <span>Trace Context</span>
+            <span class="ai-debug-trace-context-hint">(system prompt, RAG, tools)</span>
+          </div>
+
+          <t t-if="state.traceDetailExpanded">
+            <div class="ai-debug-trace-context-body">
+              <t t-if="state.traceDetailLoading">
+                <div class="ai-debug-loading"><i class="fa fa-spinner fa-spin"/> Loading trace context...</div>
+              </t>
+              <t t-else="">
+                <!-- System Prompt / Instructions -->
+                <t t-if="state.traceInfo.instructions">
+                  <div class="ai-debug-trace-context-section">
+                    <div class="ai-debug-section-label">System Prompt</div>
+                    <pre class="ai-debug-trace-context-pre" t-esc="state.traceInfo.instructions"/>
+                  </div>
+                </t>
+
+                <!-- RAG Context -->
+                <t t-if="state.traceInfo.rag_context">
+                  <div class="ai-debug-trace-context-section">
+                    <div class="ai-debug-section-label">RAG Context</div>
+                    <pre class="ai-debug-trace-context-pre" t-esc="state.traceInfo.rag_context"/>
+                  </div>
+                </t>
+
+                <!-- Tools Definition -->
+                <t t-if="state.traceInfo.tools_definition and state.traceInfo.tools_definition.length">
+                  <div class="ai-debug-trace-context-section">
+                    <div class="ai-debug-section-label">
+                      Tools
+                      <span class="ai-debug-trace-context-count">(<t t-esc="state.traceInfo.tools_definition.length"/>)</span>
+                    </div>
+                    <JsonTree value="state.traceInfo.tools_definition" maxDepth="1"/>
+                  </div>
+                </t>
+
+                <!-- Nothing to show -->
+                <t t-if="!state.traceInfo.instructions and !state.traceInfo.rag_context and (!state.traceInfo.tools_definition or !state.traceInfo.tools_definition.length)">
+                  <div class="ai-debug-empty-state">No trace context data recorded.</div>
+                </t>
+              </t>
+            </div>
+          </t>
+        </div>
+      </t>
+
       <!-- ===== TIMELINE ===== -->
       <div class="ai-debug-timeline" t-ref="timeline">
 

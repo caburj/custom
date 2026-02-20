@@ -199,6 +199,66 @@ body.o_ai_debug_standalone {
     }
 
     // =========================================================
+    // TRACE CONTEXT (collapsible)
+    // =========================================================
+
+    .ai-debug-trace-context {
+        border-bottom: 1px solid #e5e7eb;
+        background: #fff;
+    }
+
+    .ai-debug-trace-context-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 20px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        color: #374151;
+        transition: background-color 0.15s;
+
+        &:hover { background-color: #f3f4f6; }
+
+        .fa { font-size: 10px; color: #9ca3af; width: 12px; text-align: center; }
+    }
+
+    .ai-debug-trace-context-hint {
+        font-weight: 400;
+        color: #9ca3af;
+        font-size: 11px;
+    }
+
+    .ai-debug-trace-context-body {
+        padding: 0 20px 12px;
+    }
+
+    .ai-debug-trace-context-section {
+        margin-bottom: 12px;
+        &:last-child { margin-bottom: 0; }
+    }
+
+    .ai-debug-trace-context-pre {
+        font-family: inherit;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: #f3f4f6;
+        padding: 10px 12px;
+        border-radius: 4px;
+        color: #374151;
+        max-height: 300px;
+        overflow-y: auto;
+        margin: 0;
+        border: 1px solid #e5e7eb;
+    }
+
+    .ai-debug-trace-context-count {
+        font-weight: 400;
+        color: #9ca3af;
+    }
+
+    // =========================================================
     // TIMELINE
     // =========================================================
 
