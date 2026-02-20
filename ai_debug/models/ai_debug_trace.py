@@ -35,10 +35,26 @@ class AiDebugTrace(models.Model):
 
     iteration_ids = fields.One2many('ai.debug.iteration', 'trace_id', string='Iterations')
 
+    # Computed display fields
+    duration_human = fields.Char(string='Duration', compute='_compute_duration_human')
+
+    @api.depends('total_duration_ms')
+    def _compute_duration_human(self):
+        for record in self:
+            ms = record.total_duration_ms or 0
+            if ms < 1000:
+                record.duration_human = f'{ms}ms'
+            elif ms < 60000:
+                record.duration_human = f'{ms / 1000:.1f}s'
+            else:
+                minutes = ms // 60000
+                seconds = (ms % 60000) // 1000
+                record.duration_human = f'{minutes}m {seconds}s'
+
     @api.autovacuum
     def _gc_ai_debug_traces(self):
-        retention_days = int(
-            self.env["ir.config_parameter"].sudo().get_param("ai_debugger.retention_days", "7")
+        retention_days = (
+            self.env["ir.config_parameter"].sudo().get_int("ai_debugger.retention_days", 7)
         )
         cutoff = fields.Datetime.subtract(fields.Datetime.now(), days=retention_days)
         self.search([('create_date', '<=', cutoff)]).unlink()
