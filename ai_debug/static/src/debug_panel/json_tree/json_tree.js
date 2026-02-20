@@ -1,6 +1,6 @@
 /** @odoo-module **/
 
-import { Component, useState } from "@odoo/owl";
+import { Component, onWillUpdateProps, useState } from "@odoo/owl";
 
 /**
  * JsonTree — Recursive collapsible JSON tree renderer.
@@ -25,6 +25,8 @@ export class JsonTree extends Component {
         depth: { type: Number, optional: true },
         maxDepth: { type: Number, optional: true },
         label: { type: String, optional: true },
+        forceCollapsed: { type: Boolean, optional: true },
+        forceVersion: { type: Number, optional: true },
     };
 
     static defaultProps = {
@@ -35,7 +37,20 @@ export class JsonTree extends Component {
     setup() {
         const depth = this.props.depth ?? 0;
         const maxDepth = this.props.maxDepth ?? 2;
-        this.state = useState({ collapsed: depth >= maxDepth });
+        this.state = useState({
+            collapsed: depth >= maxDepth,
+            childForceCollapsed: undefined,
+            childForceVersion: 0,
+        });
+        onWillUpdateProps((nextProps) => {
+            if (nextProps.forceVersion !== undefined
+                && nextProps.forceVersion !== this.props.forceVersion) {
+                this.state.collapsed = nextProps.forceCollapsed;
+                // Propagate to own children by bumping child version
+                this.state.childForceCollapsed = nextProps.forceCollapsed;
+                this.state.childForceVersion++;
+            }
+        });
     }
 
     get isObject() {
@@ -95,8 +110,13 @@ export class JsonTree extends Component {
         return String(v);
     }
 
-    toggle() {
+    toggle(ev) {
         this.state.collapsed = !this.state.collapsed;
+        if (ev && (ev.ctrlKey || ev.metaKey)) {
+            // Recursive: force all descendants to match this node's new state
+            this.state.childForceCollapsed = this.state.collapsed;
+            this.state.childForceVersion++;
+        }
     }
 
     async copyToClipboard() {
