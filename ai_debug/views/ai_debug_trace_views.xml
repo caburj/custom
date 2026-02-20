@@ -27,6 +27,11 @@
         <field name="model">ai.debug.trace</field>
         <field name="arch" type="xml">
             <form>
+                <header>
+                    <button name="action_open_live_panel" type="object"
+                            string="Open Live Panel" class="oe_highlight"
+                            icon="fa-television"/>
+                </header>
                 <sheet>
                     <group>
                         <group>
@@ -84,11 +89,9 @@
                 <filter string="Errors" name="errors" domain="[('state', '=', 'error')]"/>
                 <filter string="Today" name="today" domain="[('create_date', '&gt;=', (context_today() - relativedelta(days=0)).strftime('%Y-%m-%d'))]"/>
                 <separator/>
-                <group expand="0" string="Group By">
-                    <filter string="Agent" name="group_by_agent" context="{'group_by': 'agent_id'}"/>
-                    <filter string="Model" name="group_by_model" context="{'group_by': 'llm_model'}"/>
-                    <filter string="State" name="group_by_state" context="{'group_by': 'state'}"/>
-                </group>
+                <filter string="Agent" name="group_by_agent" context="{'group_by': 'agent_id'}"/>
+                <filter string="Model" name="group_by_model" context="{'group_by': 'llm_model'}"/>
+                <filter string="State" name="group_by_state" context="{'group_by': 'state'}"/>
             </search>
         </field>
     </record>

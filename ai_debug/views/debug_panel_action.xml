@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Client action for the AI Debug Live Panel.
+         The `tag` must match the registry key used in the JS frontend:
+           registry.category("actions").add("ai_debug.debug_panel", DebugPanel)
+         The `path` enables the URL /odoo/ai-debug which action_open_live_panel points to. -->
+    <record id="action_ai_debug_panel" model="ir.actions.client">
+        <field name="name">AI Debug Panel</field>
+        <field name="tag">ai_debug.debug_panel</field>
+        <field name="path">ai-debug</field>
+    </record>
+
+</odoo>
