@@ -61,9 +61,11 @@
                                 </list>
                             </field>
                         </page>
-                        <page string="System Prompt &amp; RAG" name="system_prompt">
+                        <page string="System Prompt, RAG &amp; Tools" name="system_prompt">
                             <field name="instructions" readonly="1"/>
                             <field name="rag_context" readonly="1"/>
+                            <separator string="Tools Definition"/>
+                            <field name="tools_definition" readonly="1" widget="json"/>
                         </page>
                         <page string="Error Details" name="error_details"
                             invisible="state != 'error'">
