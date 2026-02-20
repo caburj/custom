@@ -9,22 +9,22 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Data Capture
 
-- [ ] **CAPT-01**: Module captures one `ai.debug.trace` record per agentic loop run with agent, model, total duration, iteration count, and termination state
-- [ ] **CAPT-02**: Module captures one `ai.debug.iteration` record per LLM call within a loop with full messages sent, raw response, and timing
-- [ ] **CAPT-03**: Module captures one `ai.debug.tool.call` record per tool execution with name, args, result, success, and timing
-- [ ] **CAPT-04**: Each iteration record stores the exact messages array sent to the LLM provider
-- [ ] **CAPT-05**: Each iteration record stores the raw provider response JSON verbatim
-- [ ] **CAPT-06**: Each trace records why the loop terminated (final message, max iterations, or confirmation pause)
-- [ ] **CAPT-07**: Duration in milliseconds is captured at trace, iteration, and tool call levels
+- [x] **CAPT-01**: Module captures one `ai.debug.trace` record per agentic loop run with agent, model, total duration, iteration count, and termination state
+- [x] **CAPT-02**: Module captures one `ai.debug.iteration` record per LLM call within a loop with full messages sent, raw response, and timing
+- [x] **CAPT-03**: Module captures one `ai.debug.tool.call` record per tool execution with name, args, result, success, and timing
+- [x] **CAPT-04**: Each iteration record stores the exact messages array sent to the LLM provider
+- [x] **CAPT-05**: Each iteration record stores the raw provider response JSON verbatim
+- [x] **CAPT-06**: Each trace records why the loop terminated (final message, max iterations, or confirmation pause)
+- [x] **CAPT-07**: Duration in milliseconds is captured at trace, iteration, and tool call levels
 - [ ] **CAPT-08**: Exceptions during the loop are captured with `state = 'error'` and the exception message stored
 - [ ] **CAPT-09**: Each trace captures the full system prompt and RAG context injected at `_generate_next_response()` level
-- [ ] **CAPT-10**: Tool calls that trigger user confirmation are flagged with the confirmation message stored
-- [ ] **CAPT-11**: Each iteration records `tools_context['state']` snapshots before and after tool execution
+- [x] **CAPT-10**: Tool calls that trigger user confirmation are flagged with the confirmation message stored
+- [x] **CAPT-11**: Each iteration records `tools_context['state']` snapshots before and after tool execution
 
 ### Configuration
 
 - [ ] **CONF-01**: `ir.config_parameter` master switch (`ai_debugger.enabled`) checked before any capture fires
-- [ ] **CONF-02**: Scheduled action auto-deletes traces older than configurable retention period (default 7 days)
+- [x] **CONF-02**: Scheduled action auto-deletes traces older than configurable retention period (default 7 days)
 
 ### Backend Views
 
@@ -68,19 +68,19 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CAPT-01 | Phase 1 | Pending |
-| CAPT-02 | Phase 1 | Pending |
-| CAPT-03 | Phase 1 | Pending |
-| CAPT-04 | Phase 1 | Pending |
-| CAPT-05 | Phase 1 | Pending |
-| CAPT-06 | Phase 1 | Pending |
-| CAPT-07 | Phase 1 | Pending |
+| CAPT-01 | Phase 1 | Complete |
+| CAPT-02 | Phase 1 | Complete |
+| CAPT-03 | Phase 1 | Complete |
+| CAPT-04 | Phase 1 | Complete |
+| CAPT-05 | Phase 1 | Complete |
+| CAPT-06 | Phase 1 | Complete |
+| CAPT-07 | Phase 1 | Complete |
 | CAPT-08 | Phase 1 | Pending |
 | CAPT-09 | Phase 1 | Pending |
-| CAPT-10 | Phase 1 | Pending |
-| CAPT-11 | Phase 1 | Pending |
+| CAPT-10 | Phase 1 | Complete |
+| CAPT-11 | Phase 1 | Complete |
 | CONF-01 | Phase 1 | Pending |
-| CONF-02 | Phase 1 | Pending |
+| CONF-02 | Phase 1 | Complete |
 | VIEW-01 | Phase 2 | Pending |
 | VIEW-02 | Phase 2 | Pending |
 | VIEW-03 | Phase 2 | Pending |
