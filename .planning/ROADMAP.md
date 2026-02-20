@@ -1,0 +1,73 @@
+# Roadmap: AI Debugger
+
+## Overview
+
+Build a custom Odoo module that instruments the enterprise `ai` module's agentic loop in three layers: first the persistent data models and generator override that capture every loop event (the root dependency), then the standard Odoo backend views that make captured data immediately queryable, and finally the real-time OWL debug panel that shows the loop running live via `bus.bus`. Each phase is independently verifiable and unblocks the next.
+
+## Phases
+
+**Phase Numbering:**
+- Integer phases (1, 2, 3): Planned milestone work
+- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+
+Decimal phases appear between their surrounding integers in numeric order.
+
+- [ ] **Phase 1: Data Models and Instrumentation** - Persistent trace models + generator yield passthrough that captures every loop event
+- [ ] **Phase 2: Backend Views** - Searchable, filterable history of all debug traces in the Odoo backend
+- [ ] **Phase 3: Live Panel and Polish** - Real-time OWL panel via bus.bus plus JSON tree viewer and state diff
+
+## Phase Details
+
+### Phase 1: Data Models and Instrumentation
+**Goal**: Every agentic loop run produces a queryable trace with full iteration and tool call detail
+**Depends on**: Nothing (first phase)
+**Requirements**: CAPT-01, CAPT-02, CAPT-03, CAPT-04, CAPT-05, CAPT-06, CAPT-07, CAPT-08, CAPT-09, CAPT-10, CAPT-11, CONF-01, CONF-02
+**Success Criteria** (what must be TRUE):
+  1. Running an agentic loop with the module installed creates one `ai.debug.trace`, one `ai.debug.iteration` per LLM call, and one `ai.debug.tool.call` per tool execution — verifiable via Odoo shell ORM queries
+  2. Each iteration record contains the full messages array sent and the raw provider response JSON verbatim
+  3. A trace record shows why the loop terminated (final message / max iterations / confirmation pause) and carries ms-level timing at trace, iteration, and tool call levels
+  4. An exception during the loop sets `state = 'error'` and stores the message; the loop's streaming behavior is completely unchanged (confirmation flow still works)
+  5. The `ai_debugger.enabled` config param gates all capture; disabling it produces no records and no performance impact
+**Plans**: TBD
+
+Plans:
+- [ ] 01-01: Define `ai.debug.trace`, `ai.debug.iteration`, `ai.debug.tool.call` models with all fields, security CSV, and module scaffold
+- [ ] 01-02: Implement `AiSessionDebug` (`_inherit = 'ai.session'`) generator yield passthrough for `_run_agentic_loop` and `_handle_tool_calls`; add `_generate_next_response` hook for system prompt + RAG capture; wire config param and `@api.autovacuum` retention
+
+### Phase 2: Backend Views
+**Goal**: Captured traces are browsable and filterable in the Odoo backend without touching any code
+**Depends on**: Phase 1
+**Requirements**: VIEW-01, VIEW-02, VIEW-03, VIEW-04
+**Success Criteria** (what must be TRUE):
+  1. A developer can open the Odoo backend, navigate to the AI Debugger menu, and see a list of all trace records with agent, model, date, iteration count, and status columns
+  2. Clicking a trace opens a form view with all iterations nested, and each iteration opens to show its tool calls
+  3. The trace list is filterable by agent, model, date range, and error state using standard Odoo search filters
+**Plans**: TBD
+
+Plans:
+- [ ] 02-01: Write XML views (list + form) for `ai.debug.trace`, `ai.debug.iteration`, `ai.debug.tool.call`; add menu items, search filters, and ir.model.access entries
+
+### Phase 3: Live Panel and Polish
+**Goal**: A developer can watch the agentic loop execute in real time in a separate browser tab and inspect messages and state changes inline
+**Depends on**: Phase 2
+**Requirements**: LIVE-01, LIVE-02, LIVE-03
+**Success Criteria** (what must be TRUE):
+  1. Opening the debug panel URL in a browser tab and then triggering an agentic loop shows iterations and tool calls appearing in the panel as the backend yields them — no page refresh required
+  2. The panel shows a diff of what changed in `tools_context['state']` between each iteration
+  3. Messages, raw provider responses, and state data are rendered as a collapsible JSON tree — large payloads can be expanded or collapsed inline
+**Plans**: TBD
+
+Plans:
+- [ ] 03-01: Implement `IrWebsocket` override for per-trace bus channel with UUID naming and access check; add backend bus send via postcommit with separate cursor
+- [ ] 03-02: Build `DebugPanel` OWL `ir.actions.client` component with bus subscription, iteration/tool call rendering, lifecycle cleanup, JSON tree renderer, and state diff viewer
+
+## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 1 → 2 → 3
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. Data Models and Instrumentation | 0/2 | Not started | - |
+| 2. Backend Views | 0/1 | Not started | - |
+| 3. Live Panel and Polish | 0/2 | Not started | - |
