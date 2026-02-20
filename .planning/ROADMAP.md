@@ -12,7 +12,7 @@ Build a custom Odoo module that instruments the enterprise `ai` module's agentic
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Data Models and Instrumentation** - Persistent trace models + generator yield passthrough that captures every loop event
+- [x] **Phase 1: Data Models and Instrumentation** - Persistent trace models + generator yield passthrough that captures every loop event
 - [ ] **Phase 2: Backend Views** - Searchable, filterable history of all debug traces in the Odoo backend
 - [ ] **Phase 3: Live Panel and Polish** - Real-time OWL panel via bus.bus plus JSON tree viewer and state diff
 
@@ -31,8 +31,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 2 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Module scaffold, data models (trace/iteration/tool_call), security CSV, autovacuum
-- [ ] 01-02-PLAN.md — Generator yield passthrough for _run_agentic_loop, _handle_tool_calls, _generate_next_response; config param gating
+- [x] 01-01-PLAN.md — Module scaffold, data models (trace/iteration/tool_call), security CSV, autovacuum
+- [x] 01-02-PLAN.md — Generator yield passthrough for _run_agentic_loop, _handle_tool_calls, _generate_next_response; config param gating
 
 ### Phase 2: Backend Views
 **Goal**: Captured traces are browsable and filterable in the Odoo backend without touching any code
@@ -68,6 +68,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Data Models and Instrumentation | 1/2 | In Progress|  |
+| 1. Data Models and Instrumentation | 2/2 | Complete | 2026-02-20 |
 | 2. Backend Views | 0/1 | Not started | - |
 | 3. Live Panel and Polish | 0/2 | Not started | - |
