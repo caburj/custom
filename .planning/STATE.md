@@ -11,7 +11,7 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 
 Milestone: v1.0 AI Debugger MVP — SHIPPED 2026-02-20
 Status: Complete
-Last activity: 2026-02-20 - Completed quick task 2: Add system prompt and tools definitions to ai_debug trace data
+Last activity: 2026-02-20 - Completed quick task 3: Ctrl/Cmd+click recursive expand/collapse on JsonTree nodes
 
 Progress: [██████████] 100%
 
