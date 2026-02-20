@@ -38,6 +38,8 @@ export class DebugPanel extends Component {
             connectionStatus: "connecting",
             traceInfo: null,
             errorMsg: null,
+            traceDetailExpanded: false,
+            traceDetailLoading: false,
         });
 
         this.scrollRef = useRef("timeline");
@@ -54,6 +56,7 @@ export class DebugPanel extends Component {
         this.toggleIteration = this.toggleIteration.bind(this);
         this.toggleToolCall = this.toggleToolCall.bind(this);
         this.setActiveTab = this.setActiveTab.bind(this);
+        this.toggleTraceDetail = this.toggleTraceDetail.bind(this);
 
         onMounted(async () => {
             // Hide Odoo web client chrome (navbar, chat widget) for standalone feel.
@@ -127,6 +130,8 @@ export class DebugPanel extends Component {
         this.state.traceInfo = traceInfo;
         this.state.iterations.splice(0);
         this.state.errorMsg = null;
+        this.state.traceDetailExpanded = false;
+        this.state.traceDetailLoading = false;
 
         // Subscribe to the trace-specific channel — must happen ASAP.
         this.busService.addChannel(`ai_debug:trace:${busChannel}`);
@@ -144,7 +149,7 @@ export class DebugPanel extends Component {
             const [traceRecord] = await this.orm.read(
                 "ai.debug.trace",
                 [traceId],
-                ["bus_channel", "state", "llm_model", "agent_id", "iteration_count"],
+                ["bus_channel", "state", "llm_model", "agent_id", "iteration_count", "instructions", "rag_context", "tools_definition"],
             );
 
             if (!traceRecord) {
@@ -334,6 +339,34 @@ export class DebugPanel extends Component {
     // -------------------------------------------------------------------------
     // Expand/collapse with lazy detail fetch
     // -------------------------------------------------------------------------
+
+    async toggleTraceDetail() {
+        this.state.traceDetailExpanded = !this.state.traceDetailExpanded;
+        // Lazy-load if expanding and traceInfo lacks these fields (live mode).
+        if (
+            this.state.traceDetailExpanded &&
+            this.state.traceId &&
+            this.state.traceInfo &&
+            !("instructions" in this.state.traceInfo) &&
+            !this.state.traceDetailLoading
+        ) {
+            this.state.traceDetailLoading = true;
+            try {
+                const [detail] = await this.orm.read(
+                    "ai.debug.trace",
+                    [this.state.traceId],
+                    ["instructions", "rag_context", "tools_definition"],
+                );
+                if (detail) {
+                    Object.assign(this.state.traceInfo, detail);
+                }
+            } catch {
+                // Non-fatal — section just shows empty.
+            } finally {
+                this.state.traceDetailLoading = false;
+            }
+        }
+    }
 
     async toggleIteration(iterationIdx) {
         const iteration = this.state.iterations[iterationIdx];
