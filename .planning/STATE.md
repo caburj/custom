@@ -11,7 +11,7 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 
 Milestone: v1.0 AI Debugger MVP — SHIPPED 2026-02-20
 Status: Complete
-Last activity: 2026-02-20 - Completed quick task 5: Fix broken Ctrl/Cmd+click recursive expand/collapse on JsonTree nodes
+Last activity: 2026-02-20 - Completed quick task 6: Split debug panel into left trace context + right timeline two-column layout
 
 Progress: [██████████] 100%
 
@@ -53,9 +53,10 @@ None — v1.0 shipped.
 | 3 | Ctrl/Cmd+click recursive expand/collapse on JsonTree nodes | 2026-02-20 | da8c6c8 | [3-ctrl-cmd-click-on-folded-json-tree-node-](./quick/3-ctrl-cmd-click-on-folded-json-tree-node-/) |
 | 4 | Show system prompt, RAG context, and tools in debug panel | 2026-02-20 | 71a219c | [4-show-system-prompt-rag-context-and-tools](./quick/4-show-system-prompt-rag-context-and-tools/) |
 | 5 | Fix broken Ctrl/Cmd+click recursive expand/collapse on JsonTree nodes | 2026-02-20 | 8a78338 | [5-fix-broken-ctrl-cmd-click-recursive-expa](./quick/5-fix-broken-ctrl-cmd-click-recursive-expa/) |
+| 6 | Split debug panel into left trace context + right timeline two-column layout | 2026-02-20 | eacf82a | [6-split-debug-panel-into-left-trace-contex](./quick/6-split-debug-panel-into-left-trace-contex/) |
 
 ## Session Continuity
 
 Last session: 2026-02-20
-Stopped at: Completed quick task 5 — Fix mount-aware force propagation in JsonTree for Ctrl+click recursive expand
+Stopped at: Completed quick task 6 — Two-column debug panel layout with permanent left trace context panel
 Resume file: None
