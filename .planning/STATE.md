@@ -11,7 +11,7 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 
 Milestone: v1.0 AI Debugger MVP — SHIPPED 2026-02-20
 Status: Complete
-Last activity: 2026-02-20 - Completed quick task 4: Show system prompt, RAG context, and tools in debug panel
+Last activity: 2026-02-20 - Completed quick task 5: Fix broken Ctrl/Cmd+click recursive expand/collapse on JsonTree nodes
 
 Progress: [██████████] 100%
 
@@ -52,9 +52,10 @@ None — v1.0 shipped.
 | 2 | Add system prompt and tools definitions to ai_debug trace data | 2026-02-20 | 0fffaf8 | [2-add-system-prompt-and-tools-definitions-](./quick/2-add-system-prompt-and-tools-definitions-/) |
 | 3 | Ctrl/Cmd+click recursive expand/collapse on JsonTree nodes | 2026-02-20 | da8c6c8 | [3-ctrl-cmd-click-on-folded-json-tree-node-](./quick/3-ctrl-cmd-click-on-folded-json-tree-node-/) |
 | 4 | Show system prompt, RAG context, and tools in debug panel | 2026-02-20 | 71a219c | [4-show-system-prompt-rag-context-and-tools](./quick/4-show-system-prompt-rag-context-and-tools/) |
+| 5 | Fix broken Ctrl/Cmd+click recursive expand/collapse on JsonTree nodes | 2026-02-20 | 8a78338 | [5-fix-broken-ctrl-cmd-click-recursive-expa](./quick/5-fix-broken-ctrl-cmd-click-recursive-expa/) |
 
 ## Session Continuity
 
 Last session: 2026-02-20
-Stopped at: Completed quick task 4 — Trace Context section (system prompt, RAG, tools) in debug panel
+Stopped at: Completed quick task 5 — Fix mount-aware force propagation in JsonTree for Ctrl+click recursive expand
 Resume file: None
