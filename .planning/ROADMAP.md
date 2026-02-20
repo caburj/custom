@@ -13,7 +13,7 @@ Build a custom Odoo module that instruments the enterprise `ai` module's agentic
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Data Models and Instrumentation** - Persistent trace models + generator yield passthrough that captures every loop event
-- [ ] **Phase 2: Backend Views** - Searchable, filterable history of all debug traces in the Odoo backend
+- [x] **Phase 2: Backend Views** - Searchable, filterable history of all debug traces in the Odoo backend
 - [ ] **Phase 3: Live Panel and Polish** - Real-time OWL panel via bus.bus plus JSON tree viewer and state diff
 
 ## Phase Details
@@ -45,7 +45,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 02-01-PLAN.md — Computed display fields (duration_human, JSON pretty-print) + XML views (list/form/search) for all 3 models + menus under Settings > Technical > AI Debug + manifest update
+- [x] 02-01-PLAN.md — Computed display fields (duration_human, JSON pretty-print) + XML views (list/form/search) for all 3 models + menus under Settings > Technical > AI Debug + manifest update
 
 ### Phase 3: Live Panel and Polish
 **Goal**: A developer can watch the agentic loop execute in real time in a separate browser tab and inspect messages and state changes inline
@@ -69,5 +69,5 @@ Phases execute in numeric order: 1 → 2 → 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Data Models and Instrumentation | 2/2 | Complete | 2026-02-20 |
-| 2. Backend Views | 0/1 | Not started | - |
+| 2. Backend Views | 1/1 | Complete | 2026-02-20 |
 | 3. Live Panel and Polish | 0/2 | Not started | - |

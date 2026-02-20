@@ -28,10 +28,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Backend Views
 
-- [ ] **VIEW-01**: Backend list and form views for `ai.debug.trace` with search/filter
-- [ ] **VIEW-02**: Backend list and form views for `ai.debug.iteration` accessible from trace
-- [ ] **VIEW-03**: Backend list and form views for `ai.debug.tool.call` accessible from iteration
-- [ ] **VIEW-04**: Traces filterable by agent, model, date range, and error state
+- [x] **VIEW-01**: Backend list and form views for `ai.debug.trace` with search/filter
+- [x] **VIEW-02**: Backend list and form views for `ai.debug.iteration` accessible from trace
+- [x] **VIEW-03**: Backend list and form views for `ai.debug.tool.call` accessible from iteration
+- [x] **VIEW-04**: Traces filterable by agent, model, date range, and error state
 
 ### Live UI
 
@@ -81,10 +81,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CAPT-11 | Phase 1 | Complete |
 | CONF-01 | Phase 1 | Complete |
 | CONF-02 | Phase 1 | Complete |
-| VIEW-01 | Phase 2 | Pending |
-| VIEW-02 | Phase 2 | Pending |
-| VIEW-03 | Phase 2 | Pending |
-| VIEW-04 | Phase 2 | Pending |
+| VIEW-01 | Phase 2 | Complete |
+| VIEW-02 | Phase 2 | Complete |
+| VIEW-03 | Phase 2 | Complete |
+| VIEW-04 | Phase 2 | Complete |
 | LIVE-01 | Phase 3 | Pending |
 | LIVE-02 | Phase 3 | Pending |
 | LIVE-03 | Phase 3 | Pending |
@@ -96,4 +96,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-02-20*
-*Last updated: 2026-02-20 after roadmap creation*
+*Last updated: 2026-02-20 after 02-01 completion (VIEW-01 through VIEW-04 complete)*
