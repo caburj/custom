@@ -1,0 +1,287 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+  <t t-name="ai_debug.DebugPanel">
+    <div class="o_ai_debug_panel">
+
+      <!-- ===== HEADER ===== -->
+      <div class="ai-debug-header">
+        <div class="ai-debug-header-title">
+          <span class="ai-debug-header-icon"><i class="fa fa-bug"/></span>
+          <span class="ai-debug-header-label">AI Debug Panel</span>
+          <t t-if="state.traceId">
+            <span class="ai-debug-header-trace-id">Trace #<t t-esc="state.traceId"/></span>
+          </t>
+        </div>
+
+        <div class="ai-debug-header-meta">
+          <t t-if="state.traceInfo">
+            <t t-if="state.traceInfo.llm_model">
+              <span class="ai-debug-meta-item">
+                <i class="fa fa-microchip"/> <t t-esc="state.traceInfo.llm_model"/>
+              </span>
+            </t>
+            <t t-if="state.traceInfo.agent_id">
+              <span class="ai-debug-meta-item">
+                <i class="fa fa-user"/> <t t-esc="state.traceInfo.agent_id[1]"/>
+              </span>
+            </t>
+            <span class="ai-debug-meta-item">
+              <i class="fa fa-refresh"/>
+              <t t-esc="(state.traceInfo.iteration_count || state.iterations.length) + ' iterations'"/>
+            </span>
+          </t>
+        </div>
+
+        <div class="ai-debug-header-status">
+          <!-- Trace status badge -->
+          <span t-att-class="'ai-debug-trace-status ai-debug-trace-status-' + state.traceStatus">
+            <t t-if="state.traceStatus === 'running'">
+              <i class="fa fa-circle-o-notch fa-spin"/>
+            </t>
+            <t t-elif="state.traceStatus === 'done'">
+              <i class="fa fa-check-circle"/>
+            </t>
+            <t t-elif="state.traceStatus === 'error'">
+              <i class="fa fa-exclamation-circle"/>
+            </t>
+            <t t-elif="state.traceStatus === 'paused'">
+              <i class="fa fa-pause-circle"/>
+            </t>
+            <t t-else="">
+              <i class="fa fa-clock-o"/>
+            </t>
+            <span t-esc="traceStatusLabel"/>
+          </span>
+
+          <!-- Connection status badge -->
+          <span t-att-class="'ai-debug-connection-badge ai-debug-conn-' + state.connectionStatus">
+            <span class="ai-debug-conn-dot"/>
+            <span t-esc="connectionLabel"/>
+          </span>
+        </div>
+      </div>
+
+      <!-- ===== ERROR STATE ===== -->
+      <t t-if="state.errorMsg">
+        <div class="ai-debug-error-state">
+          <i class="fa fa-exclamation-triangle"/>
+          <span t-esc="state.errorMsg"/>
+        </div>
+      </t>
+
+      <!-- ===== TIMELINE ===== -->
+      <div class="ai-debug-timeline" t-ref="timeline">
+
+        <!-- Empty / waiting state -->
+        <t t-if="state.iterations.length === 0 and state.traceStatus === 'waiting' and !state.errorMsg">
+          <div class="ai-debug-waiting">
+            <i class="fa fa-circle-o-notch fa-spin ai-debug-waiting-icon"/>
+            <p class="ai-debug-waiting-text">Waiting for agentic loop...</p>
+            <p class="ai-debug-waiting-hint">Trigger an AI interaction to see iterations stream in real time.</p>
+          </div>
+        </t>
+
+        <!-- Iteration nodes -->
+        <t t-if="state.iterations.length > 0">
+          <div class="ai-debug-rail-container">
+            <t t-foreach="state.iterations" t-as="iteration" t-key="iteration.id">
+              <div t-att-class="'ai-debug-iteration-node' + (iteration_last and isActivelyRunning ? ' ai-debug-iteration-active' : '')">
+
+                <!-- Iteration header (always visible) -->
+                <div
+                  class="ai-debug-iteration-header"
+                  t-on-click="() => toggleIteration(iteration_index)"
+                >
+                  <!-- Rail dot -->
+                  <div class="ai-debug-rail-dot">
+                    <t t-if="iteration_last and isActivelyRunning">
+                      <div class="ai-debug-dot ai-debug-dot-pulse"/>
+                    </t>
+                    <t t-else="">
+                      <div class="ai-debug-dot"/>
+                    </t>
+                  </div>
+
+                  <!-- Summary info -->
+                  <div class="ai-debug-iteration-summary">
+                    <span class="ai-debug-iteration-index">#<t t-esc="iteration.index + 1"/></span>
+                    <t t-if="iteration.duration_ms">
+                      <span class="ai-debug-iteration-duration" t-esc="formatDuration(iteration.duration_ms)"/>
+                    </t>
+                    <t t-if="iteration.toolCalls.length > 0 or iteration.tool_call_count > 0">
+                      <span class="ai-debug-iteration-tools">
+                        <i class="fa fa-wrench"/>
+                        <t t-esc="iteration.toolCalls.length || iteration.tool_call_count"/>
+                      </span>
+                    </t>
+                  </div>
+
+                  <!-- Expand/collapse caret -->
+                  <div class="ai-debug-iteration-caret">
+                    <i t-att-class="iteration.expanded ? 'fa fa-chevron-down' : 'fa fa-chevron-right'"/>
+                  </div>
+                </div>
+
+                <!-- Tool calls nested under iteration (always visible when present) -->
+                <t t-if="iteration.toolCalls.length > 0">
+                  <div class="ai-debug-tool-calls">
+                    <t t-foreach="iteration.toolCalls" t-as="toolCall" t-key="toolCall.id">
+                      <div class="ai-debug-tool-call-node">
+                        <!-- Tool call header -->
+                        <div
+                          class="ai-debug-tool-call-header"
+                          t-on-click="() => toggleToolCall(iteration_index, toolCall_index)"
+                        >
+                          <div class="ai-debug-tool-dot">
+                            <t t-if="toolCall.success === false">
+                              <i class="fa fa-times-circle ai-debug-tool-fail"/>
+                            </t>
+                            <t t-else="">
+                              <i class="fa fa-check-circle ai-debug-tool-ok"/>
+                            </t>
+                          </div>
+                          <span class="ai-debug-tool-name" t-esc="toolCall.name"/>
+                          <t t-if="toolCall.duration_ms">
+                            <span class="ai-debug-tool-duration" t-esc="formatDuration(toolCall.duration_ms)"/>
+                          </t>
+                          <i t-att-class="toolCall.expanded ? 'fa fa-chevron-down' : 'fa fa-chevron-right'"/>
+                        </div>
+
+                        <!-- Tool call detail (expanded) -->
+                        <t t-if="toolCall.expanded">
+                          <div class="ai-debug-tool-call-detail">
+                            <t t-if="toolCall.loading">
+                              <div class="ai-debug-loading"><i class="fa fa-spinner fa-spin"/> Loading...</div>
+                            </t>
+                            <t t-elif="toolCall.detail">
+                              <t t-if="toolCall.detail._error">
+                                <div class="ai-debug-error" t-esc="toolCall.detail._error"/>
+                              </t>
+                              <t t-else="">
+                                <div class="ai-debug-tool-section">
+                                  <div class="ai-debug-section-label">Arguments</div>
+                                  <JsonTree value="toolCall.detail.args" maxDepth="3"/>
+                                </div>
+                                <t t-if="toolCall.detail.result">
+                                  <div class="ai-debug-tool-section">
+                                    <div class="ai-debug-section-label">Result</div>
+                                    <pre class="ai-debug-tool-result" t-esc="toolCall.detail.result"/>
+                                  </div>
+                                </t>
+                                <t t-if="toolCall.detail.state_before or toolCall.detail.state_after">
+                                  <div class="ai-debug-tool-section">
+                                    <div class="ai-debug-section-label">State Diff</div>
+                                    <StateDiff
+                                      stateBefore="toolCall.detail.state_before"
+                                      stateAfter="toolCall.detail.state_after"
+                                    />
+                                  </div>
+                                </t>
+                                <t t-if="toolCall.detail.triggered_confirmation">
+                                  <div class="ai-debug-tool-section ai-debug-confirmation-info">
+                                    <i class="fa fa-shield"/> Confirmation required:
+                                    <span t-esc="toolCall.detail.confirmation_message"/>
+                                  </div>
+                                </t>
+                              </t>
+                            </t>
+                          </div>
+                        </t>
+                      </div>
+                    </t>
+                  </div>
+                </t>
+
+                <!-- Iteration detail tabs (expanded) -->
+                <t t-if="iteration.expanded">
+                  <div class="ai-debug-iteration-detail">
+                    <t t-if="iteration.loading">
+                      <div class="ai-debug-loading"><i class="fa fa-spinner fa-spin"/> Loading iteration data...</div>
+                    </t>
+                    <t t-elif="iteration.detail">
+                      <t t-if="iteration.detail._error">
+                        <div class="ai-debug-error" t-esc="iteration.detail._error"/>
+                      </t>
+                      <t t-else="">
+                        <!-- Tab bar -->
+                        <div class="ai-debug-tabs">
+                          <button
+                            type="button"
+                            t-att-class="'ai-debug-tab' + (iteration.activeTab === 'messages' ? ' ai-debug-tab-active' : '')"
+                            t-on-click.stop="() => setActiveTab(iteration_index, 'messages')"
+                          >Messages</button>
+                          <button
+                            type="button"
+                            t-att-class="'ai-debug-tab' + (iteration.activeTab === 'response' ? ' ai-debug-tab-active' : '')"
+                            t-on-click.stop="() => setActiveTab(iteration_index, 'response')"
+                          >Response</button>
+                          <button
+                            type="button"
+                            t-att-class="'ai-debug-tab' + (iteration.activeTab === 'state' ? ' ai-debug-tab-active' : '')"
+                            t-on-click.stop="() => setActiveTab(iteration_index, 'state')"
+                          >State Diff</button>
+                          <t t-if="iteration.detail.final_message">
+                            <button
+                              type="button"
+                              t-att-class="'ai-debug-tab' + (iteration.activeTab === 'final' ? ' ai-debug-tab-active' : '')"
+                              t-on-click.stop="() => setActiveTab(iteration_index, 'final')"
+                            >Final</button>
+                          </t>
+                        </div>
+
+                        <!-- Tab content -->
+                        <div class="ai-debug-tab-content">
+                          <t t-if="iteration.activeTab === 'messages'">
+                            <JsonTree value="iteration.detail.messages_sent" maxDepth="2"/>
+                          </t>
+                          <t t-elif="iteration.activeTab === 'response'">
+                            <JsonTree value="iteration.detail.raw_response" maxDepth="2"/>
+                          </t>
+                          <t t-elif="iteration.activeTab === 'state'">
+                            <t t-if="iteration.detail.state_before != null or iteration.detail.state_after != null">
+                              <StateDiff
+                                stateBefore="iteration.detail.state_before"
+                                stateAfter="iteration.detail.state_after"
+                              />
+                            </t>
+                            <t t-else="">
+                              <div class="ai-debug-empty-state">No state data for this iteration.</div>
+                            </t>
+                          </t>
+                          <t t-elif="iteration.activeTab === 'final' and iteration.detail.final_message">
+                            <JsonTree value="iteration.detail.final_message" maxDepth="2"/>
+                          </t>
+                        </div>
+                      </t>
+                    </t>
+                  </div>
+                </t>
+
+              </div>
+            </t>
+          </div>
+        </t>
+
+        <!-- Done / error state shown below timeline -->
+        <t t-if="state.traceStatus !== 'waiting' and state.traceStatus !== 'running'">
+          <div t-att-class="'ai-debug-terminal-state ai-debug-terminal-' + state.traceStatus">
+            <t t-if="state.traceStatus === 'done'">
+              <i class="fa fa-check-circle"/> Loop complete
+            </t>
+            <t t-elif="state.traceStatus === 'error'">
+              <i class="fa fa-exclamation-circle"/> Loop error
+            </t>
+            <t t-elif="state.traceStatus === 'paused'">
+              <i class="fa fa-pause-circle"/> Awaiting confirmation
+            </t>
+          </div>
+        </t>
+
+      </div>
+      <!-- END TIMELINE -->
+
+    </div>
+  </t>
+
+</templates>
