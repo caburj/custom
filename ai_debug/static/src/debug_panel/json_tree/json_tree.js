@@ -37,10 +37,11 @@ export class JsonTree extends Component {
     setup() {
         const depth = this.props.depth ?? 0;
         const maxDepth = this.props.maxDepth ?? 2;
+        const forceActive = typeof this.props.forceCollapsed === "boolean";
         this.state = useState({
-            collapsed: depth >= maxDepth,
-            childForceCollapsed: undefined,
-            childForceVersion: 0,
+            collapsed: forceActive ? this.props.forceCollapsed : depth >= maxDepth,
+            childForceCollapsed: forceActive ? this.props.forceCollapsed : undefined,
+            childForceVersion: forceActive ? 1 : 0,
         });
         onWillUpdateProps((nextProps) => {
             if (nextProps.forceVersion !== undefined
@@ -116,6 +117,9 @@ export class JsonTree extends Component {
             // Recursive: force all descendants to match this node's new state
             this.state.childForceCollapsed = this.state.collapsed;
             this.state.childForceVersion++;
+        } else {
+            // Normal click: clear force so children use depth-based defaults
+            this.state.childForceCollapsed = undefined;
         }
     }
 
