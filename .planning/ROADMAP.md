@@ -42,10 +42,10 @@ Plans:
   1. A developer can open the Odoo backend, navigate to the AI Debugger menu, and see a list of all trace records with agent, model, date, iteration count, and status columns
   2. Clicking a trace opens a form view with all iterations nested, and each iteration opens to show its tool calls
   3. The trace list is filterable by agent, model, date range, and error state using standard Odoo search filters
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 02-01: Write XML views (list + form) for `ai.debug.trace`, `ai.debug.iteration`, `ai.debug.tool.call`; add menu items, search filters, and ir.model.access entries
+- [ ] 02-01-PLAN.md — Computed display fields (duration_human, JSON pretty-print) + XML views (list/form/search) for all 3 models + menus under Settings > Technical > AI Debug + manifest update
 
 ### Phase 3: Live Panel and Polish
 **Goal**: A developer can watch the agentic loop execute in real time in a separate browser tab and inspect messages and state changes inline
