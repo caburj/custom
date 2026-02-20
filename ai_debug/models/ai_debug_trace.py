@@ -1,4 +1,5 @@
 import logging
+import uuid
 
 from odoo import api, fields, models
 
@@ -13,6 +14,15 @@ class AiDebugTrace(models.Model):
     # Agent context (may be None for _get_direct_response calls)
     agent_id = fields.Many2one('ai.agent', string='Agent', ondelete='set null', index=True)
     llm_model = fields.Char(string='LLM Model', index=True)
+
+    # Bus channel for real-time live panel streaming (UUID assigned at creation)
+    bus_channel = fields.Char(
+        string='Bus Channel',
+        default=lambda self: str(uuid.uuid4()),
+        readonly=True,
+        copy=False,
+        index=True,
+    )
 
     # System prompt + RAG (captured from _generate_next_response)
     instructions = fields.Text(string='System Instructions')
@@ -31,7 +41,7 @@ class AiDebugTrace(models.Model):
     # Timing
     start_time = fields.Datetime(string='Started', default=fields.Datetime.now)
     total_duration_ms = fields.Integer(string='Duration (ms)')
-    iteration_count = fields.Integer(string='Iterations')
+    iteration_count = fields.Integer(string='Iteration Count')
 
     iteration_ids = fields.One2many('ai.debug.iteration', 'trace_id', string='Iterations')
 
@@ -50,6 +60,15 @@ class AiDebugTrace(models.Model):
                 minutes = ms // 60000
                 seconds = (ms % 60000) // 1000
                 record.duration_human = f'{minutes}m {seconds}s'
+
+    def action_open_live_panel(self):
+        """Open the AI Debug Live Panel in a new browser tab for this trace."""
+        self.ensure_one()
+        return {
+            'type': 'ir.actions.act_url',
+            'url': f'/odoo/ai-debug?trace_id={self.id}',
+            'target': 'new',
+        }
 
     @api.autovacuum
     def _gc_ai_debug_traces(self):

@@ -31,12 +31,11 @@ class AiSessionDebug(models.TransientModel):
         Default is True so the module is active immediately on install.
         Disable by setting ir.config_parameter ai_debugger.enabled = False.
         """
-        value = (
+        return (
             self.env['ir.config_parameter']
             .sudo()
-            .get_param('ai_debugger.enabled', 'True')
+            .get_bool('ai_debugger.enabled', True)
         )
-        return value not in ('False', 'false', '0', '')
 
     # -------------------------------------------------------------------------
     # Binary stripping helper
@@ -104,7 +103,7 @@ class AiSessionDebug(models.TransientModel):
     def _debug_write_trace(self, vals):
         """Create an ai.debug.trace record using a separate cursor.
 
-        Returns the new record ID (int), or False on failure.
+        Returns a tuple (trace_id, bus_channel) on success, or (False, False) on failure.
         Failures are logged at WARNING level and never re-raised.
         """
         try:
@@ -112,15 +111,17 @@ class AiSessionDebug(models.TransientModel):
                 env = api.Environment(cr, self.env.uid, self._debug_safe_context())
                 trace = env['ai.debug.trace'].create(vals)
                 trace_id = trace.id
-            return trace_id
+                bus_channel = trace.bus_channel
+            return trace_id, bus_channel
         except Exception:
             _logger.warning('ai_debug: failed to write trace', exc_info=True)
-            return False
+            return False, False
 
     def _debug_write_iteration(self, trace_id, vals):
         """Create an ai.debug.iteration record linked to trace_id using a separate cursor.
 
         Returns the new record ID (int), or False on failure.
+        Fires a bus notification inside the cursor block so pg_notify fires on commit.
         """
         try:
             with self.env.registry.cursor() as cr:
@@ -128,6 +129,12 @@ class AiSessionDebug(models.TransientModel):
                 vals = dict(vals, trace_id=trace_id)
                 iteration = env['ai.debug.iteration'].create(vals)
                 iteration_id = iteration.id
+                self._debug_bus_send(env, 'ai_debug/iteration', {
+                    'iteration_id': iteration_id,
+                    'index': vals.get('index'),
+                    'duration_ms': vals.get('duration_ms'),
+                    'tool_call_count': 0,
+                })
             return iteration_id
         except Exception:
             _logger.warning('ai_debug: failed to write iteration (trace_id=%s)', trace_id, exc_info=True)
@@ -137,6 +144,7 @@ class AiSessionDebug(models.TransientModel):
         """Update an existing ai.debug.trace record using a separate cursor.
 
         Failures are logged at WARNING level and never re-raised.
+        Fires a bus notification inside the cursor block so pg_notify fires on commit.
         """
         if not trace_id:
             return
@@ -144,6 +152,12 @@ class AiSessionDebug(models.TransientModel):
             with self.env.registry.cursor() as cr:
                 env = api.Environment(cr, self.env.uid, self._debug_safe_context())
                 env['ai.debug.trace'].browse(trace_id).write(vals)
+                self._debug_bus_send(env, 'ai_debug/trace_update', {
+                    'trace_id': trace_id,
+                    'state': vals.get('state'),
+                    'termination_reason': vals.get('termination_reason'),
+                    'iteration_count': vals.get('iteration_count'),
+                })
         except Exception:
             _logger.warning('ai_debug: failed to update trace (trace_id=%s)', trace_id, exc_info=True)
 
@@ -151,6 +165,7 @@ class AiSessionDebug(models.TransientModel):
         """Create an ai.debug.tool.call record using a separate cursor.
 
         Returns the new record ID (int), or False on failure.
+        Fires a bus notification inside the cursor block so pg_notify fires on commit.
         """
         if not iteration_id:
             return False
@@ -160,10 +175,38 @@ class AiSessionDebug(models.TransientModel):
                 vals = dict(vals, iteration_id=iteration_id)
                 tool_call = env['ai.debug.tool.call'].create(vals)
                 tool_call_id = tool_call.id
+                self._debug_bus_send(env, 'ai_debug/tool_call', {
+                    'tool_call_id': tool_call_id,
+                    'iteration_id': iteration_id,
+                    'tool_name': vals.get('tool_name'),
+                    'duration_ms': vals.get('duration_ms'),
+                    'success': vals.get('success'),
+                })
             return tool_call_id
         except Exception:
             _logger.warning('ai_debug: failed to write tool call (iteration_id=%s)', iteration_id, exc_info=True)
             return False
+
+    # -------------------------------------------------------------------------
+    # Bus notification helper
+    # -------------------------------------------------------------------------
+
+    def _debug_bus_send(self, env, event_type, payload):
+        """Send a bus.bus notification on the trace's ai_debug channel.
+
+        Must be called inside a `with self.env.registry.cursor() as cr:` block
+        using the `env` created from that cursor.  This ensures pg_notify fires
+        when the separate cursor commits rather than waiting for the HTTP response.
+
+        Payloads must be small (summary only) — do NOT include messages_sent,
+        raw_response, state_before, or state_after.
+        """
+        bus_channel = self.env.context.get('_debug_ctx', {}).get('bus_channel')
+        if bus_channel:
+            try:
+                env['bus.bus']._sendone(f'ai_debug:trace:{bus_channel}', event_type, payload)
+            except Exception:
+                _logger.warning('ai_debug: failed to send bus notification', exc_info=True)
 
     # -------------------------------------------------------------------------
     # _run_agentic_loop override
@@ -193,7 +236,7 @@ class AiSessionDebug(models.TransientModel):
         captured_instructions = self.env.context.get('_debug_instructions') or instructions
         captured_rag = self.env.context.get('_debug_rag_context') or ''
 
-        trace_id = self._debug_write_trace({
+        trace_id, bus_channel = self._debug_write_trace({
             'llm_model': model,
             'state': 'running',
             'instructions': captured_instructions,
@@ -210,7 +253,8 @@ class AiSessionDebug(models.TransientModel):
 
         # Mutable dict passed via context so _handle_tool_calls can read the
         # current iteration_id without re-entering the context machinery.
-        debug_ctx = {'trace_id': trace_id, 'iteration_id': None}
+        # bus_channel enables _debug_bus_send to publish real-time notifications.
+        debug_ctx = {'trace_id': trace_id, 'iteration_id': None, 'bus_channel': bus_channel}
 
         trace_start = time.perf_counter()
         iteration_index = 0
