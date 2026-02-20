@@ -35,7 +35,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Live UI
 
-- [ ] **LIVE-01**: OWL debug panel accessible as a separate browser tab/page, receiving real-time updates via `bus.bus` as the agentic loop runs
+- [x] **LIVE-01**: OWL debug panel accessible as a separate browser tab/page, receiving real-time updates via `bus.bus` as the agentic loop runs
 - [ ] **LIVE-02**: State diff viewer showing what changed in `tools_context['state']` between iterations
 - [ ] **LIVE-03**: Collapsible JSON tree renderer for messages, raw responses, and state data
 
@@ -85,7 +85,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VIEW-02 | Phase 2 | Complete |
 | VIEW-03 | Phase 2 | Complete |
 | VIEW-04 | Phase 2 | Complete |
-| LIVE-01 | Phase 3 | Pending |
+| LIVE-01 | Phase 3 | Complete |
 | LIVE-02 | Phase 3 | Pending |
 | LIVE-03 | Phase 3 | Pending |
 

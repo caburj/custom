@@ -58,7 +58,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 03-01-PLAN.md — Backend bus pipeline: bus_channel UUID field, IrWebsocket access check, _sendone in write helpers, ir.actions.client record, Open Live Panel button
+- [x] 03-01-PLAN.md — Backend bus pipeline: bus_channel UUID field, IrWebsocket access check, _sendone in write helpers, ir.actions.client record, Open Live Panel button
 - [ ] 03-02-PLAN.md — Frontend OWL debug panel: DebugPanel with bus subscription + timeline, JsonTree recursive renderer, StateDiff side-by-side viewer, SCSS styling
 
 ## Progress
@@ -70,4 +70,4 @@ Phases execute in numeric order: 1 → 2 → 3
 |-------|----------------|--------|-----------|
 | 1. Data Models and Instrumentation | 2/2 | Complete | 2026-02-20 |
 | 2. Backend Views | 1/1 | Complete | 2026-02-20 |
-| 3. Live Panel and Polish | 0/2 | Not started | - |
+| 3. Live Panel and Polish | 1/2 | In progress | - |

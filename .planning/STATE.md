@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** Phase 2 — Backend Views
+**Current focus:** Phase 3 — Live Panel and Polish
 
 ## Current Position
 
-Phase: 2 of 3 (Backend Views)
-Plan: 1 of 1 in current phase — PHASE COMPLETE
-Status: Phase 2 complete, ready for Phase 3
-Last activity: 2026-02-20 — Completed 02-01 (backend views for trace/iteration/tool call models)
+Phase: 3 of 3 (Live Panel and Polish)
+Plan: 2 of 2 in current phase
+Status: Phase 3 in progress — 03-01 complete, 03-02 pending
+Last activity: 2026-02-20 — Completed 03-01 (backend bus pipeline for real-time debug streaming)
 
-Progress: [████░░░░░░] 67%
+Progress: [█████████░] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
+- Total plans completed: 4
 - Average duration: 2 min
-- Total execution time: 6 min
+- Total execution time: 8 min
 
 **By Phase:**
 
@@ -29,9 +29,10 @@ Progress: [████░░░░░░] 67%
 |-------|-------|-------|----------|
 | 01-data-models-and-instrumentation | 2 | 4 min | 2 min |
 | 02-backend-views | 1 | 2 min | 2 min |
+| 03-live-panel-and-polish | 1 | 2 min | 2 min |
 
 **Recent Trend:**
-- Last 5 plans: 2min, 2min, 2min
+- Last 5 plans: 2min, 2min, 2min, 2min
 - Trend: baseline
 
 *Updated after each plan completion*
@@ -56,6 +57,9 @@ Recent decisions affecting current work:
 - Computed Text pretty-print fields (not raw Json fields) used as ace widget targets — json.dumps with indent=2 on each Json field (02-01)
 - result field on tool_call uses plain text widget not ace — result may be plain string not JSON (02-01)
 - trace action sets search_default_today:1 in context — defaults list to today's traces on open (02-01)
+- _debug_write_trace returns (trace_id, bus_channel) tuple — bus_channel needed in debug_ctx before loop starts (03-01)
+- _debug_bus_send helper receives local cursor env argument — avoids duplicating channel lookup in three write helpers (03-01)
+- Summary-only bus payloads — no messages_sent/raw_response; frontend RPC-fetches detail on demand (03-01)
 
 ### Pending Todos
 
@@ -63,11 +67,10 @@ None yet.
 
 ### Blockers/Concerns
 
-- Phase 3: Bus postcommit timing — per-iteration notifications require a separate `registry.cursor()` inside a postcommit hook (google_calendar pattern). Verify exact timing during Phase 3 task breakdown.
-- Phase 3: Confirm exact `bus_service` API name for channel removal on OWL component unmount before implementing DebugPanel.
+- Phase 3: Confirm exact `bus_service` API name for channel removal on OWL component unmount before implementing DebugPanel (03-02).
 
 ## Session Continuity
 
 Last session: 2026-02-20
-Stopped at: Completed 02-01-PLAN.md (backend views — Phase 2 complete)
+Stopped at: Completed 03-01-PLAN.md (backend bus pipeline — Phase 3 plan 1 of 2)
 Resume file: None
