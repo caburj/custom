@@ -23,9 +23,9 @@
 
     <!-- Menu Items -->
     <menuitem id="menu_ai_debug_root"
-        name="AI Debug"
-        parent="base.menu_action_technical"
-        sequence="100"/>
+        name="Debug"
+        parent="ai_app.ai_menu_root"
+        sequence="40"/>
 
     <menuitem id="menu_ai_debug_traces"
         name="Traces"

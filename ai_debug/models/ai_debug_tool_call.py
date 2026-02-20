@@ -33,9 +33,9 @@ class AiDebugToolCall(models.Model):
 
     # Computed display fields
     duration_human = fields.Char(string='Duration', compute='_compute_duration_human')
-    args_pretty = fields.Text(string='Arguments', compute='_compute_args_pretty')
-    state_before_pretty = fields.Text(string='State Before', compute='_compute_state_pretty')
-    state_after_pretty = fields.Text(string='State After', compute='_compute_state_pretty')
+    args_pretty = fields.Text(compute='_compute_args_pretty')
+    state_before_pretty = fields.Text(compute='_compute_state_pretty')
+    state_after_pretty = fields.Text(compute='_compute_state_pretty')
 
     @api.depends('duration_ms')
     def _compute_duration_human(self):

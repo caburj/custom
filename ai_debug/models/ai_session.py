@@ -2,7 +2,8 @@ import copy
 import logging
 import time
 
-from odoo import api, fields, models
+from odoo import api, models
+from odoo.addons.ai.services.ai_provider import AIProvider
 
 _logger = logging.getLogger(__name__)
 
@@ -251,17 +252,10 @@ class AiSessionDebug(models.TransientModel):
         captured_instructions = self.env.context.get('_debug_instructions') or instructions
         captured_rag = self.env.context.get('_debug_rag_context') or ''
 
-        # Build tools definition summary from the tools recordset.
-        # We serialize name, description, and schema for each tool — this is the
-        # "what tools were available" companion to the already-captured instructions.
-        tools_definition = []
-        if tools:
-            for tool in tools:
-                tools_definition.append({
-                    'name': tool.name,
-                    'description': (tool.ai_tool_description or '').strip(),
-                    'schema': tool.ai_tool_schema or '',
-                })
+        # Capture the formatted tools exactly as sent to the LLM provider.
+        provider = AIProvider.get_by_model(self.env, model)
+        tools_by_name = self._get_tools_by_name(tools) if tools else {}
+        tools_definition = self._prepare_tools(tools_by_name, provider) if tools else []
 
         trace_id, bus_channel = self._debug_write_trace({
             'llm_model': model,

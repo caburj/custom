@@ -3,7 +3,7 @@
     'version': '1.0',
     'category': 'Technical',
     'summary': 'Instrument the AI agentic loop for full observability',
-    'depends': ['ai', 'bus'],
+    'depends': ['ai_app', 'bus'],
     'data': [
         'security/ir.model.access.csv',
         'views/debug_panel_action.xml',
