@@ -83,33 +83,33 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INFRA-01 | — | Pending |
-| INFRA-02 | — | Pending |
-| INFRA-03 | — | Pending |
-| MIGR-01 | — | Pending |
-| MIGR-02 | — | Pending |
-| BUS-01 | — | Pending |
-| BUS-02 | — | Pending |
-| BUS-03 | — | Pending |
-| BUS-04 | — | Pending |
-| BUS-05 | — | Pending |
-| SIDE-01 | — | Pending |
-| SIDE-02 | — | Pending |
-| SIDE-03 | — | Pending |
-| SIDE-04 | — | Pending |
-| SIDE-05 | — | Pending |
-| DETL-01 | — | Pending |
-| DETL-02 | — | Pending |
-| DETL-03 | — | Pending |
-| SESS-01 | — | Pending |
-| SESS-02 | — | Pending |
-| SESS-03 | — | Pending |
+| INFRA-01 | Phase 4 | Pending |
+| INFRA-02 | Phase 4 | Pending |
+| INFRA-03 | Phase 4 | Pending |
+| MIGR-01 | Phase 4 | Pending |
+| MIGR-02 | Phase 4 | Pending |
+| BUS-01 | Phase 5 | Pending |
+| BUS-02 | Phase 5 | Pending |
+| BUS-03 | Phase 5 | Pending |
+| BUS-04 | Phase 5 | Pending |
+| BUS-05 | Phase 5 | Pending |
+| SIDE-01 | Phase 6 | Pending |
+| SIDE-02 | Phase 6 | Pending |
+| SIDE-03 | Phase 6 | Pending |
+| SIDE-04 | Phase 6 | Pending |
+| SIDE-05 | Phase 6 | Pending |
+| DETL-01 | Phase 7 | Pending |
+| DETL-02 | Phase 7 | Pending |
+| DETL-03 | Phase 7 | Pending |
+| SESS-01 | Phase 7 | Pending |
+| SESS-02 | Phase 7 | Pending |
+| SESS-03 | Phase 7 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 21 total
-- Mapped to phases: 0
-- Unmapped: 21
+- Mapped to phases: 21
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-20*
-*Last updated: 2026-02-20 after initial definition*
+*Last updated: 2026-02-20 — traceability filled after roadmap creation*
