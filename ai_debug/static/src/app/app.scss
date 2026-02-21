@@ -1,0 +1,144 @@
+.ai-debug-app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+}
+
+// Header
+.ai-debug-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 44px;
+    min-height: 44px;
+    padding: 0 16px;
+    background-color: #181825;
+    border-bottom: 1px solid #313244;
+}
+
+.ai-debug-header-title {
+    font-weight: 600;
+    font-size: 15px;
+    color: #cdd6f4;
+    letter-spacing: 0.3px;
+}
+
+.ai-debug-header-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #a6adc8;
+}
+
+.ai-debug-status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #f38ba8;
+    transition: background-color 0.3s ease;
+
+    &.connected {
+        background-color: #a6e3a1;
+    }
+
+    &.disconnected {
+        background-color: #f38ba8;
+    }
+}
+
+.ai-debug-status-label {
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+}
+
+// Main layout
+.ai-debug-main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+// Sidebar
+.ai-debug-sidebar {
+    width: 280px;
+    min-width: 280px;
+    background-color: #1e1e2e;
+    border-right: 1px solid #313244;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.ai-debug-sidebar-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    gap: 12px;
+    color: #585b70;
+    font-size: 13px;
+}
+
+// Detail panel
+.ai-debug-detail {
+    flex: 1;
+    overflow-y: auto;
+    background-color: #11111b;
+}
+
+.ai-debug-detail-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 8px;
+    color: #585b70;
+    text-align: center;
+
+    p {
+        margin: 0;
+        font-size: 15px;
+    }
+}
+
+.ai-debug-detail-hint {
+    font-size: 13px !important;
+    color: #45475a;
+    margin-top: 4px !important;
+}
+
+// Pulsing dot animation
+.ai-debug-pulse-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background-color: #585b70;
+    animation: ai-debug-pulse 2s ease-in-out infinite;
+
+    &.large {
+        width: 14px;
+        height: 14px;
+        margin-bottom: 8px;
+    }
+}
+
+@keyframes ai-debug-pulse {
+    0%, 100% {
+        opacity: 0.4;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 1;
+        transform: scale(1.2);
+    }
+}

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+<t t-name="ai_debug.App">
+    <div class="ai-debug-app">
+        <!-- Header bar -->
+        <header class="ai-debug-header">
+            <div class="ai-debug-header-title">AI Debugger</div>
+            <div class="ai-debug-header-status">
+                <span t-attf-class="ai-debug-status-dot {{statusColor}}"/>
+                <span class="ai-debug-status-label" t-esc="statusLabel"/>
+            </div>
+        </header>
+
+        <!-- Main content area -->
+        <div class="ai-debug-main">
+            <!-- Sidebar -->
+            <aside class="ai-debug-sidebar">
+                <div class="ai-debug-sidebar-empty">
+                    <span class="ai-debug-pulse-dot"/>
+                    <span>Waiting for traces...</span>
+                </div>
+            </aside>
+
+            <!-- Detail panel -->
+            <main class="ai-debug-detail">
+                <div class="ai-debug-detail-empty">
+                    <span class="ai-debug-pulse-dot large"/>
+                    <p>Listening for agentic loops...</p>
+                    <p class="ai-debug-detail-hint">
+                        Trigger an AI action in Odoo to see live trace data here.
+                    </p>
+                </div>
+            </main>
+        </div>
+    </div>
+</t>
+
+</templates>
