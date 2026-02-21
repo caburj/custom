@@ -30,7 +30,7 @@
                 <!-- Empty state — only when no traces -->
                 <div t-if="traces.size === 0" class="ai-debug-sidebar-empty">
                     <span class="ai-debug-pulse-dot"/>
-                    <span>Waiting for traces...</span>
+                    <span>No traces yet</span>
                 </div>
 
                 <!-- Tree entries — Loop > Iteration > Tool Call -->
@@ -118,18 +118,29 @@
 
             <!-- Detail panel -->
             <main class="ai-debug-detail">
-                <div t-if="!state.selectedId and traces.size === 0" class="ai-debug-detail-empty">
+                <!-- Empty state: no traces at all (SESS-03) -->
+                <div t-if="traces.size === 0" class="ai-debug-detail-empty">
                     <span class="ai-debug-pulse-dot large"/>
                     <p>Listening for agentic loops...</p>
                     <p class="ai-debug-detail-hint">
                         Trigger an AI action in Odoo to see live trace data here.
                     </p>
                 </div>
-                <div t-elif="!state.selectedId" class="ai-debug-detail-empty">
+                <!-- Loop detail -->
+                <LoopDetail t-elif="state.selectedType === 'trace'"
+                            t-key="state.selectedId"
+                            trace="getSelectedTrace()"/>
+                <!-- Iteration detail -->
+                <IterationDetail t-elif="state.selectedType === 'iteration'"
+                                 t-key="state.selectedId"
+                                 iteration="getSelectedIteration()"/>
+                <!-- Tool call detail -->
+                <ToolCallDetail t-elif="state.selectedType === 'tool_call'"
+                                t-key="state.selectedId"
+                                toolCall="getSelectedToolCall()"/>
+                <!-- Fallback: traces exist but nothing selected (safety net; normally unreachable due to auto-select) -->
+                <div t-else="" class="ai-debug-detail-empty">
                     <p>Select a trace, iteration, or tool call to inspect it.</p>
-                </div>
-                <div t-else="" class="ai-debug-detail-selected">
-                    Selected: <t t-esc="state.selectedType"/> <t t-esc="state.selectedId"/>
                 </div>
             </main>
 

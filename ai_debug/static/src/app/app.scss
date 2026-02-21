@@ -290,14 +290,6 @@
     &:hover { color: #f38ba8; }
 }
 
-// Detail panel placeholder for selected item
-.ai-debug-detail-selected {
-    padding: 16px;
-    color: #6c7086;
-    font-size: 13px;
-    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
-}
-
 // Flash animation for newly arrived loop entries
 @keyframes ai-tree-flash {
     0% { background-color: rgba(137, 180, 250, 0.3); }
@@ -306,4 +298,338 @@
 
 .ai-tree-row.ai-tree-flash {
     animation: ai-tree-flash 1.2s ease-out forwards;
+}
+
+// ================================================================
+// DETAIL PANEL STYLES (Phase 7)
+// ================================================================
+
+// Detail view container
+.ai-detail-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+// Detail header bar (type badge + name)
+.ai-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border-bottom: 1px solid #313244;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+
+.ai-detail-type-badge {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background-color: #313244;
+    color: #89b4fa;
+}
+
+.ai-detail-name {
+    font-weight: 600;
+    color: #cdd6f4;
+}
+
+.ai-detail-meta {
+    font-size: 11px;
+    color: #6c7086;
+
+    &.success { color: #a6e3a1; }
+    &.error { color: #f38ba8; }
+}
+
+// Notebook (tab) dark theme overrides
+.ai-debug-detail .o_notebook {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+
+    .nav-tabs {
+        background-color: #181825;
+        border-bottom: 1px solid #313244;
+
+        .nav-link {
+            color: #6c7086;
+            border: none;
+            border-bottom: 2px solid transparent;
+            padding: 8px 16px;
+            font-size: 12px;
+
+            &.active {
+                color: #cdd6f4;
+                background-color: transparent;
+                border-bottom-color: #89b4fa;
+            }
+
+            &:hover:not(.active) {
+                color: #a6adc8;
+            }
+        }
+    }
+
+    .o_notebook_content {
+        flex: 1;
+        overflow-y: auto;
+        background-color: #11111b;
+    }
+}
+
+// Section within a tab (header + content)
+.ai-detail-section {
+    padding: 12px 16px;
+    border-bottom: 1px solid #181825;
+}
+
+.ai-detail-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+
+    span:first-child {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        color: #6c7086;
+    }
+}
+
+// Empty tab placeholder text
+.ai-detail-empty-tab {
+    color: #585b70;
+    font-size: 13px;
+    padding: 8px 0;
+}
+
+// Error banner
+.ai-detail-error-banner {
+    padding: 8px 16px;
+    background-color: rgba(243, 139, 168, 0.1);
+    border-bottom: 1px solid rgba(243, 139, 168, 0.3);
+    color: #f38ba8;
+    font-size: 13px;
+
+    span:first-child {
+        font-weight: 600;
+    }
+}
+
+// Long text preview (truncated; click to expand)
+.ai-detail-text-preview {
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: 12px;
+    color: #a6adc8;
+    line-height: 1.5;
+    cursor: pointer;
+    border: 1px solid #313244;
+    border-radius: 4px;
+    padding: 8px;
+    overflow: hidden;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 120px;
+
+    &:hover {
+        border-color: #89b4fa;
+        color: #cdd6f4;
+    }
+}
+
+// Plain text block (non-interactive, for tool call results that are strings)
+.ai-detail-text-block {
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: 12px;
+    color: #a6adc8;
+    line-height: 1.5;
+    border: 1px solid #313244;
+    border-radius: 4px;
+    padding: 8px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0;
+}
+
+// JSON tree viewer
+.ai-json-node {
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.ai-json-row {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    min-height: 20px;
+}
+
+.ai-json-key {
+    color: #89b4fa;
+    flex-shrink: 0;
+}
+
+.ai-json-string { color: #a6e3a1; }
+.ai-json-number { color: #fab387; }
+.ai-json-boolean { color: #cba6f7; }
+.ai-json-null { color: #585b70; font-style: italic; }
+
+.ai-json-preview {
+    color: #585b70;
+    font-style: italic;
+}
+
+.ai-json-toggle {
+    cursor: pointer;
+    color: #585b70;
+    user-select: none;
+    width: 12px;
+    flex-shrink: 0;
+    text-align: center;
+
+    &:hover { color: #89b4fa; }
+}
+
+.ai-json-toggle-placeholder {
+    display: inline-block;
+    width: 12px;
+    flex-shrink: 0;
+}
+
+.ai-json-truncated {
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-decoration-color: #585b70;
+
+    &:hover {
+        color: #cdd6f4;
+        text-decoration-color: #89b4fa;
+    }
+}
+
+// State diff grid
+.ai-diff-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    border: 1px solid #313244;
+    border-radius: 4px;
+    overflow: hidden;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: 12px;
+}
+
+.ai-diff-header {
+    background-color: #181825;
+    color: #6c7086;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 6px 12px;
+    border-bottom: 1px solid #313244;
+}
+
+.ai-diff-cell {
+    padding: 4px 12px;
+    border-bottom: 1px solid #1e1e2e;
+    word-break: break-all;
+    white-space: pre-wrap;
+    color: #a6adc8;
+
+    &.ai-diff-added { background-color: rgba(166, 227, 161, 0.1); }
+    &.ai-diff-removed { background-color: rgba(243, 139, 168, 0.1); }
+    &.ai-diff-changed { background-color: rgba(249, 226, 175, 0.1); }
+    &.ai-diff-unchanged { color: #585b70; }
+}
+
+.ai-diff-key {
+    color: #89b4fa;
+    font-weight: 600;
+}
+
+.ai-diff-empty {
+    color: #585b70;
+    font-size: 13px;
+    padding: 8px 0;
+}
+
+.ai-diff-no-changes {
+    padding: 0;
+}
+
+.ai-diff-no-changes-label {
+    color: #585b70;
+    font-size: 12px;
+    margin-bottom: 8px;
+    display: block;
+}
+
+.ai-diff-snapshot {
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: 12px;
+    color: #a6adc8;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    background-color: #181825;
+    border: 1px solid #313244;
+    border-radius: 4px;
+    padding: 8px;
+    margin: 0;
+}
+
+// Text popup content area (inside Dialog)
+.ai-popup-content {
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    color: #cdd6f4;
+    background-color: #1e1e2e;
+    padding: 16px;
+    border-radius: 4px;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+// Dialog dark theme overrides (for TextPopupDialog)
+.o_dialog {
+    .modal-content {
+        background-color: #1e1e2e;
+        border-color: #313244;
+        color: #cdd6f4;
+    }
+
+    .modal-header {
+        background-color: #181825;
+        border-bottom-color: #313244;
+        color: #cdd6f4;
+
+        .btn-close {
+            filter: invert(1);
+        }
+    }
+}
+
+// CopyButton styling adjustments for dark theme
+.ai-detail-section-header .o_clipboard_button {
+    background: none;
+    border: none;
+    color: #585b70;
+    padding: 2px 6px;
+    font-size: 12px;
+
+    &:hover { color: #89b4fa; }
 }
