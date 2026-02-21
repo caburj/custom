@@ -91,5 +91,5 @@ Plans:
 | 3. Live Panel and Polish | v1.0 | 2/2 | Complete | 2026-02-20 |
 | 4. Infrastructure | 2/2 | Complete    | 2026-02-21 | - |
 | 5. Bus Instrumentation | 1/1 | Complete   | 2026-02-21 | - |
-| 6. Sidebar Tree | 2/2 | Complete   | 2026-02-21 | - |
+| 6. Sidebar Tree | 2/2 | Complete    | 2026-02-21 | - |
 | 7. Detail Panel | v1.1 | 0/? | Not started | - |
