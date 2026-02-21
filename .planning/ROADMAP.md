@@ -30,15 +30,17 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
 ## Phase Details
 
 ### Phase 4: Infrastructure
-**Goal**: A navigable `/ai-debug` URL that mounts a stub OWL app connected to bus_service, with all v1.0 DB model artifacts cleanly removed from the codebase and database
+**Goal**: A navigable `/ai-debug` URL that mounts a stub OWL app connected to bus_service, with all v1.0 backend views and ORM model files removed from the codebase
 **Depends on**: Nothing (first phase of v1.1)
-**Requirements**: INFRA-01, INFRA-02, INFRA-03, MIGR-01, MIGR-02
+**Requirements**: INFRA-01, INFRA-02, INFRA-03, MIGR-02
 **Success Criteria** (what must be TRUE):
   1. Navigating to `/ai-debug` loads a standalone page (no Odoo navbar) for any internal user
   2. The browser console shows bus_service connected and receiving on the `ai_debug:*` channel
-  3. The PostgreSQL database has no `ai_debug_trace`, `ai_debug_iteration`, or `ai_debug_tool_call` tables after module upgrade
-  4. No v1.0 backend view or menu entries appear in the Odoo UI
-**Plans**: TBD
+  3. No v1.0 backend view, menu, or ORM model files remain in the codebase
+**Plans:** 2 plans
+Plans:
+- [ ] 04-01-PLAN.md — Delete v1.0 backend architecture and rewrite manifest for v1.1
+- [ ] 04-02-PLAN.md — Scaffold standalone OWL app at /ai-debug with bus_service connection
 
 ### Phase 5: Bus Instrumentation
 **Goal**: A running agentic loop emits four well-structured bus events with full payloads arriving one-by-one in the browser console, with UUID identifiers and payload size discipline enforced
@@ -82,7 +84,7 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
 | 1. Data Models and Instrumentation | v1.0 | 2/2 | Complete | 2026-02-20 |
 | 2. Backend Views | v1.0 | 1/1 | Complete | 2026-02-20 |
 | 3. Live Panel and Polish | v1.0 | 2/2 | Complete | 2026-02-20 |
-| 4. Infrastructure | v1.1 | 0/? | Not started | - |
+| 4. Infrastructure | v1.1 | 0/2 | Planning complete | - |
 | 5. Bus Instrumentation | v1.1 | 0/? | Not started | - |
 | 6. Sidebar Tree | v1.1 | 0/? | Not started | - |
 | 7. Detail Panel | v1.1 | 0/? | Not started | - |
