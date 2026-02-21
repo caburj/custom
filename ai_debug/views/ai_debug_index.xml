@@ -1,15 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-  <template id="index" name="AI Debug">
-    <t t-call="web.layout">
-      <t t-set="head">
-        <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"/>
-        <script type="text/javascript">
-          odoo.__session_info__ = <t t-out="json.dumps(session_info)"/>;
-        </script>
-        <t t-call-assets="ai_debug.assets" t-js="false"/>
-        <t t-call-assets="ai_debug.assets" t-css="false"/>
-      </t>
-    </t>
-  </template>
+    <template id="index" name="AI Debug">&lt;!DOCTYPE html&gt;
+        <html>
+            <head>
+                <title>AI Debugger</title>
+                <meta charset="utf-8"/>
+                <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"/>
+                <script type="text/javascript">
+                    var odoo = {
+                        csrf_token: "<t t-out="request.csrf_token(None)"/>",
+                        debug: "<t t-out="debug"/>",
+                        __session_info__: <t t-out="json.dumps(session_info)"/>,
+                    };
+                </script>
+                <t t-call-assets="ai_debug.assets"/>
+            </head>
+            <body/>
+        </html>
+    </template>
 </odoo>
