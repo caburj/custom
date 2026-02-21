@@ -142,3 +142,137 @@
         transform: scale(1.2);
     }
 }
+
+// Tree header bar
+.ai-tree-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: #6c7086;
+    border-bottom: 1px solid #313244;
+}
+
+// Tree row base — 34px height per locked decision
+.ai-tree-row {
+    display: flex;
+    align-items: center;
+    height: 34px;
+    cursor: pointer;
+    gap: 4px;
+    padding-right: 8px;
+    transition: background-color 0.1s ease;
+
+    &:hover { background-color: #2a2a3e; }
+
+    &.selected {
+        background-color: #2d3748;
+        border-left: 3px solid #89b4fa;
+    }
+
+    &.ancestor {
+        background-color: rgba(137, 180, 250, 0.05);
+    }
+}
+
+// Level indentation
+.ai-tree-row.level-0 { padding-left: 8px; }
+.ai-tree-row.level-1 { padding-left: 28px; }
+.ai-tree-row.level-2 { padding-left: 48px; }
+
+// Chevron expand/collapse indicator
+.ai-tree-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    font-size: 12px;
+    color: #585b70;
+    transform: rotate(0deg);
+    transition: transform 0.15s ease;
+    flex-shrink: 0;
+
+    &.expanded { transform: rotate(90deg); }
+}
+
+// Placeholder for leaf nodes (tool calls) — maintains alignment
+.ai-tree-chevron-placeholder {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+}
+
+// Labels
+.ai-tree-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: #cdd6f4;
+    cursor: pointer;
+}
+
+.ai-tree-label-dim {
+    color: #6c7086;
+}
+
+.ai-tree-label-error {
+    color: #f38ba8;
+}
+
+// Status icons (success checkmark, error X, warn pause)
+.ai-tree-status {
+    margin-left: auto;
+    font-size: 12px;
+    flex-shrink: 0;
+
+    &.success { color: #a6e3a1; }
+    &.error { color: #f38ba8; }
+    &.warn { color: #f9e2af; }
+}
+
+// Small pulse dot for running loop indicator
+.ai-debug-pulse-dot.small {
+    width: 8px;
+    height: 8px;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+// Clear/trash button in Traces header
+.ai-tree-clear {
+    background: none;
+    border: none;
+    color: #585b70;
+    cursor: pointer;
+    padding: 2px 4px;
+    font-size: 13px;
+    line-height: 1;
+
+    &:hover { color: #f38ba8; }
+}
+
+// Detail panel placeholder for selected item
+.ai-debug-detail-selected {
+    padding: 16px;
+    color: #6c7086;
+    font-size: 13px;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+}
+
+// Flash animation for newly arrived loop entries
+@keyframes ai-tree-flash {
+    0% { background-color: rgba(137, 180, 250, 0.3); }
+    100% { background-color: transparent; }
+}
+
+.ai-tree-row.ai-tree-flash {
+    animation: ai-tree-flash 1.2s ease-out forwards;
+}
