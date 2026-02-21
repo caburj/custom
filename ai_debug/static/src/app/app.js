@@ -58,11 +58,20 @@ export class AiDebugApp extends Component {
                 duration_ms: null,
                 expanded: true,   // new loops start expanded (locked decision)
                 iterations,
+                // Phase 7: full payload for detail panel
+                instructions: payload.instructions || "",
+                tools: payload.tools || [],
+                state_snapshot: payload.state_snapshot || {},
             });
             this._lastArrivedId = payload.trace_id;
             this._flashId = payload.trace_id;
             this._needsScroll = true;
-            // NEVER touch this.state.selectedId here — SIDE-05
+            // Auto-select first trace when nothing is selected (SESS-03 + CONTEXT.md)
+            if (this.state.selectedId === null) {
+                this.state.selectedId = payload.trace_id;
+                this.state.selectedType = "trace";
+            }
+            // Auto-select above only fires when selectedId is null — SIDE-05 preserved
         };
 
         this._onIteration = (payload) => {
@@ -79,6 +88,11 @@ export class AiDebugApp extends Component {
                     receivedAt: new Date(),
                     expanded: false,
                     toolCalls,
+                    // Phase 7: full payload for detail panel
+                    messages_sent: payload.messages_sent || [],
+                    raw_response: payload.raw_response || null,
+                    is_final: payload.is_final || false,
+                    error: payload.error || null,
                 });
                 this._lastArrivedId = payload.iteration_id;
                 this._needsScroll = true;
@@ -96,6 +110,13 @@ export class AiDebugApp extends Component {
                 iteration_id: payload.iteration_id,
                 tool_name: payload.tool_name,
                 success: payload.success,
+                // Phase 7: full payload for detail panel
+                args: payload.args || {},
+                result: payload.result,
+                error: payload.error || null,
+                state_before: payload.state_before || {},
+                state_after: payload.state_after || {},
+                call_id: payload.call_id || null,
             });
             // NEVER touch this.state.selectedId here — SIDE-05
         };
@@ -200,6 +221,34 @@ export class AiDebugApp extends Component {
         this.traces.clear();
         this.state.selectedId = null;
         this.state.selectedType = null;
+    }
+
+    // ----------------------------------------------------------------
+    // Selected data getters — used by detail panel components
+    // ----------------------------------------------------------------
+
+    getSelectedTrace() {
+        return this.traces.get(this.state.selectedId) || null;
+    }
+
+    getSelectedIteration() {
+        for (const trace of this.traces.values()) {
+            if (trace.iterations.has(this.state.selectedId)) {
+                return trace.iterations.get(this.state.selectedId);
+            }
+        }
+        return null;
+    }
+
+    getSelectedToolCall() {
+        for (const trace of this.traces.values()) {
+            for (const iter of trace.iterations.values()) {
+                if (iter.toolCalls.has(this.state.selectedId)) {
+                    return iter.toolCalls.get(this.state.selectedId);
+                }
+            }
+        }
+        return null;
     }
 
     // ----------------------------------------------------------------
