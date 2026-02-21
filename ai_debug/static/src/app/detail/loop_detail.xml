@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+<t t-name="ai_debug.LoopDetail">
+    <div class="ai-detail-view">
+        <!-- Header -->
+        <div class="ai-detail-header">
+            <span class="ai-detail-type-badge">Loop</span>
+            <span class="ai-detail-name" t-esc="props.trace.agent_name"/>
+            <span class="ai-detail-meta" t-esc="props.trace.model_name"/>
+        </div>
+
+        <!-- Tabbed content -->
+        <Notebook>
+            <t t-set-slot="system_prompt" title="'System Prompt'" isVisible="true">
+                <div class="ai-detail-section">
+                    <div class="ai-detail-section-header">
+                        <span>System Prompt</span>
+                        <CopyButton content="() => this.instructionsContent"/>
+                    </div>
+                    <!-- Truncated text preview; click opens popup -->
+                    <div class="ai-detail-text-preview"
+                         t-on-click="() => this.openTextPopup('System Prompt', props.trace.instructions, 'markdown')"
+                         t-esc="props.trace.instructions"/>
+                </div>
+            </t>
+
+            <t t-set-slot="rag_context" title="'RAG Context'" isVisible="true">
+                <div class="ai-detail-section">
+                    <div class="ai-detail-section-header">
+                        <span>RAG Context</span>
+                    </div>
+                    <div t-if="!ragContextMessages" class="ai-detail-empty-tab">
+                        Waiting for first iteration to capture RAG context...
+                    </div>
+                    <div t-elif="ragContextMessages.length === 0" class="ai-detail-empty-tab">
+                        No RAG context detected in this trace.
+                    </div>
+                    <t t-else="">
+                        <t t-foreach="ragContextMessages" t-as="msg" t-key="msg_index">
+                            <div class="ai-detail-section">
+                                <div class="ai-detail-section-header">
+                                    <span t-esc="'System Message ' + (msg_index + 1)"/>
+                                    <CopyButton content="() => msg.content"/>
+                                </div>
+                                <div class="ai-detail-text-preview"
+                                     t-on-click="() => this.openTextPopup('RAG Context', msg.content, 'markdown')"
+                                     t-esc="msg.content"/>
+                            </div>
+                        </t>
+                    </t>
+                </div>
+            </t>
+
+            <t t-set-slot="tools" title="'Tools Definition'" isVisible="true">
+                <div class="ai-detail-section">
+                    <div class="ai-detail-section-header">
+                        <span>Tools Definition</span>
+                        <CopyButton content="() => this.toolsJson"/>
+                    </div>
+                    <JsonTree data="props.trace.tools" onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                </div>
+            </t>
+        </Notebook>
+    </div>
+</t>
+
+</templates>

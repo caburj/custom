@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+<t t-name="ai_debug.IterationDetail">
+    <div class="ai-detail-view">
+        <div class="ai-detail-header">
+            <span class="ai-detail-type-badge">Iteration</span>
+            <span class="ai-detail-name">Iteration <t t-esc="props.iteration.iteration_index"/></span>
+            <span t-if="props.iteration.is_final" class="ai-detail-meta">Final</span>
+            <span t-if="props.iteration.has_error" class="ai-detail-meta error">Error</span>
+        </div>
+
+        <!-- Error banner if iteration has error -->
+        <div t-if="props.iteration.error" class="ai-detail-error-banner">
+            <span>Error:</span> <t t-esc="props.iteration.error"/>
+        </div>
+
+        <Notebook>
+            <t t-set-slot="messages" title="'Messages Sent'" isVisible="true">
+                <div class="ai-detail-section">
+                    <div class="ai-detail-section-header">
+                        <span>Messages Sent (<t t-esc="(props.iteration.messages_sent || []).length"/> messages)</span>
+                        <CopyButton content="() => this.messagesJson"/>
+                    </div>
+                    <JsonTree data="props.iteration.messages_sent"
+                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                </div>
+            </t>
+
+            <t t-set-slot="response" title="'Raw Response'" isVisible="true">
+                <div class="ai-detail-section">
+                    <div class="ai-detail-section-header">
+                        <span>Raw LLM Response</span>
+                        <CopyButton content="() => this.responseJson"/>
+                    </div>
+                    <JsonTree data="props.iteration.raw_response"
+                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                </div>
+            </t>
+
+            <t t-set-slot="state_diff" title="'State Diff'" isVisible="true">
+                <div class="ai-detail-section">
+                    <div class="ai-detail-section-header">
+                        <span>State Diff</span>
+                    </div>
+                    <StateDiff before="stateBefore" after="stateAfter"/>
+                </div>
+            </t>
+        </Notebook>
+    </div>
+</t>
+
+</templates>

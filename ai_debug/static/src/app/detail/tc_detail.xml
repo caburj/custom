@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+<t t-name="ai_debug.ToolCallDetail">
+    <div class="ai-detail-view">
+        <div class="ai-detail-header">
+            <span class="ai-detail-type-badge">Tool Call</span>
+            <span class="ai-detail-name" t-esc="props.toolCall.tool_name"/>
+            <span t-if="props.toolCall.success" class="ai-detail-meta success">Success</span>
+            <span t-else="" class="ai-detail-meta error">Failed</span>
+        </div>
+
+        <!-- Stacked: Args section -->
+        <div class="ai-detail-section">
+            <div class="ai-detail-section-header">
+                <span>Arguments</span>
+                <CopyButton content="() => this.argsJson"/>
+            </div>
+            <JsonTree data="props.toolCall.args"
+                      onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+        </div>
+
+        <!-- Stacked: Result section -->
+        <div class="ai-detail-section">
+            <div class="ai-detail-section-header">
+                <span>Result</span>
+                <CopyButton content="() => this.resultString"/>
+            </div>
+            <!-- If result is an object/array, use JsonTree; otherwise show as text -->
+            <t t-if="resultIsObject">
+                <JsonTree data="props.toolCall.result"
+                          onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+            </t>
+            <t t-else="">
+                <pre class="ai-detail-text-block" t-esc="resultString"/>
+            </t>
+        </div>
+
+        <!-- Error banner if failed -->
+        <div t-if="props.toolCall.error" class="ai-detail-error-banner">
+            <span>Error:</span> <t t-esc="props.toolCall.error"/>
+        </div>
+
+        <!-- Tabs: State Diff + Confirmation Info -->
+        <Notebook>
+            <t t-set-slot="state_diff" title="'State Diff'" isVisible="true">
+                <div class="ai-detail-section">
+                    <div class="ai-detail-section-header">
+                        <span>State Diff</span>
+                    </div>
+                    <StateDiff before="props.toolCall.state_before" after="props.toolCall.state_after"/>
+                </div>
+            </t>
+
+            <t t-set-slot="confirmation" title="'Confirmation Info'" isVisible="true">
+                <div class="ai-detail-section">
+                    <div class="ai-detail-section-header">
+                        <span>Confirmation Info</span>
+                    </div>
+                    <div class="ai-detail-empty-tab">
+                        Confirmation events are not yet captured in v1.1 bus payloads.
+                    </div>
+                </div>
+            </t>
+        </Notebook>
+    </div>
+</t>
+
+</templates>
