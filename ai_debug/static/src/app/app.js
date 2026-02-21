@@ -10,9 +10,11 @@ export class AiDebugApp extends Component {
     setup() {
         this.busService = useService("bus_service");
 
-        // Trace data store — reactive Map, NOT inside useState.
-        // OWL reactive() wraps Map with proper proxy handlers so .set() / .delete() trigger re-renders.
-        this.traces = reactive(new Map());
+        // Trace data store — useState wraps the Map so OWL's render function
+        // observes mutations (.set/.delete/.clear) and triggers re-renders.
+        // Nested reactive Maps (iterations, toolCalls) inherit the render
+        // callback when accessed through this proxy chain.
+        this.traces = useState(new Map());
 
         // Selection and connection state — completely separate from trace data (SIDE-05)
         this.state = useState({
