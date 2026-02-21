@@ -8,6 +8,13 @@
     color: #cdd6f4;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     font-size: 14px;
+
+    // Hide mail ChatHub and chat bubbles — MainComponentsContainer renders them
+    // but they are not relevant in the standalone debugger app
+    .o-mail-ChatHub,
+    .o-mail-ChatBubble {
+        display: none !important;
+    }
 }
 
 // Header
