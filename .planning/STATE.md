@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 
 Milestone: v1.1 Live Tracer Standalone App
 Phase: 7 of 7 (Detail Panel)
-Plan: 0 of 1 in current phase (ready to start)
+Plan: 1 of 1 in current phase (complete)
 Status: In progress
-Last activity: 2026-02-21 — Phase 6 Plan 05 complete (reverse trace rendering order to newest-first — [...traces.keys()].reverse() on trace t-foreach; closes SIDE-01/SIDE-02)
+Last activity: 2026-02-21 — Phase 7 Plan 01 complete (extend bus handlers with full payload + auto-select + getters; create JsonTree, TextPopupDialog, StateDiff utility components)
 
-Progress: [████░░░░░░] 40% (v1.1)
+Progress: [█████░░░░░] 50% (v1.1)
 
 ## Accumulated Context
 
@@ -47,6 +47,10 @@ Recent decisions affecting current work:
 - [Phase 06-sidebar-tree]: Remove display:flex;flex-direction:column from .ai-tree-content — flex column intrinsic sizing prevents overflow scroll; block layout is correct for list of rows
 - [Phase 06-sidebar-tree]: Add min-height:0 to .ai-tree-content — overrides default min-height:auto on flex items so overflow-y:auto actually triggers
 - [06-05]: [...traces.keys()].reverse() on trace t-foreach — extends existing iteration reverse ordering pattern to traces so newest loops appear at top of sidebar
+- [07-01]: Auto-select in _onNewTrace only when state.selectedId === null — single exception to SIDE-05, permitted because condition guarantees no active selection disrupted
+- [07-01]: result field in _onToolCall stored without fallback (payload.result directly) — may legitimately be null, false, 0, or empty string; || {} fallback would obscure meaningful falsy results
+- [07-01]: JsonTree defaults to depth 0 auto-expanded (expanded: props.depth < 1) — top-level keys visible, nested objects collapsed; matches DevTools default behavior
+- [07-01]: Prism.highlightElement over Prism.highlight + innerHTML — set textContent first then highlightElement for safe, simpler DOM update
 
 ### Pending Todos
 
@@ -60,5 +64,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 06-sidebar-tree/06-05-PLAN.md (reverse trace rendering order to newest-first)
+Stopped at: Completed 07-detail-panel/07-01-PLAN.md (bus handler payload extension + auto-select + shared utility components)
 Resume file: None

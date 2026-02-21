@@ -81,7 +81,7 @@ Plans:
   2. Selecting an iteration shows messages sent, raw LLM response, and state diff in the detail panel
   3. Selecting a tool call shows its arguments, result, and state diff in the detail panel
   4. Refreshing the browser clears all trace data and the app displays "Listening for agentic loops..." with no traces shown
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 Plans:
 - [ ] 07-01-PLAN.md — Data layer (full payload storage, auto-select, getter methods) + shared utility components (JsonTree, TextPopupDialog, StateDiff)
 - [ ] 07-02-PLAN.md — Three detail view components (LoopDetail, IterationDetail, ToolCallDetail) + main template wiring + SCSS styles
@@ -98,4 +98,4 @@ Plans:
 | 4. Infrastructure | 2/2 | Complete    | 2026-02-21 | - |
 | 5. Bus Instrumentation | 1/1 | Complete   | 2026-02-21 | - |
 | 6. Sidebar Tree | 5/5 | Complete   | 2026-02-21 | - |
-| 7. Detail Panel | v1.1 | 0/2 | In progress | - |
+| 7. Detail Panel | 1/2 | In Progress|  | - |

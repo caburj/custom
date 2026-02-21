@@ -41,9 +41,9 @@ Requirements for the Live Tracer Standalone App milestone. Each maps to roadmap 
 
 ### Session Behavior
 
-- [ ] **SESS-01**: All trace data lives in frontend memory only (no database persistence)
-- [ ] **SESS-02**: Refreshing the browser clears all trace data
-- [ ] **SESS-03**: App shows "Listening for agentic loops..." when no traces exist yet
+- [x] **SESS-01**: All trace data lives in frontend memory only (no database persistence)
+- [x] **SESS-02**: Refreshing the browser clears all trace data
+- [x] **SESS-03**: App shows "Listening for agentic loops..." when no traces exist yet
 
 ## v2 Requirements
 
@@ -100,9 +100,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DETL-01 | Phase 7 | Pending |
 | DETL-02 | Phase 7 | Pending |
 | DETL-03 | Phase 7 | Pending |
-| SESS-01 | Phase 7 | Pending |
-| SESS-02 | Phase 7 | Pending |
-| SESS-03 | Phase 7 | Pending |
+| SESS-01 | Phase 7 | Complete |
+| SESS-02 | Phase 7 | Complete |
+| SESS-03 | Phase 7 | Complete |
 
 **Coverage:**
 - v1.1 requirements: 20 total
