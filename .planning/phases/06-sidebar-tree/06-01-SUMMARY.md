@@ -85,7 +85,7 @@ Each task was committed atomically:
 1. **Task 1: Reactive trace store, bus handlers, and selection methods** - `dbd349c` (feat)
 2. **Task 2: Three-level tree template and all sidebar styles** - `84cd993` (feat)
 
-**Plan metadata:** (final commit — TBD)
+**Plan metadata:** `9e41d07` (docs: complete plan)
 
 ## Files Created/Modified
 
