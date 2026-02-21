@@ -65,12 +65,20 @@
     overflow: hidden;
 }
 
-// Sidebar
+// Sidebar — outer container, does NOT scroll; header is pinned here
 .ai-debug-sidebar {
     width: 280px;
     min-width: 280px;
     background-color: #1e1e2e;
     border-right: 1px solid #313244;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+// Scrollable tree content area — lives below the pinned header
+.ai-tree-content {
+    flex: 1;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -157,6 +165,19 @@
     border-bottom: 1px solid #313244;
 }
 
+// Slide-in animation for newly inserted tree rows
+// OWL creates new DOM nodes for new Map entries (t-key=stable-id), so this fires only for new items
+@keyframes ai-tree-slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
 // Tree row base — 34px height per locked decision
 .ai-tree-row {
     display: flex;
@@ -166,12 +187,14 @@
     gap: 4px;
     padding-right: 8px;
     transition: background-color 0.1s ease;
+    animation: ai-tree-slide-in 0.15s ease-out;
 
     &:hover { background-color: #2a2a3e; }
 
     &.selected {
         background-color: #2d3748;
         border-left: 3px solid #89b4fa;
+        animation: none; // Don't re-animate the selected row on each patch
     }
 
     &.ancestor {
@@ -238,12 +261,21 @@
     &.warn { color: #f9e2af; }
 }
 
-// Small pulse dot for running loop indicator
+// Small pulse dot for running loop indicator (in tree row status position)
 .ai-debug-pulse-dot.small {
     width: 8px;
     height: 8px;
     margin-left: auto;
     flex-shrink: 0;
+}
+
+// Tiny pulse dot — inline inside iteration label to indicate active running iteration
+.ai-debug-pulse-dot.tiny {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    vertical-align: middle;
+    margin-left: 2px;
 }
 
 // Clear/trash button in Traces header
