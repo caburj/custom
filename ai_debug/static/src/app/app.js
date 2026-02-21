@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
+import { Component, useState, reactive, onMounted, onWillUnmount, onPatched, useRef } from "@odoo/owl";
 import { useService } from "@web/core/utils/hooks";
 
 export class AiDebugApp extends Component {
@@ -9,10 +9,27 @@ export class AiDebugApp extends Component {
 
     setup() {
         this.busService = useService("bus_service");
+
+        // Trace data store — reactive Map, NOT inside useState.
+        // OWL reactive() wraps Map with proper proxy handlers so .set() / .delete() trigger re-renders.
+        this.traces = reactive(new Map());
+
+        // Selection and connection state — completely separate from trace data (SIDE-05)
         this.state = useState({
             connectionStatus: "connecting",
+            selectedId: null,
+            selectedType: null,   // 'trace' | 'iteration' | 'tool_call'
         });
 
+        // Sidebar DOM ref for auto-scroll
+        this.sidebarRef = useRef("sidebar");
+        this._needsScroll = false;
+        this._flashId = null;
+        this._lastArrivedId = null;
+
+        // ----------------------------------------------------------------
+        // Bus connection lifecycle handler
+        // ----------------------------------------------------------------
         this._onWorkerState = ({ detail }) => {
             if (detail === "CONNECTED") {
                 this.state.connectionStatus = "connected";
@@ -23,23 +40,90 @@ export class AiDebugApp extends Component {
             }
         };
 
-        this._onBusNotification = (payload) => {
-            console.log(`[ai_debug] ${payload.type}`, payload);
+        // ----------------------------------------------------------------
+        // Bus event handlers — NEVER touch this.state.selectedId (SIDE-05)
+        // ----------------------------------------------------------------
+
+        this._onNewTrace = (payload) => {
+            const iterations = reactive(new Map());
+            this.traces.set(payload.trace_id, {
+                trace_id: payload.trace_id,
+                agent_name: payload.agent_name || "Unknown Agent",
+                model_name: payload.model_name || "",
+                status: "running",
+                started_at: new Date(),
+                ended_at: null,
+                duration_ms: null,
+                expanded: true,   // new loops start expanded (locked decision)
+                iterations,
+            });
+            this._lastArrivedId = payload.trace_id;
+            this._flashId = payload.trace_id;
+            this._needsScroll = true;
+            // NEVER touch this.state.selectedId here — SIDE-05
         };
 
-        // Each notification type must be subscribed individually via
-        // busService.subscribe(), which listens on the internal notificationBus.
-        // busService.addEventListener() only receives connection-level events.
-        this._subscribedTypes = ["new_trace", "iteration", "tool_call", "loop_end"];
+        this._onIteration = (payload) => {
+            const trace = this.traces.get(payload.trace_id);
+            if (!trace) return;
+            // Only create if not already present (avoid blowing away existing toolCalls)
+            if (!trace.iterations.has(payload.iteration_id)) {
+                const toolCalls = reactive(new Map());
+                trace.iterations.set(payload.iteration_id, {
+                    iteration_id: payload.iteration_id,
+                    trace_id: payload.trace_id,
+                    iteration_index: payload.iteration_index,
+                    has_error: !!payload.error,
+                    receivedAt: new Date(),
+                    expanded: false,
+                    toolCalls,
+                });
+                this._lastArrivedId = payload.iteration_id;
+                this._needsScroll = true;
+            }
+            // NEVER touch this.state.selectedId here — SIDE-05
+        };
 
+        this._onToolCall = (payload) => {
+            const trace = this.traces.get(payload.trace_id);
+            if (!trace) return;
+            const iteration = trace.iterations.get(payload.iteration_id);
+            if (!iteration) return;
+            iteration.toolCalls.set(payload.tool_call_id, {
+                tool_call_id: payload.tool_call_id,
+                iteration_id: payload.iteration_id,
+                tool_name: payload.tool_name,
+                success: payload.success,
+            });
+            // NEVER touch this.state.selectedId here — SIDE-05
+        };
+
+        this._onLoopEnd = (payload) => {
+            const trace = this.traces.get(payload.trace_id);
+            if (!trace) return;
+            trace.status =
+                payload.termination_reason === "success"
+                    ? "success"
+                    : payload.termination_reason === "max_iterations"
+                    ? "max_iterations"
+                    : "error";
+            trace.ended_at = new Date();
+            trace.duration_ms = payload.duration_ms;
+            // NEVER touch this.state.selectedId here — SIDE-05
+        };
+
+        // ----------------------------------------------------------------
+        // Bus lifecycle
+        // ----------------------------------------------------------------
         onMounted(async () => {
             this.busService.addEventListener(
                 "BUS:WORKER_STATE_UPDATED",
                 this._onWorkerState,
             );
-            for (const type of this._subscribedTypes) {
-                this.busService.subscribe(type, this._onBusNotification);
-            }
+            this.busService.subscribe("new_trace", this._onNewTrace);
+            this.busService.subscribe("iteration", this._onIteration);
+            this.busService.subscribe("tool_call", this._onToolCall);
+            this.busService.subscribe("loop_end", this._onLoopEnd);
             await this.busService.addChannel("ai_debug");
         });
 
@@ -48,12 +132,114 @@ export class AiDebugApp extends Component {
                 "BUS:WORKER_STATE_UPDATED",
                 this._onWorkerState,
             );
-            for (const type of this._subscribedTypes) {
-                this.busService.unsubscribe(type, this._onBusNotification);
-            }
+            this.busService.unsubscribe("new_trace", this._onNewTrace);
+            this.busService.unsubscribe("iteration", this._onIteration);
+            this.busService.unsubscribe("tool_call", this._onToolCall);
+            this.busService.unsubscribe("loop_end", this._onLoopEnd);
             this.busService.deleteChannel("ai_debug");
         });
+
+        // ----------------------------------------------------------------
+        // Post-render: auto-scroll to newest item + flash effect
+        // ----------------------------------------------------------------
+        onPatched(() => {
+            if (this._needsScroll && this._lastArrivedId && this.sidebarRef.el) {
+                const el = this.sidebarRef.el.querySelector(
+                    `[data-node-id="${this._lastArrivedId}"]`,
+                );
+                if (el) {
+                    el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                }
+                this._needsScroll = false;
+            }
+            if (this._flashId && this.sidebarRef.el) {
+                const el = this.sidebarRef.el.querySelector(
+                    `[data-node-id="${this._flashId}"]`,
+                );
+                if (el) {
+                    el.classList.add("ai-tree-flash");
+                    setTimeout(() => el.classList.remove("ai-tree-flash"), 1200);
+                }
+                this._flashId = null;
+            }
+        });
     }
+
+    // ----------------------------------------------------------------
+    // User interaction methods — ONLY these may write to state.selectedId
+    // ----------------------------------------------------------------
+
+    selectItem(id, type) {
+        this.state.selectedId = id;
+        this.state.selectedType = type;
+        // Clicking a loop also expands it (locked decision)
+        if (type === "trace") {
+            const trace = this.traces.get(id);
+            if (trace) trace.expanded = true;
+        }
+    }
+
+    toggleExpand(idOrTraceId, typeOrIterationId) {
+        // Called as toggleExpand(traceId, 'trace') for loops
+        // Called as toggleExpand(traceId, iterationId) for iterations
+        if (typeOrIterationId === "trace") {
+            const trace = this.traces.get(idOrTraceId);
+            if (trace) trace.expanded = !trace.expanded;
+        } else {
+            // Two string args: first is traceId, second is iterationId
+            const trace = this.traces.get(idOrTraceId);
+            if (!trace) return;
+            const iteration = trace.iterations.get(typeOrIterationId);
+            if (iteration) iteration.expanded = !iteration.expanded;
+        }
+    }
+
+    clearAll() {
+        this.traces.clear();
+        this.state.selectedId = null;
+        this.state.selectedType = null;
+    }
+
+    // ----------------------------------------------------------------
+    // Ancestor getters — used in template for breadcrumb tinting
+    // ----------------------------------------------------------------
+
+    get selectedTraceId() {
+        const { selectedId, selectedType } = this.state;
+        if (!selectedId) return null;
+        if (selectedType === "trace") return selectedId;
+        if (selectedType === "iteration") {
+            for (const [traceId, trace] of this.traces) {
+                if (trace.iterations.has(selectedId)) return traceId;
+            }
+        }
+        if (selectedType === "tool_call") {
+            for (const [traceId, trace] of this.traces) {
+                for (const [, iter] of trace.iterations) {
+                    if (iter.toolCalls.has(selectedId)) return traceId;
+                }
+            }
+        }
+        return null;
+    }
+
+    get selectedIterationId() {
+        const { selectedId, selectedType } = this.state;
+        if (!selectedId) return null;
+        if (selectedType === "iteration") return selectedId;
+        if (selectedType === "tool_call") {
+            for (const [, trace] of this.traces) {
+                for (const [iterId, iter] of trace.iterations) {
+                    if (iter.toolCalls.has(selectedId)) return iterId;
+                }
+            }
+        }
+        return null;
+    }
+
+    // ----------------------------------------------------------------
+    // Status display helpers
+    // ----------------------------------------------------------------
 
     get statusColor() {
         return this.state.connectionStatus === "connected"
