@@ -1,4 +1,3 @@
-import json
 from odoo import http
 from odoo.http import request
 from odoo.addons.web.controllers.utils import ensure_db, is_user_internal
