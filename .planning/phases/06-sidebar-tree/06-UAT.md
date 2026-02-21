@@ -1,5 +1,5 @@
 ---
-status: complete
+status: diagnosed
 phase: 06-sidebar-tree
 source: [06-01-SUMMARY.md, 06-02-SUMMARY.md]
 started: 2026-02-21T18:30:00Z
@@ -88,7 +88,10 @@ skipped: 11
   reason: "User reported: Nothing is listed after triggering an ai chat"
   severity: blocker
   test: 1
-  root_cause: ""
-  artifacts: []
-  missing: []
-  debug_session: ""
+  root_cause: "reactive(new Map()) without callback never registers OWL component render as observer — Map mutations don't trigger re-render"
+  artifacts:
+    - path: "ai_debug/static/src/app/app.js"
+      issue: "Line 15: this.traces = reactive(new Map()) should be useState(new Map())"
+  missing:
+    - "Change this.traces = reactive(new Map()) to this.traces = useState(new Map()) so OWL wires the component render callback"
+  debug_session: ".planning/debug/sidebar-tree-no-populate.md"
