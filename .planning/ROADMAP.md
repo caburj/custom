@@ -64,11 +64,12 @@ Plans:
   2. Expanding a loop entry reveals its iterations in reverse chronological order (latest on top); expanding an iteration reveals its tool calls
   3. Clicking any sidebar item highlights it and the detail panel area reflects the selection (even if detail content is a placeholder)
   4. Triggering a second agentic loop while viewing iteration #1 of the first loop leaves the current selection and detail view unchanged
-**Plans:** 3/3 plans complete
+**Plans:** 4 plans (3 complete, 1 gap closure)
 Plans:
 - [x] 06-01-PLAN.md — Core sidebar tree with reactive data model, bus handlers, selection, and tree rendering
 - [x] 06-02-PLAN.md — Real-time visual polish: auto-scroll, flash, animations, ancestor tint, duration
-- [ ] 06-03-PLAN.md — Gap closure: fix reactive(new Map()) -> useState(new Map()) for tree rendering
+- [x] 06-03-PLAN.md — Gap closure: fix reactive(new Map()) -> useState(new Map()) for tree rendering
+- [ ] 06-04-PLAN.md — Gap closure: fix sidebar scroll overflow (remove flex column from .ai-tree-content)
 
 ### Phase 7: Detail Panel
 **Goal**: Clicking any sidebar node shows type-appropriate detail content drawn from the bus payload, with session ephemeral behavior and empty-state copy in place
@@ -92,5 +93,5 @@ Plans:
 | 3. Live Panel and Polish | v1.0 | 2/2 | Complete | 2026-02-20 |
 | 4. Infrastructure | 2/2 | Complete    | 2026-02-21 | - |
 | 5. Bus Instrumentation | 1/1 | Complete   | 2026-02-21 | - |
-| 6. Sidebar Tree | 3/3 | Complete   | 2026-02-21 | - |
+| 6. Sidebar Tree | 3/4 | UAT gap closure   | 2026-02-21 | - |
 | 7. Detail Panel | v1.1 | 0/? | Not started | - |
