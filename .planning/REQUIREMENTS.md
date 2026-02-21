@@ -27,11 +27,11 @@ Requirements for the Live Tracer Standalone App milestone. Each maps to roadmap 
 
 ### Sidebar Tree
 
-- [ ] **SIDE-01**: Sidebar shows one entry per agentic loop, labeled by agent name
-- [ ] **SIDE-02**: Expanding a loop shows its iterations (latest on top)
-- [ ] **SIDE-03**: Expanding an iteration shows its tool calls
-- [ ] **SIDE-04**: Clicking any item in the tree selects it and updates the detail panel
-- [ ] **SIDE-05**: New loops appear in the sidebar without stealing focus from current selection
+- [x] **SIDE-01**: Sidebar shows one entry per agentic loop, labeled by agent name
+- [x] **SIDE-02**: Expanding a loop shows its iterations (latest on top)
+- [x] **SIDE-03**: Expanding an iteration shows its tool calls
+- [x] **SIDE-04**: Clicking any item in the tree selects it and updates the detail panel
+- [x] **SIDE-05**: New loops appear in the sidebar without stealing focus from current selection
 
 ### Detail Panel
 
@@ -92,11 +92,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BUS-03 | Phase 5 | Complete |
 | BUS-04 | Phase 5 | Complete |
 | BUS-05 | Phase 5 | Complete |
-| SIDE-01 | Phase 6 | Pending |
-| SIDE-02 | Phase 6 | Pending |
-| SIDE-03 | Phase 6 | Pending |
-| SIDE-04 | Phase 6 | Pending |
-| SIDE-05 | Phase 6 | Pending |
+| SIDE-01 | Phase 6 | Complete |
+| SIDE-02 | Phase 6 | Complete |
+| SIDE-03 | Phase 6 | Complete |
+| SIDE-04 | Phase 6 | Complete |
+| SIDE-05 | Phase 6 | Complete |
 | DETL-01 | Phase 7 | Pending |
 | DETL-02 | Phase 7 | Pending |
 | DETL-03 | Phase 7 | Pending |

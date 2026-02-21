@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.1 Phase 5 — Bus Instrumentation
+**Current focus:** v1.1 Phase 6 — Sidebar Tree
 
 ## Current Position
 
 Milestone: v1.1 Live Tracer Standalone App
-Phase: 5 of 7 (Bus Instrumentation)
+Phase: 6 of 7 (Sidebar Tree)
 Plan: 1 of 1 in current phase (complete)
 Status: In progress
-Last activity: 2026-02-21 — Phase 5 Plan 01 complete (AiSession bus instrumentation, four event types)
+Last activity: 2026-02-21 — Phase 6 Plan 01 complete (reactive sidebar tree with Loop > Iteration > Tool Call hierarchy)
 
-Progress: [██░░░░░░░░] 20% (v1.1)
+Progress: [███░░░░░░░] 30% (v1.1)
 
 ## Accumulated Context
 
@@ -37,6 +37,10 @@ Recent decisions affecting current work:
 - [05-01]: _handle_tool_calls uses batch-level state granularity (state before/after entire tool batch) — per-tool Option C deferred to v1.2
 - [05-01]: _debug_ctx mutable dict propagated via self.with_context() so _handle_tool_calls can reference trace_id and iteration_id
 - [05-01]: Failed iterations emit an iteration event with error field before loop_end so errors appear in the sidebar tree
+- [06-01]: reactive(new Map()) for trace store — NOT inside useState; nested reactive Maps for iterations and toolCalls
+- [06-01]: Bus handlers write only to trace Maps, never to state.selectedId — SIDE-05 stable selection
+- [06-01]: toggleExpand unified signature: (id, 'trace') for loops or (traceId, iterationId) for iterations
+- [06-01]: Flash animation on new loop arrivals only; iterations/tool calls appear without flash to avoid visual noise
 
 ### Pending Todos
 
@@ -45,10 +49,10 @@ None.
 ### Blockers/Concerns
 
 - [Phase 5]: Payload size for RAG-enabled sessions unknown — research recommends ~32 KB cap but needs empirical baseline before finalizing meta/detail split strategy
-- [Phase 6]: OWL reactive Map (.set() triggers re-render) confirmed in OWL source comments but not test-covered — validate with proof-of-concept before building full sidebar
+- [Phase 6 RESOLVED]: OWL reactive Map (.set() triggers re-render) confirmed in OWL source comments — verified HIGH confidence from OWL source (COLLECTION_RAW_TYPES includes Map)
 
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 05-bus-instrumentation/05-01-PLAN.md (AiSession instrumentation, new_trace/iteration/tool_call/loop_end bus events)
+Stopped at: Completed 06-sidebar-tree/06-01-PLAN.md (reactive sidebar tree, bus handlers, three-level hierarchy, selection state)
 Resume file: None
