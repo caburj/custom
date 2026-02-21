@@ -16,13 +16,16 @@
         <div class="ai-debug-main">
 
             <!-- Sidebar -->
-            <aside class="ai-debug-sidebar" t-ref="sidebar">
+            <aside class="ai-debug-sidebar">
 
-                <!-- Traces header bar with clear button -->
+                <!-- Traces header bar with clear button — stays pinned -->
                 <div class="ai-tree-header">
                     <span>Traces</span>
                     <button class="ai-tree-clear" t-on-click="clearAll" title="Clear all traces">&#x1F5D1;</button>
                 </div>
+
+                <!-- Scrollable tree content area — t-ref here so scrollIntoView targets the right container -->
+                <div class="ai-tree-content" t-ref="sidebar">
 
                 <!-- Empty state — only when no traces -->
                 <div t-if="traces.size === 0" class="ai-debug-sidebar-empty">
@@ -73,6 +76,13 @@
                                 <span class="ai-tree-label"
                                       t-on-click="() => this.selectItem(iterationId, 'iteration')">
                                     Iteration <t t-esc="iteration.iteration_index"/>
+                                    <t t-set="duration" t-value="this.getIterationDuration(trace, iterationId)"/>
+                                    <t t-if="duration">
+                                        <span class="ai-tree-label-dim"> &#xB7; <t t-esc="duration"/></span>
+                                    </t>
+                                    <t t-elif="trace.status === 'running' and iterationId === [...trace.iterations.keys()].pop()">
+                                        <span class="ai-tree-label-dim"> &#xB7; <span class="ai-debug-pulse-dot tiny"/></span>
+                                    </t>
                                     <t t-if="iteration.has_error"><span class="ai-tree-label-error"> &#xB7; error</span></t>
                                 </span>
                             </div>
@@ -101,6 +111,8 @@
                     </t>
 
                 </t>
+
+                </div> <!-- end .ai-tree-content -->
 
             </aside>
 

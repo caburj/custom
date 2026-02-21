@@ -238,6 +238,42 @@ export class AiDebugApp extends Component {
     }
 
     // ----------------------------------------------------------------
+    // Iteration duration helpers
+    // ----------------------------------------------------------------
+
+    getIterationDuration(trace, iterationId) {
+        const iterationKeys = [...trace.iterations.keys()];
+        const idx = iterationKeys.indexOf(iterationId);
+        const iteration = trace.iterations.get(iterationId);
+        if (!iteration) return null;
+
+        // Find next iteration (in insertion order) to compute delta
+        const nextKey = iterationKeys[idx + 1];
+        if (nextKey) {
+            const nextIteration = trace.iterations.get(nextKey);
+            const delta = nextIteration.receivedAt - iteration.receivedAt;
+            return this._formatDuration(delta);
+        }
+
+        // Last iteration: if loop is complete, use loop end time
+        if (trace.ended_at) {
+            const delta = trace.ended_at - iteration.receivedAt;
+            return this._formatDuration(delta);
+        }
+
+        // Still running — no duration yet
+        return null;
+    }
+
+    _formatDuration(ms) {
+        if (ms < 1000) return `${Math.round(ms)}ms`;
+        if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+        const mins = Math.floor(ms / 60000);
+        const secs = Math.round((ms % 60000) / 1000);
+        return `${mins}m ${secs}s`;
+    }
+
+    // ----------------------------------------------------------------
     // Status display helpers
     // ----------------------------------------------------------------
 
