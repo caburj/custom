@@ -25,7 +25,7 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
 - [x] **Phase 4: Infrastructure** - Delete v1.0 DB models and scaffold the standalone OWL app at `/ai-debug` (completed 2026-02-21)
 - [x] **Phase 5: Bus Instrumentation** - Rewrite instrumentation to emit full payloads over bus.bus with separate cursors and UUID keys (completed 2026-02-21)
 - [x] **Phase 6: Sidebar Tree** - Implement the 3-level reactive sidebar (Loop > Iteration > Tool Call) with selection state (UAT gap closure in progress) (completed 2026-02-21)
-- [ ] **Phase 7: Detail Panel** - Wire the type-aware detail panel and complete session behavior
+- [x] **Phase 7: Detail Panel** - Wire the type-aware detail panel and complete session behavior (completed 2026-02-21)
 
 ## Phase Details
 
@@ -81,7 +81,7 @@ Plans:
   2. Selecting an iteration shows messages sent, raw LLM response, and state diff in the detail panel
   3. Selecting a tool call shows its arguments, result, and state diff in the detail panel
   4. Refreshing the browser clears all trace data and the app displays "Listening for agentic loops..." with no traces shown
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [ ] 07-01-PLAN.md — Data layer (full payload storage, auto-select, getter methods) + shared utility components (JsonTree, TextPopupDialog, StateDiff)
 - [ ] 07-02-PLAN.md — Three detail view components (LoopDetail, IterationDetail, ToolCallDetail) + main template wiring + SCSS styles
@@ -98,4 +98,4 @@ Plans:
 | 4. Infrastructure | 2/2 | Complete    | 2026-02-21 | - |
 | 5. Bus Instrumentation | 1/1 | Complete   | 2026-02-21 | - |
 | 6. Sidebar Tree | 5/5 | Complete   | 2026-02-21 | - |
-| 7. Detail Panel | 1/2 | In Progress|  | - |
+| 7. Detail Panel | 1/2 | Complete    | 2026-02-21 | - |
