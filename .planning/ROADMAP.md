@@ -22,7 +22,7 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
 
 **Milestone Goal:** Replace the v1.0 backend-views-plus-panel architecture with a pure live tracer — a standalone OWL app at `/ai-debug` with a sidebar/detail layout, no database models, full payloads streamed over bus.bus.
 
-- [ ] **Phase 4: Infrastructure** - Delete v1.0 DB models and scaffold the standalone OWL app at `/ai-debug`
+- [x] **Phase 4: Infrastructure** - Delete v1.0 DB models and scaffold the standalone OWL app at `/ai-debug` (completed 2026-02-21)
 - [ ] **Phase 5: Bus Instrumentation** - Rewrite instrumentation to emit full payloads over bus.bus with separate cursors and UUID keys
 - [ ] **Phase 6: Sidebar Tree** - Implement the 3-level reactive sidebar (Loop > Iteration > Tool Call) with selection state
 - [ ] **Phase 7: Detail Panel** - Wire the type-aware detail panel and complete session behavior
@@ -37,7 +37,7 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
   1. Navigating to `/ai-debug` loads a standalone page (no Odoo navbar) for any internal user
   2. The browser console shows bus_service connected and receiving on the `ai_debug:*` channel
   3. No v1.0 backend view, menu, or ORM model files remain in the codebase
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [ ] 04-01-PLAN.md — Delete v1.0 backend architecture and rewrite manifest for v1.1
 - [ ] 04-02-PLAN.md — Scaffold standalone OWL app at /ai-debug with bus_service connection
@@ -84,7 +84,7 @@ Plans:
 | 1. Data Models and Instrumentation | v1.0 | 2/2 | Complete | 2026-02-20 |
 | 2. Backend Views | v1.0 | 1/1 | Complete | 2026-02-20 |
 | 3. Live Panel and Polish | v1.0 | 2/2 | Complete | 2026-02-20 |
-| 4. Infrastructure | 1/2 | In Progress|  | - |
+| 4. Infrastructure | 2/2 | Complete   | 2026-02-21 | - |
 | 5. Bus Instrumentation | v1.1 | 0/? | Not started | - |
 | 6. Sidebar Tree | v1.1 | 0/? | Not started | - |
 | 7. Detail Panel | v1.1 | 0/? | Not started | - |

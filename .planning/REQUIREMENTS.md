@@ -9,9 +9,9 @@ Requirements for the Live Tracer Standalone App milestone. Each maps to roadmap 
 
 ### Standalone App Infrastructure
 
-- [ ] **INFRA-01**: User can access the live tracer at `/ai-debug` as a standalone OWL app (no Odoo navbar/chrome)
-- [ ] **INFRA-02**: Any internal user (`base.group_user`) can access the app
-- [ ] **INFRA-03**: App boots with full Odoo service registry (bus_service, session, etc.)
+- [x] **INFRA-01**: User can access the live tracer at `/ai-debug` as a standalone OWL app (no Odoo navbar/chrome)
+- [x] **INFRA-02**: Any internal user (`base.group_user`) can access the app
+- [x] **INFRA-03**: App boots with full Odoo service registry (bus_service, session, etc.)
 
 ### Cleanup
 
@@ -83,9 +83,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INFRA-01 | Phase 4 | Pending |
-| INFRA-02 | Phase 4 | Pending |
-| INFRA-03 | Phase 4 | Pending |
+| INFRA-01 | Phase 4 | Complete |
+| INFRA-02 | Phase 4 | Complete |
+| INFRA-03 | Phase 4 | Complete |
 | MIGR-02 | Phase 4 | Complete |
 | BUS-01 | Phase 5 | Pending |
 | BUS-02 | Phase 5 | Pending |
