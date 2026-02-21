@@ -51,7 +51,9 @@ Plans:
   2. Each iteration produces an `ai_debug/iteration` event carrying messages_sent and raw_response while the loop is still running (not batched at request end)
   3. Each tool call produces an `ai_debug/tool_call` event with args, result, and state snapshots
   4. All trace, iteration, and tool call identifiers in bus payloads are UUIDs (no integer autoincrement IDs)
-**Plans**: TBD
+**Plans:** 1 plan
+Plans:
+- [ ] 05-01-PLAN.md — Instrument ai.session agentic loop with four bus event types and UUID identifiers
 
 ### Phase 6: Sidebar Tree
 **Goal**: A working sidebar that populates in real time as bus events arrive, with Loop > Iteration > Tool Call hierarchy, stable selection under concurrent updates, and multiple loops shown as siblings
@@ -85,6 +87,6 @@ Plans:
 | 2. Backend Views | v1.0 | 1/1 | Complete | 2026-02-20 |
 | 3. Live Panel and Polish | v1.0 | 2/2 | Complete | 2026-02-20 |
 | 4. Infrastructure | 2/2 | Complete    | 2026-02-21 | - |
-| 5. Bus Instrumentation | v1.1 | 0/? | Not started | - |
+| 5. Bus Instrumentation | v1.1 | 0/1 | Not started | - |
 | 6. Sidebar Tree | v1.1 | 0/? | Not started | - |
 | 7. Detail Panel | v1.1 | 0/? | Not started | - |
