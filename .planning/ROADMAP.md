@@ -37,7 +37,7 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
   1. Navigating to `/ai-debug` loads a standalone page (no Odoo navbar) for any internal user
   2. The browser console shows bus_service connected and receiving on the `ai_debug:*` channel
   3. No v1.0 backend view, menu, or ORM model files remain in the codebase
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 Plans:
 - [ ] 04-01-PLAN.md — Delete v1.0 backend architecture and rewrite manifest for v1.1
 - [ ] 04-02-PLAN.md — Scaffold standalone OWL app at /ai-debug with bus_service connection
@@ -84,7 +84,7 @@ Plans:
 | 1. Data Models and Instrumentation | v1.0 | 2/2 | Complete | 2026-02-20 |
 | 2. Backend Views | v1.0 | 1/1 | Complete | 2026-02-20 |
 | 3. Live Panel and Polish | v1.0 | 2/2 | Complete | 2026-02-20 |
-| 4. Infrastructure | v1.1 | 0/2 | Planning complete | - |
+| 4. Infrastructure | 1/2 | In Progress|  | - |
 | 5. Bus Instrumentation | v1.1 | 0/? | Not started | - |
 | 6. Sidebar Tree | v1.1 | 0/? | Not started | - |
 | 7. Detail Panel | v1.1 | 0/? | Not started | - |

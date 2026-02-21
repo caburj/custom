@@ -13,10 +13,9 @@ Requirements for the Live Tracer Standalone App milestone. Each maps to roadmap 
 - [ ] **INFRA-02**: Any internal user (`base.group_user`) can access the app
 - [ ] **INFRA-03**: App boots with full Odoo service registry (bus_service, session, etc.)
 
-### DB Migration / Cleanup
+### Cleanup
 
-- [ ] **MIGR-01**: v1.0 database tables (ai_debug_trace, ai_debug_iteration, ai_debug_tool_call) are dropped via pre-migrate script
-- [ ] **MIGR-02**: All v1.0 backend views, menus, security CSV, and ORM model files are deleted
+- [x] **MIGR-02**: All v1.0 backend views, menus, security CSV, and ORM model files are deleted
 
 ### Bus Instrumentation
 
@@ -71,6 +70,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | Feature | Reason |
 |---------|--------|
 | Database persistence | v1.1 is ephemeral by design — developer tool, session-scoped |
+| DB migration script | Fresh DB assumed — no pre-migrate needed for table cleanup |
 | Backend list/form views | Replaced by standalone app |
 | Subagent nesting implementation | Anticipated in data design, deferred until upstream `ai` module supports it |
 | Keyboard navigation in sidebar | P2 polish, not blocking for v1.1 |
@@ -86,8 +86,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INFRA-01 | Phase 4 | Pending |
 | INFRA-02 | Phase 4 | Pending |
 | INFRA-03 | Phase 4 | Pending |
-| MIGR-01 | Phase 4 | Pending |
-| MIGR-02 | Phase 4 | Pending |
+| MIGR-02 | Phase 4 | Complete |
 | BUS-01 | Phase 5 | Pending |
 | BUS-02 | Phase 5 | Pending |
 | BUS-03 | Phase 5 | Pending |
@@ -106,8 +105,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SESS-03 | Phase 7 | Pending |
 
 **Coverage:**
-- v1.1 requirements: 21 total
-- Mapped to phases: 21
+- v1.1 requirements: 20 total
+- Mapped to phases: 20
 - Unmapped: 0
 
 ---

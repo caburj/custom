@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 
 Milestone: v1.1 Live Tracer Standalone App
 Phase: 4 of 7 (Infrastructure)
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-02-20 — v1.1 roadmap created (Phases 4-7)
+Plan: 1 of ? in current phase
+Status: In progress
+Last activity: 2026-02-21 — Phase 4 Plan 01 complete (v1.0 cleanup, v1.1 manifest)
 
-Progress: [░░░░░░░░░░] 0% (v1.1)
+Progress: [░░░░░░░░░░] 5% (v1.1)
 
 ## Accumulated Context
 
@@ -28,6 +28,8 @@ Recent decisions affecting current work:
 - [v1.1]: Full bus.bus payloads — all display data must arrive in bus events (no lazy ORM reads)
 - [v1.1]: Standalone OWL app (POS self-order pattern) — mountComponent from @web/env, own asset bundle
 - [v1.1]: UUID keys for all identifiers — no DB autoincrement available
+- [04-01]: ai_debug.assets bundle uses ('include', 'web.assets_backend') first so standalone OWL app loads with full Odoo backend environment
+- [04-01]: debug_menu_button.js registered in web.assets_backend (not custom bundle) so it loads every backend session
 
 ### Pending Todos
 
@@ -40,6 +42,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-20
-Stopped at: Roadmap created for v1.1 (Phases 4-7); ready to plan Phase 4
+Last session: 2026-02-21
+Stopped at: Completed 04-infrastructure/04-01-PLAN.md (v1.0 cleanup, v1.1 manifest rewrite)
 Resume file: None
