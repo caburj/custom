@@ -13,7 +13,7 @@ Milestone: v1.1 Live Tracer Standalone App
 Phase: 7 of 7 (Detail Panel)
 Plan: 2 of 2 in current phase (complete)
 Status: Complete
-Last activity: 2026-02-21 - Completed quick task 8: fix json tree compounding indentation
+Last activity: 2026-02-21 - Completed quick task 9: fix TextPopupDialog not opening in standalone app
 
 Progress: [█████░░░░░] 50% (v1.1)
 
@@ -70,9 +70,10 @@ None.
 |---|-------------|------|--------|-----------|
 | 7 | fix the cosmetic gaps | 2026-02-21 | 4e321a3 | [7-fix-the-cosmetic-gaps](./quick/7-fix-the-cosmetic-gaps/) |
 | 8 | fix json tree compounding indentation | 2026-02-21 | 9efe0f2 | [8-fix-json-tree-compounding-indentation](./quick/8-fix-json-tree-compounding-indentation/) |
+| 9 | fix TextPopupDialog not opening in standalone app | 2026-02-21 | b74eeba | [9-fix-textpopupdialog-not-opening-in-stand](./quick/9-fix-textpopupdialog-not-opening-in-stand/) |
 
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed quick-7 (notebook tab dark theme fix + JSON tree indentation reduction)
+Stopped at: Completed quick-9 (add MainComponentsContainer for dialog overlay support)
 Resume file: None
