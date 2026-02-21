@@ -11,9 +11,9 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 
 Milestone: v1.1 Live Tracer Standalone App
 Phase: 7 of 7 (Detail Panel)
-Plan: 1 of 1 in current phase (complete)
-Status: In progress
-Last activity: 2026-02-21 — Phase 7 Plan 01 complete (extend bus handlers with full payload + auto-select + getters; create JsonTree, TextPopupDialog, StateDiff utility components)
+Plan: 2 of 2 in current phase (complete)
+Status: Complete
+Last activity: 2026-02-21 — Phase 7 Plan 02 complete (LoopDetail, IterationDetail, ToolCallDetail components + app.xml routing + full SCSS — v1.1 detail panel done)
 
 Progress: [█████░░░░░] 50% (v1.1)
 
@@ -51,6 +51,9 @@ Recent decisions affecting current work:
 - [07-01]: result field in _onToolCall stored without fallback (payload.result directly) — may legitimately be null, false, 0, or empty string; || {} fallback would obscure meaningful falsy results
 - [07-01]: JsonTree defaults to depth 0 auto-expanded (expanded: props.depth < 1) — top-level keys visible, nested objects collapsed; matches DevTools default behavior
 - [07-01]: Prism.highlightElement over Prism.highlight + innerHTML — set textContent first then highlightElement for safe, simpler DOM update
+- [Phase 07-detail-panel]: try/catch around useService('dialog') — standalone app context may not have dialog service; null fallback disables popup gracefully rather than crashing
+- [Phase 07-detail-panel]: resultIsObject getter in tc_detail.js — moves typeof check out of OWL template to avoid 'and' vs && issues in XML expressions
+- [Phase 07-detail-panel]: ragContextMessages returns null before first iteration arrives — template differentiates waiting vs no RAG found states
 
 ### Pending Todos
 
@@ -64,5 +67,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 07-detail-panel/07-01-PLAN.md (bus handler payload extension + auto-select + shared utility components)
+Stopped at: Completed 07-detail-panel/07-02-PLAN.md (detail view components + wiring + SCSS — Phase 7 complete)
 Resume file: None

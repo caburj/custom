@@ -35,9 +35,9 @@ Requirements for the Live Tracer Standalone App milestone. Each maps to roadmap 
 
 ### Detail Panel
 
-- [ ] **DETL-01**: Selecting a loop shows system prompt, RAG context, and tools definition
-- [ ] **DETL-02**: Selecting an iteration shows messages sent, raw response, state diff, and final message (if present)
-- [ ] **DETL-03**: Selecting a tool call shows arguments, result, state diff, and confirmation info
+- [x] **DETL-01**: Selecting a loop shows system prompt, RAG context, and tools definition
+- [x] **DETL-02**: Selecting an iteration shows messages sent, raw response, state diff, and final message (if present)
+- [x] **DETL-03**: Selecting a tool call shows arguments, result, state diff, and confirmation info
 
 ### Session Behavior
 
@@ -97,9 +97,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SIDE-03 | Phase 6 | Complete |
 | SIDE-04 | Phase 6 | Complete |
 | SIDE-05 | Phase 6 | Complete |
-| DETL-01 | Phase 7 | Pending |
-| DETL-02 | Phase 7 | Pending |
-| DETL-03 | Phase 7 | Pending |
+| DETL-01 | Phase 7 | Complete |
+| DETL-02 | Phase 7 | Complete |
+| DETL-03 | Phase 7 | Complete |
 | SESS-01 | Phase 7 | Complete |
 | SESS-02 | Phase 7 | Complete |
 | SESS-03 | Phase 7 | Complete |
