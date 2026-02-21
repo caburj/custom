@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+<t t-name="ai_debug.StateDiff">
+    <!-- No state data at all -->
+    <div t-if="!hasDiff" class="ai-diff-empty">
+        <span>No state data available.</span>
+    </div>
+
+    <!-- Has state but no changes — show snapshot only -->
+    <t t-elif="!hasChanges">
+        <div class="ai-diff-no-changes">
+            <span class="ai-diff-no-changes-label">No state changes detected. Full state snapshot:</span>
+            <pre class="ai-diff-snapshot" t-esc="formatValue(props.after)"/>
+        </div>
+    </t>
+
+    <!-- Side-by-side diff -->
+    <t t-else="">
+        <div class="ai-diff-grid">
+            <div class="ai-diff-header">Before</div>
+            <div class="ai-diff-header">After</div>
+            <t t-foreach="diffRows" t-as="row" t-key="row.key">
+                <div class="ai-diff-cell" t-att-class="'ai-diff-' + row.type">
+                    <span class="ai-diff-key" t-esc="row.key"/>: <t t-esc="formatValue(row.before)"/>
+                </div>
+                <div class="ai-diff-cell" t-att-class="'ai-diff-' + row.type">
+                    <span class="ai-diff-key" t-esc="row.key"/>: <t t-esc="formatValue(row.after)"/>
+                </div>
+            </t>
+        </div>
+    </t>
+</t>
+
+</templates>

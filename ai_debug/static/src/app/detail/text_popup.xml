@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+<t t-name="ai_debug.TextPopupDialog">
+    <Dialog title="props.title" size="'xl'">
+        <pre class="ai-popup-content"><code t-ref="codeEl" t-attf-class="language-{{props.language or 'json'}}"/></pre>
+    </Dialog>
+</t>
+
+</templates>
