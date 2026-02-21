@@ -3,7 +3,7 @@ status: diagnosed
 phase: 06-sidebar-tree
 source: [06-01-SUMMARY.md, 06-02-SUMMARY.md, 06-03-SUMMARY.md]
 started: 2026-02-21T19:00:00Z
-updated: 2026-02-21T19:20:00Z
+updated: 2026-02-22T00:00:00Z
 ---
 
 ## Current Test
@@ -54,9 +54,7 @@ result: pass
 
 ### 11. Pinned Traces Header
 expected: When the tree has many entries and you scroll down through them, the "Traces" header at the top stays pinned/fixed. Only the tree content scrolls beneath it.
-result: issue
-reported: "I'm unable to scroll"
-severity: major
+result: pass (re-verified after 06-04 fix)
 
 ### 12. Stable Selection Under Updates
 expected: Select a tool call row. While it's selected, trigger new bus events (new iterations arriving). The selection stays on the same item — it does not jump or get lost when new data arrives.
@@ -65,23 +63,29 @@ result: pass
 ## Summary
 
 total: 12
-passed: 11
-issues: 1
+passed: 12
+issues: 0
 pending: 0
 skipped: 0
 
 ## Gaps
 
 - truth: "When the tree has many entries and you scroll down through them, the Traces header stays pinned and only tree content scrolls beneath it"
-  status: failed
+  status: resolved
   reason: "User reported: I'm unable to scroll"
   severity: major
   test: 11
-  root_cause: ".ai-tree-content has display:flex which makes it expand to fit all children instead of overflowing, plus missing min-height:0 on the flex item prevents shrinking below content size — classic flex overflow trap"
+  resolution: "Fixed in 06-04 (commit 3e4972c) — removed flex column, added min-height:0"
+
+- truth: "Newest loops appear at the top of the sidebar tree (reverse chronological order)"
+  status: failed
+  reason: "User reported: I'd like the latest loop to be at the top"
+  severity: major
+  test: user-requested
+  root_cause: "app.xml line 37 uses [...traces.keys()] which iterates in insertion order (chronological). Iterations already use .reverse() on line 64 but traces do not."
   artifacts:
-    - path: "ai_debug/static/src/app/app.scss"
-      issue: ".ai-tree-content has display:flex;flex-direction:column (unnecessary, defeats overflow) and missing min-height:0"
+    - path: "ai_debug/static/src/app/app.xml"
+      issue: "Line 37: [...traces.keys()] renders oldest-first; needs .reverse() like iterations on line 64"
   missing:
-    - "Remove display:flex and flex-direction:column from .ai-tree-content"
-    - "Add min-height:0 to .ai-tree-content so flex item can shrink below content size"
-  debug_session: ".planning/debug/sidebar-scroll-broken.md"
+    - "Add .reverse() to [...traces.keys()] on line 37 of app.xml"
+  debug_session: ""
