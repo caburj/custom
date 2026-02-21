@@ -1,5 +1,5 @@
 ---
-status: complete
+status: diagnosed
 phase: 06-sidebar-tree
 source: [06-04-SUMMARY.md, 06-05-SUMMARY.md, regression from 06-UAT.md]
 started: 2026-02-21T20:00:00Z
@@ -57,9 +57,13 @@ skipped: 0
 ## Gaps
 
 - truth: "Clear all traces or open fresh debugger — sidebar shows empty state message/placeholder with proper centering"
-  status: failed
+  status: fixed
   reason: "User reported: broken layout"
   severity: blocker
   test: 5
-  artifacts: []
-  missing: []
+  root_cause: ".ai-debug-sidebar-empty uses flex:1 to fill parent, but parent .ai-tree-content is now block layout (not flex) after 06-04 scroll fix — flex:1 is meaningless in block context, so empty state collapses to intrinsic height"
+  artifacts:
+    - path: "ai_debug/static/src/app/app.scss"
+      issue: ".ai-debug-sidebar-empty had flex:1 which requires flex parent; parent is block"
+  missing:
+    - "Replace flex:1 with height:100% on .ai-debug-sidebar-empty — works in block parent, resolves against overflow container size"
