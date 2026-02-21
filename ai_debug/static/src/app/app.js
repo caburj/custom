@@ -1,6 +1,7 @@
 /** @odoo-module **/
 import { Component, useState, reactive, onMounted, onWillUnmount, onPatched, useRef } from "@odoo/owl";
 import { useService } from "@web/core/utils/hooks";
+import { MainComponentsContainer } from "@web/core/main_components_container";
 import { LoopDetail } from "./detail/loop_detail";
 import { IterationDetail } from "./detail/iter_detail";
 import { ToolCallDetail } from "./detail/tc_detail";
@@ -8,7 +9,7 @@ import { ToolCallDetail } from "./detail/tc_detail";
 export class AiDebugApp extends Component {
     static template = "ai_debug.App";
     static props = {};
-    static components = { LoopDetail, IterationDetail, ToolCallDetail };
+    static components = { LoopDetail, IterationDetail, ToolCallDetail, MainComponentsContainer };
 
     setup() {
         this.busService = useService("bus_service");

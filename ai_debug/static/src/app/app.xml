@@ -145,6 +145,7 @@
             </main>
 
         </div>
+        <MainComponentsContainer/>
     </div>
 </t>
 
