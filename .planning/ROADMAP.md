@@ -24,7 +24,7 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
 
 - [x] **Phase 4: Infrastructure** - Delete v1.0 DB models and scaffold the standalone OWL app at `/ai-debug` (completed 2026-02-21)
 - [x] **Phase 5: Bus Instrumentation** - Rewrite instrumentation to emit full payloads over bus.bus with separate cursors and UUID keys (completed 2026-02-21)
-- [ ] **Phase 6: Sidebar Tree** - Implement the 3-level reactive sidebar (Loop > Iteration > Tool Call) with selection state (UAT gap closure in progress)
+- [x] **Phase 6: Sidebar Tree** - Implement the 3-level reactive sidebar (Loop > Iteration > Tool Call) with selection state (UAT gap closure in progress) (completed 2026-02-21)
 - [ ] **Phase 7: Detail Panel** - Wire the type-aware detail panel and complete session behavior
 
 ## Phase Details
@@ -64,7 +64,7 @@ Plans:
   2. Expanding a loop entry reveals its iterations in reverse chronological order (latest on top); expanding an iteration reveals its tool calls
   3. Clicking any sidebar item highlights it and the detail panel area reflects the selection (even if detail content is a placeholder)
   4. Triggering a second agentic loop while viewing iteration #1 of the first loop leaves the current selection and detail view unchanged
-**Plans:** 3 plans (2 complete + 1 gap closure)
+**Plans:** 3/3 plans complete
 Plans:
 - [x] 06-01-PLAN.md — Core sidebar tree with reactive data model, bus handlers, selection, and tree rendering
 - [x] 06-02-PLAN.md — Real-time visual polish: auto-scroll, flash, animations, ancestor tint, duration
@@ -92,5 +92,5 @@ Plans:
 | 3. Live Panel and Polish | v1.0 | 2/2 | Complete | 2026-02-20 |
 | 4. Infrastructure | 2/2 | Complete    | 2026-02-21 | - |
 | 5. Bus Instrumentation | 1/1 | Complete   | 2026-02-21 | - |
-| 6. Sidebar Tree | 2/3 | Gap closure | 2026-02-21 | - |
+| 6. Sidebar Tree | 3/3 | Complete   | 2026-02-21 | - |
 | 7. Detail Panel | v1.1 | 0/? | Not started | - |

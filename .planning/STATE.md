@@ -13,7 +13,7 @@ Milestone: v1.1 Live Tracer Standalone App
 Phase: 7 of 7 (Detail Panel)
 Plan: 0 of 1 in current phase (ready to start)
 Status: In progress
-Last activity: 2026-02-21 — Phase 6 Plan 02 complete (iteration duration, slide-in animation, pinned header, running iteration indicator)
+Last activity: 2026-02-21 — Phase 6 Plan 03 complete (reactive->useState gap closure fix, unblocks all 11 UAT sidebar tests)
 
 Progress: [████░░░░░░] 40% (v1.1)
 
@@ -37,12 +37,13 @@ Recent decisions affecting current work:
 - [05-01]: _handle_tool_calls uses batch-level state granularity (state before/after entire tool batch) — per-tool Option C deferred to v1.2
 - [05-01]: _debug_ctx mutable dict propagated via self.with_context() so _handle_tool_calls can reference trace_id and iteration_id
 - [05-01]: Failed iterations emit an iteration event with error field before loop_end so errors appear in the sidebar tree
-- [06-01]: reactive(new Map()) for trace store — NOT inside useState; nested reactive Maps for iterations and toolCalls
+- [06-01 REVERSED by 06-03]: this.traces uses useState(new Map()) — reactive(new Map()) without callback was wrong; nested reactive Maps for iterations and toolCalls remain
 - [06-01]: Bus handlers write only to trace Maps, never to state.selectedId — SIDE-05 stable selection
 - [06-01]: toggleExpand unified signature: (id, 'trace') for loops or (traceId, iterationId) for iterations
 - [06-01]: Flash animation on new loop arrivals only; iterations/tool calls appear without flash to avoid visual noise
 - [Phase 06]: t-ref moved from aside to .ai-tree-content so scrollIntoView targets scrollable area, pinning the header
 - [Phase 06]: animation:none on .selected rows suppresses slide-in re-animation on each reactive patch
+- [Phase 06-sidebar-tree]: Reversed [06-01] reactive(new Map()) decision: this.traces now uses useState(new Map()) — reactive without callback uses NO_CALLBACK sentinel blocking OWL render observation
 
 ### Pending Todos
 
@@ -56,5 +57,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 06-sidebar-tree/06-02-PLAN.md (iteration duration, slide-in animation, pinned header, running iteration indicator)
+Stopped at: Completed 06-sidebar-tree/06-03-PLAN.md (reactive->useState fix for trace store)
 Resume file: None
