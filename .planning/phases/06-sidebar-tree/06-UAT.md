@@ -1,9 +1,9 @@
 ---
-status: complete
+status: diagnosed
 phase: 06-sidebar-tree
 source: [06-01-SUMMARY.md, 06-02-SUMMARY.md, 06-03-SUMMARY.md]
 started: 2026-02-21T19:00:00Z
-updated: 2026-02-21T19:15:00Z
+updated: 2026-02-21T19:20:00Z
 ---
 
 ## Current Test
@@ -77,7 +77,11 @@ skipped: 0
   reason: "User reported: I'm unable to scroll"
   severity: major
   test: 11
-  root_cause: ""
-  artifacts: []
-  missing: []
-  debug_session: ""
+  root_cause: ".ai-tree-content has display:flex which makes it expand to fit all children instead of overflowing, plus missing min-height:0 on the flex item prevents shrinking below content size — classic flex overflow trap"
+  artifacts:
+    - path: "ai_debug/static/src/app/app.scss"
+      issue: ".ai-tree-content has display:flex;flex-direction:column (unnecessary, defeats overflow) and missing min-height:0"
+  missing:
+    - "Remove display:flex and flex-direction:column from .ai-tree-content"
+    - "Add min-height:0 to .ai-tree-content so flex item can shrink below content size"
+  debug_session: ".planning/debug/sidebar-scroll-broken.md"
