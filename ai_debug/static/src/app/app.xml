@@ -34,7 +34,7 @@
                 </div>
 
                 <!-- Tree entries — Loop > Iteration > Tool Call -->
-                <t t-foreach="[...traces.keys()]" t-as="traceId" t-key="traceId">
+                <t t-foreach="[...traces.keys()].reverse()" t-as="traceId" t-key="traceId">
                     <t t-set="trace" t-value="traces.get(traceId)"/>
 
                     <!-- Level 0: Loop entry -->
