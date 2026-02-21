@@ -32,7 +32,14 @@
                           onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
             </t>
             <t t-else="">
-                <pre class="ai-detail-text-block" t-esc="resultString"/>
+                <t t-if="resultIsLong">
+                    <div class="ai-detail-text-preview"
+                         t-on-click="() => this.openTextPopup('Result', this.resultString, 'markdown')"
+                         t-esc="resultString"/>
+                </t>
+                <t t-else="">
+                    <pre class="ai-detail-text-block" t-esc="resultString"/>
+                </t>
             </t>
         </div>
 

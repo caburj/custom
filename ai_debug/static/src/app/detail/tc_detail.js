@@ -43,4 +43,8 @@ export class ToolCallDetail extends Component {
         const result = this.props.toolCall.result;
         return result !== null && typeof result === "object";
     }
+
+    get resultIsLong() {
+        return !this.resultIsObject && this.resultString.length > 300;
+    }
 }
