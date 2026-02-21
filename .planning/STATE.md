@@ -13,7 +13,7 @@ Milestone: v1.1 Live Tracer Standalone App
 Phase: 7 of 7 (Detail Panel)
 Plan: 0 of 1 in current phase (ready to start)
 Status: In progress
-Last activity: 2026-02-21 — Phase 6 Plan 03 complete (reactive->useState gap closure fix, unblocks all 11 UAT sidebar tests)
+Last activity: 2026-02-21 — Phase 6 Plan 04 complete (flex overflow scroll fix — removes display:flex from .ai-tree-content, adds min-height:0; closes UAT Test 11)
 
 Progress: [████░░░░░░] 40% (v1.1)
 
@@ -44,6 +44,8 @@ Recent decisions affecting current work:
 - [Phase 06]: t-ref moved from aside to .ai-tree-content so scrollIntoView targets scrollable area, pinning the header
 - [Phase 06]: animation:none on .selected rows suppresses slide-in re-animation on each reactive patch
 - [Phase 06-sidebar-tree]: Reversed [06-01] reactive(new Map()) decision: this.traces now uses useState(new Map()) — reactive without callback uses NO_CALLBACK sentinel blocking OWL render observation
+- [Phase 06-sidebar-tree]: Remove display:flex;flex-direction:column from .ai-tree-content — flex column intrinsic sizing prevents overflow scroll; block layout is correct for list of rows
+- [Phase 06-sidebar-tree]: Add min-height:0 to .ai-tree-content — overrides default min-height:auto on flex items so overflow-y:auto actually triggers
 
 ### Pending Todos
 
@@ -57,5 +59,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 06-sidebar-tree/06-03-PLAN.md (reactive->useState fix for trace store)
+Stopped at: Completed 06-sidebar-tree/06-04-PLAN.md (flex overflow scroll fix for sidebar tree)
 Resume file: None
