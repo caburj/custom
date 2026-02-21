@@ -120,6 +120,12 @@ class AiSession(models.TransientModel):
             'state_snapshot': self._ai_debug_state_snapshot(tools_context),
         })
 
+        # Track termination state — finally block always emits loop_end.
+        # This handles the common case where _add_user_message returns early
+        # on final_message, abandoning the generator via GeneratorExit.
+        termination_reason = 'success'
+        termination_error = None
+
         try:
             for item in super()._run_agentic_loop(
                 model, instructions, messages, temperature, tools,
@@ -152,6 +158,7 @@ class AiSession(models.TransientModel):
         except UserError as e:
             # max_successive_calls UserError: "Number of successive API calls exceeded..."
             termination_reason = 'max_iterations' if 'successive' in str(e).lower() else 'error'
+            termination_error = str(e)
 
             # Emit a failed iteration event so it appears in the sidebar tree.
             # Per locked decision: LLM API failures emit an iteration event with error
@@ -163,25 +170,18 @@ class AiSession(models.TransientModel):
                 'iteration_index': iteration_count + 1,
                 'messages_sent': self._ai_debug_strip_binary(list(messages)),
                 'raw_response': None,
-                'error': str(e),
+                'error': termination_error,
                 'error_type': type(e).__name__,
                 'has_tool_calls': False,
                 'is_final': False,
             })
-
-            self._ai_debug_bus_send('loop_end', {
-                'type': 'loop_end',
-                'trace_id': trace_id,
-                'termination_reason': termination_reason,
-                'error': str(e),
-                'iteration_count': iteration_count,
-                'tool_call_count': _debug_ctx['tool_call_count'],
-                'duration_ms': int((time.monotonic() - started_at) * 1000),
-            })
             raise
 
         except Exception as e:
-            # Unexpected error — emit failed iteration then loop_end before re-raising
+            # Unexpected error — emit failed iteration before loop_end (via finally)
+            termination_reason = 'error'
+            termination_error = str(e)
+
             self._ai_debug_bus_send('iteration', {
                 'type': 'iteration',
                 'trace_id': trace_id,
@@ -189,33 +189,25 @@ class AiSession(models.TransientModel):
                 'iteration_index': iteration_count + 1,
                 'messages_sent': self._ai_debug_strip_binary(list(messages)),
                 'raw_response': None,
-                'error': str(e),
+                'error': termination_error,
                 'error_type': type(e).__name__,
                 'has_tool_calls': False,
                 'is_final': False,
             })
+            raise
 
+        finally:
+            # Always emit loop_end — handles normal completion, GeneratorExit
+            # (consumer abandoned generator), and exceptions (after re-raise).
             self._ai_debug_bus_send('loop_end', {
                 'type': 'loop_end',
                 'trace_id': trace_id,
-                'termination_reason': 'error',
-                'error': str(e),
+                'termination_reason': termination_reason,
+                'error': termination_error,
                 'iteration_count': iteration_count,
                 'tool_call_count': _debug_ctx['tool_call_count'],
                 'duration_ms': int((time.monotonic() - started_at) * 1000),
             })
-            raise
-
-        # Success path — generator exhausted normally
-        self._ai_debug_bus_send('loop_end', {
-            'type': 'loop_end',
-            'trace_id': trace_id,
-            'termination_reason': 'success',
-            'error': None,
-            'iteration_count': iteration_count,
-            'tool_call_count': _debug_ctx['tool_call_count'],
-            'duration_ms': int((time.monotonic() - started_at) * 1000),
-        })
 
     def _handle_tool_calls(self, tool_calls, tools_by_name, tools_context, record, confirmed_tool_id=None, refuse_all=False):
         """Override to emit tool_call bus events for each tool executed.
