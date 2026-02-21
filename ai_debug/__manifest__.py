@@ -1,22 +1,21 @@
 {
     'name': 'AI Debug',
-    'version': '1.0',
+    'version': '1.1',
     'category': 'Technical',
-    'summary': 'Instrument the AI agentic loop for full observability',
+    'summary': 'Standalone live tracer for the AI agentic loop',
     'depends': ['ai_app', 'bus'],
     'data': [
-        'security/ir.model.access.csv',
-        'views/debug_panel_action.xml',
-        'views/ai_debug_trace_views.xml',
-        'views/ai_debug_iteration_views.xml',
-        'views/ai_debug_tool_call_views.xml',
-        'views/menus.xml',
+        'views/ai_debug_index.xml',
     ],
     'assets': {
+        'ai_debug.assets': [
+            ('include', 'web.assets_backend'),
+            'ai_debug/static/src/app/**/*.scss',
+            'ai_debug/static/src/app/**/*.xml',
+            'ai_debug/static/src/app/**/*.js',
+        ],
         'web.assets_backend': [
-            'ai_debug/static/src/**/*.js',
-            'ai_debug/static/src/**/*.xml',
-            'ai_debug/static/src/**/*.scss',
+            'ai_debug/static/src/debug_menu_button.js',
         ],
     },
     'installable': True,
