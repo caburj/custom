@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.1 Phase 6 — Sidebar Tree
+**Current focus:** v1.1 Phase 7 — Detail Panel
 
 ## Current Position
 
 Milestone: v1.1 Live Tracer Standalone App
-Phase: 6 of 7 (Sidebar Tree)
-Plan: 1 of 1 in current phase (complete)
+Phase: 7 of 7 (Detail Panel)
+Plan: 0 of 1 in current phase (ready to start)
 Status: In progress
-Last activity: 2026-02-21 — Phase 6 Plan 01 complete (reactive sidebar tree with Loop > Iteration > Tool Call hierarchy)
+Last activity: 2026-02-21 — Phase 6 Plan 02 complete (iteration duration, slide-in animation, pinned header, running iteration indicator)
 
-Progress: [███░░░░░░░] 30% (v1.1)
+Progress: [████░░░░░░] 40% (v1.1)
 
 ## Accumulated Context
 
@@ -41,6 +41,8 @@ Recent decisions affecting current work:
 - [06-01]: Bus handlers write only to trace Maps, never to state.selectedId — SIDE-05 stable selection
 - [06-01]: toggleExpand unified signature: (id, 'trace') for loops or (traceId, iterationId) for iterations
 - [06-01]: Flash animation on new loop arrivals only; iterations/tool calls appear without flash to avoid visual noise
+- [Phase 06]: t-ref moved from aside to .ai-tree-content so scrollIntoView targets scrollable area, pinning the header
+- [Phase 06]: animation:none on .selected rows suppresses slide-in re-animation on each reactive patch
 
 ### Pending Todos
 
@@ -54,5 +56,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 06-sidebar-tree/06-01-PLAN.md (reactive sidebar tree, bus handlers, three-level hierarchy, selection state)
+Stopped at: Completed 06-sidebar-tree/06-02-PLAN.md (iteration duration, slide-in animation, pinned header, running iteration indicator)
 Resume file: None
