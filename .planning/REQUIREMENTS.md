@@ -19,11 +19,11 @@ Requirements for the Live Tracer Standalone App milestone. Each maps to roadmap 
 
 ### Bus Instrumentation
 
-- [ ] **BUS-01**: Instrumentation sends full iteration data (messages_sent, raw_response, state snapshots) over bus.bus
-- [ ] **BUS-02**: Instrumentation sends full tool call data (args, result, state snapshots) over bus.bus
-- [ ] **BUS-03**: Loop start event includes system prompt, RAG context, tools definition, agent name, and model name
-- [ ] **BUS-04**: All bus sends use separate cursors for real-time delivery (not batched at HTTP commit)
-- [ ] **BUS-05**: UUID keys replace DB autoincrement IDs for trace/iteration/tool_call identification
+- [x] **BUS-01**: Instrumentation sends full iteration data (messages_sent, raw_response, state snapshots) over bus.bus
+- [x] **BUS-02**: Instrumentation sends full tool call data (args, result, state snapshots) over bus.bus
+- [x] **BUS-03**: Loop start event includes system prompt, RAG context, tools definition, agent name, and model name
+- [x] **BUS-04**: All bus sends use separate cursors for real-time delivery (not batched at HTTP commit)
+- [x] **BUS-05**: UUID keys replace DB autoincrement IDs for trace/iteration/tool_call identification
 
 ### Sidebar Tree
 
@@ -87,11 +87,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INFRA-02 | Phase 4 | Complete |
 | INFRA-03 | Phase 4 | Complete |
 | MIGR-02 | Phase 4 | Complete |
-| BUS-01 | Phase 5 | Pending |
-| BUS-02 | Phase 5 | Pending |
-| BUS-03 | Phase 5 | Pending |
-| BUS-04 | Phase 5 | Pending |
-| BUS-05 | Phase 5 | Pending |
+| BUS-01 | Phase 5 | Complete |
+| BUS-02 | Phase 5 | Complete |
+| BUS-03 | Phase 5 | Complete |
+| BUS-04 | Phase 5 | Complete |
+| BUS-05 | Phase 5 | Complete |
 | SIDE-01 | Phase 6 | Pending |
 | SIDE-02 | Phase 6 | Pending |
 | SIDE-03 | Phase 6 | Pending |

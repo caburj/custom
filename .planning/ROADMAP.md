@@ -23,7 +23,7 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
 **Milestone Goal:** Replace the v1.0 backend-views-plus-panel architecture with a pure live tracer — a standalone OWL app at `/ai-debug` with a sidebar/detail layout, no database models, full payloads streamed over bus.bus.
 
 - [x] **Phase 4: Infrastructure** - Delete v1.0 DB models and scaffold the standalone OWL app at `/ai-debug` (completed 2026-02-21)
-- [ ] **Phase 5: Bus Instrumentation** - Rewrite instrumentation to emit full payloads over bus.bus with separate cursors and UUID keys
+- [x] **Phase 5: Bus Instrumentation** - Rewrite instrumentation to emit full payloads over bus.bus with separate cursors and UUID keys (completed 2026-02-21)
 - [ ] **Phase 6: Sidebar Tree** - Implement the 3-level reactive sidebar (Loop > Iteration > Tool Call) with selection state
 - [ ] **Phase 7: Detail Panel** - Wire the type-aware detail panel and complete session behavior
 
@@ -51,7 +51,7 @@ Plans:
   2. Each iteration produces an `ai_debug/iteration` event carrying messages_sent and raw_response while the loop is still running (not batched at request end)
   3. Each tool call produces an `ai_debug/tool_call` event with args, result, and state snapshots
   4. All trace, iteration, and tool call identifiers in bus payloads are UUIDs (no integer autoincrement IDs)
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 Plans:
 - [ ] 05-01-PLAN.md — Instrument ai.session agentic loop with four bus event types and UUID identifiers
 
@@ -87,6 +87,6 @@ Plans:
 | 2. Backend Views | v1.0 | 1/1 | Complete | 2026-02-20 |
 | 3. Live Panel and Polish | v1.0 | 2/2 | Complete | 2026-02-20 |
 | 4. Infrastructure | 2/2 | Complete    | 2026-02-21 | - |
-| 5. Bus Instrumentation | v1.1 | 0/1 | Not started | - |
+| 5. Bus Instrumentation | 1/1 | Complete   | 2026-02-21 | - |
 | 6. Sidebar Tree | v1.1 | 0/? | Not started | - |
 | 7. Detail Panel | v1.1 | 0/? | Not started | - |

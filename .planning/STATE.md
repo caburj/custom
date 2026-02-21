@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.1 Phase 4 — Infrastructure
+**Current focus:** v1.1 Phase 5 — Bus Instrumentation
 
 ## Current Position
 
 Milestone: v1.1 Live Tracer Standalone App
-Phase: 4 of 7 (Infrastructure)
-Plan: 2 of ? in current phase
+Phase: 5 of 7 (Bus Instrumentation)
+Plan: 1 of 1 in current phase (complete)
 Status: In progress
-Last activity: 2026-02-21 — Phase 4 Plan 02 complete (standalone OWL app shell, HTTP controller, bus subscription)
+Last activity: 2026-02-21 — Phase 5 Plan 01 complete (AiSession bus instrumentation, four event types)
 
-Progress: [░░░░░░░░░░] 5% (v1.1)
+Progress: [██░░░░░░░░] 20% (v1.1)
 
 ## Accumulated Context
 
@@ -33,6 +33,10 @@ Recent decisions affecting current work:
 - [04-02]: auth='user' on the route handles unauthenticated users automatically; is_user_internal() is the second gate for portal users
 - [04-02]: session_info() (not get_frontend_session_info) provides the full session needed by bus_service in standalone context
 - [04-02]: BUS:WORKER_STATE_UPDATED event tracked via addEventListener on bus_service EventTarget (not bus_service.subscribe)
+- [05-01]: messages_sent sends full accumulated conversation history per iteration (not deltas) for downstream simplicity
+- [05-01]: _handle_tool_calls uses batch-level state granularity (state before/after entire tool batch) — per-tool Option C deferred to v1.2
+- [05-01]: _debug_ctx mutable dict propagated via self.with_context() so _handle_tool_calls can reference trace_id and iteration_id
+- [05-01]: Failed iterations emit an iteration event with error field before loop_end so errors appear in the sidebar tree
 
 ### Pending Todos
 
@@ -46,5 +50,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 04-infrastructure/04-02-PLAN.md (standalone OWL app shell, HTTP controller, bus subscription)
+Stopped at: Completed 05-bus-instrumentation/05-01-PLAN.md (AiSession instrumentation, new_trace/iteration/tool_call/loop_end bus events)
 Resume file: None
