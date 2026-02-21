@@ -13,7 +13,7 @@ Milestone: v1.1 Live Tracer Standalone App
 Phase: 7 of 7 (Detail Panel)
 Plan: 2 of 2 in current phase (complete)
 Status: Complete
-Last activity: 2026-02-21 - Completed quick task 11: fix dialog title not legible (dark text on dark header)
+Last activity: 2026-02-21 - Completed quick task 12: fix tool result styling add truncation
 
 Progress: [█████░░░░░] 50% (v1.1)
 
@@ -73,9 +73,10 @@ None.
 | 9 | fix TextPopupDialog not opening in standalone app | 2026-02-21 | b74eeba | [9-fix-textpopupdialog-not-opening-in-stand](./quick/9-fix-textpopupdialog-not-opening-in-stand/) |
 | 10 | hide mail ChatHub/ChatBubble in standalone app | 2026-02-21 | 1fe2c3b | [10-hide-o-mail-chathub-chatbox-in-standalon](./quick/10-hide-o-mail-chathub-chatbox-in-standalon/) |
 | 11 | fix dialog title not legible (dark text on dark header) | 2026-02-21 | 02ed852 | [11-fix-dialog-title-not-legible-dark-text-o](./quick/11-fix-dialog-title-not-legible-dark-text-o/) |
+| 12 | fix tool result styling add truncation | 2026-02-21 | c768d6f | [12-fix-tool-result-styling-add-truncation-a](./quick/12-fix-tool-result-styling-add-truncation-a/) |
 
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed quick-11 (fix dialog title not legible on dark header)
+Stopped at: Completed quick-12 (fix tool result styling add truncation)
 Resume file: None
