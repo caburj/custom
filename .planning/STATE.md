@@ -13,7 +13,7 @@ Milestone: v1.1 Live Tracer Standalone App
 Phase: 7 of 7 (Detail Panel)
 Plan: 2 of 2 in current phase (complete)
 Status: Complete
-Last activity: 2026-02-21 - Completed quick task 10: hide mail ChatHub/ChatBubble in standalone app
+Last activity: 2026-02-21 - Completed quick task 11: fix dialog title not legible (dark text on dark header)
 
 Progress: [█████░░░░░] 50% (v1.1)
 
@@ -72,9 +72,10 @@ None.
 | 8 | fix json tree compounding indentation | 2026-02-21 | 9efe0f2 | [8-fix-json-tree-compounding-indentation](./quick/8-fix-json-tree-compounding-indentation/) |
 | 9 | fix TextPopupDialog not opening in standalone app | 2026-02-21 | b74eeba | [9-fix-textpopupdialog-not-opening-in-stand](./quick/9-fix-textpopupdialog-not-opening-in-stand/) |
 | 10 | hide mail ChatHub/ChatBubble in standalone app | 2026-02-21 | 1fe2c3b | [10-hide-o-mail-chathub-chatbox-in-standalon](./quick/10-hide-o-mail-chathub-chatbox-in-standalon/) |
+| 11 | fix dialog title not legible (dark text on dark header) | 2026-02-21 | 02ed852 | [11-fix-dialog-title-not-legible-dark-text-o](./quick/11-fix-dialog-title-not-legible-dark-text-o/) |
 
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed quick-10 (hide mail ChatHub/ChatBubble in standalone app)
+Stopped at: Completed quick-11 (fix dialog title not legible on dark header)
 Resume file: None
