@@ -2,7 +2,7 @@
 <templates xml:space="preserve">
 
 <t t-name="ai_debug.JsonTree">
-    <div class="ai-json-node" t-att-style="'padding-left:' + (props.depth * 16) + 'px'">
+    <div class="ai-json-node" t-att-style="'padding-left:' + (props.depth * 10) + 'px'">
 
         <!-- Expandable node (object or array) -->
         <t t-if="isExpandable">
