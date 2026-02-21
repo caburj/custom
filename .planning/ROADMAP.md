@@ -84,7 +84,7 @@ Plans:
 | 1. Data Models and Instrumentation | v1.0 | 2/2 | Complete | 2026-02-20 |
 | 2. Backend Views | v1.0 | 1/1 | Complete | 2026-02-20 |
 | 3. Live Panel and Polish | v1.0 | 2/2 | Complete | 2026-02-20 |
-| 4. Infrastructure | 2/2 | Complete   | 2026-02-21 | - |
+| 4. Infrastructure | 2/2 | Complete    | 2026-02-21 | - |
 | 5. Bus Instrumentation | v1.1 | 0/? | Not started | - |
 | 6. Sidebar Tree | v1.1 | 0/? | Not started | - |
 | 7. Detail Panel | v1.1 | 0/? | Not started | - |
