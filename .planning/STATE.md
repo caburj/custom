@@ -13,7 +13,7 @@ Milestone: v1.1 Live Tracer Standalone App
 Phase: 7 of 7 (Detail Panel)
 Plan: 0 of 1 in current phase (ready to start)
 Status: In progress
-Last activity: 2026-02-21 — Phase 6 Plan 04 complete (flex overflow scroll fix — removes display:flex from .ai-tree-content, adds min-height:0; closes UAT Test 11)
+Last activity: 2026-02-21 — Phase 6 Plan 05 complete (reverse trace rendering order to newest-first — [...traces.keys()].reverse() on trace t-foreach; closes SIDE-01/SIDE-02)
 
 Progress: [████░░░░░░] 40% (v1.1)
 
@@ -46,6 +46,7 @@ Recent decisions affecting current work:
 - [Phase 06-sidebar-tree]: Reversed [06-01] reactive(new Map()) decision: this.traces now uses useState(new Map()) — reactive without callback uses NO_CALLBACK sentinel blocking OWL render observation
 - [Phase 06-sidebar-tree]: Remove display:flex;flex-direction:column from .ai-tree-content — flex column intrinsic sizing prevents overflow scroll; block layout is correct for list of rows
 - [Phase 06-sidebar-tree]: Add min-height:0 to .ai-tree-content — overrides default min-height:auto on flex items so overflow-y:auto actually triggers
+- [06-05]: [...traces.keys()].reverse() on trace t-foreach — extends existing iteration reverse ordering pattern to traces so newest loops appear at top of sidebar
 
 ### Pending Todos
 
@@ -59,5 +60,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 06-sidebar-tree/06-04-PLAN.md (flex overflow scroll fix for sidebar tree)
+Stopped at: Completed 06-sidebar-tree/06-05-PLAN.md (reverse trace rendering order to newest-first)
 Resume file: None
