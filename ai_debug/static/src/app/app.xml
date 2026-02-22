@@ -23,10 +23,22 @@
             <!-- Sidebar -->
             <aside class="ai-debug-sidebar">
 
-                <!-- Traces header bar with clear button — stays pinned -->
+                <!-- Traces header bar with select-all + action buttons — stays pinned -->
                 <div class="ai-tree-header">
-                    <span>Traces</span>
-                    <button class="ai-tree-clear" t-on-click="clearAll" title="Clear all traces">&#x1F5D1;</button>
+                    <div class="ai-tree-header-left">
+                        <input type="checkbox"
+                               class="ai-tree-select-all"
+                               t-ref="selectAll"
+                               t-att-checked="allChecked"
+                               t-on-change.stop="toggleSelectAll"/>
+                        <span>Traces</span>
+                    </div>
+                    <div class="ai-tree-header-actions">
+                        <button class="ai-tree-action-btn"
+                                t-att-disabled="state.checkedTraceIds.size === 0 or undefined"
+                                t-on-click="deleteCheckedTraces"
+                                title="Delete selected">&#x1F5D1;</button>
+                    </div>
                 </div>
 
                 <!-- Scrollable tree content area — t-ref here so scrollIntoView targets the right container -->
@@ -49,6 +61,10 @@
                              'ancestor': selectedTraceId === traceId and state.selectedId !== traceId
                          }"
                          t-att-data-node-id="traceId">
+                        <input type="checkbox"
+                               class="ai-tree-row-check"
+                               t-att-checked="state.checkedTraceIds.has(traceId)"
+                               t-on-change.stop="() => this.toggleTraceCheck(traceId)"/>
                         <span class="ai-tree-chevron"
                               t-att-class="{'expanded': trace.expanded}"
                               t-on-click.stop="() => this.toggleExpand(traceId, 'trace')">&#x203A;</span>
