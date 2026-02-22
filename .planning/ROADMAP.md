@@ -47,7 +47,9 @@ Full details: `.planning/milestones/v1.1-ROADMAP.md`
   2. Opening `/ai-debug` with the `color_scheme=light` cookie results in DevTools Network showing one CSS request from `ai_debug.assets` and no request for `ai_debug.assets_dark`
   3. The `ai_debug.assets_dark` bundle includes `web.dark_mode_variables` before `ai_debug.assets` — not `web.assets_backend` — so Odoo backend CSS is not double-compiled
   4. The rendered HTML source contains `color_scheme` in the template context (visible via page source inspection), confirming `webclient_rendering_context()` is called in the controller
-**Plans**: TBD
+**Plans:** 1 plan
+Plans:
+- [ ] 08-01-PLAN.md — Wire controller, manifest, and template for theme-aware CSS loading
 
 ### Phase 9: SCSS Migration and Dark Accents
 **Goal**: The app is visually consistent with the Odoo theme in both light and dark modes, with zero hardcoded Catppuccin colors remaining
@@ -72,5 +74,5 @@ Full details: `.planning/milestones/v1.1-ROADMAP.md`
 | 5. Bus Instrumentation | v1.1 | 1/1 | Complete | 2026-02-21 |
 | 6. Sidebar Tree | v1.1 | 5/5 | Complete | 2026-02-21 |
 | 7. Detail Panel | v1.1 | 2/2 | Complete | 2026-02-21 |
-| 8. Theme Infrastructure | v1.2 | 0/? | Not started | - |
+| 8. Theme Infrastructure | v1.2 | 0/1 | Planning | - |
 | 9. SCSS Migration and Dark Accents | v1.2 | 0/? | Not started | - |
