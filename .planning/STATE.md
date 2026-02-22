@@ -5,16 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** Planning next milestone
+**Current focus:** v1.2 Native Theming
 
 ## Current Position
 
-Milestone: v1.1 Live Tracer Standalone App — SHIPPED
-Phase: Complete (all 4 phases, 10 plans)
-Status: Milestone archived
-Last activity: 2026-02-22 - Archived v1.1 milestone
-
-Progress: [██████████] 100% (v1.1)
+Milestone: v1.2 Native Theming
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-22 — Milestone v1.2 started
 
 ## Accumulated Context
 
@@ -46,5 +45,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Archived v1.1 milestone
+Stopped at: Started v1.2 milestone
 Resume file: None

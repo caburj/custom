@@ -8,6 +8,15 @@ A custom Odoo module that instruments the enterprise `ai` module's agentic loop 
 
 Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
 
+## Current Milestone: v1.2 Native Theming
+
+**Goal:** Replace hardcoded Catppuccin Mocha colors with Odoo's Bootstrap CSS variables so the app respects the user's light/dark theme preference.
+
+**Target features:**
+- Use Odoo/Bootstrap CSS custom properties instead of hardcoded color values
+- Conditionally load correct asset bundle based on `color_scheme` cookie
+- App automatically adapts to user's light or dark theme setting
+
 ## Current State
 
 **Shipped v1.1** (2026-02-22) — Live Tracer Standalone App
@@ -39,7 +48,9 @@ The module is a fully functional developer tool with:
 
 ### Active
 
-(None — define in next milestone via `/gsd:new-milestone`)
+<!-- Current milestone: v1.2 Native Theming -->
+
+(Defining requirements)
 
 ### Out of Scope
 
@@ -95,4 +106,4 @@ The module is a fully functional developer tool with:
 | Full conversation history per iteration | Downstream simplicity over payload efficiency | ✓ Good — simple detail rendering |
 
 ---
-*Last updated: 2026-02-22 after v1.1 milestone*
+*Last updated: 2026-02-22 after v1.2 milestone started*
