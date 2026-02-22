@@ -258,10 +258,9 @@ class AiSession(models.TransientModel):
     def _handle_tool_calls(self, tool_calls, tools_by_name, tools_context, record, confirmed_tool_id=None, refuse_all=False):
         """Override to emit tool_call bus events for each tool executed.
 
-        Captures state_before (before the batch runs) and state_after (after the batch
-        completes) via deepcopy. This is Option B from research: batch-level granularity.
-        Per-tool granularity (Option C) would require re-implementing the upstream method
-        body and is deferred to v1.2.
+        State capture (state_before/state_after via deepcopy) is disabled — no built-in
+        Odoo AI tool modifies tools_context['state'], so the diff is always empty. The
+        commented-out lines can be re-enabled if custom tools begin mutating state.
 
         If _debug_ctx is not in context (instrumentation not active), delegates to super()
         without any instrumentation overhead.
@@ -275,16 +274,16 @@ class AiSession(models.TransientModel):
             )
             return
 
-        # Capture state before any tool in this batch runs
-        state_before_batch = copy.deepcopy(tools_context.get('state') or {})
+        # State capture disabled — no built-in Odoo AI tool modifies
+        # tools_context['state'], so the diff is always empty.
+        # state_before_batch = copy.deepcopy(tools_context.get('state') or {})
 
         for item in super()._handle_tool_calls(
             tool_calls, tools_by_name, tools_context, record,
             confirmed_tool_id, refuse_all,
         ):
             if tool_results := item.get('tool_results'):
-                # State after the entire batch has completed
-                state_after_batch = copy.deepcopy(tools_context.get('state') or {})
+                # state_after_batch = copy.deepcopy(tools_context.get('state') or {})
 
                 for result_item in tool_results:
                     tool_call_data = result_item.get('tool_call', {})
@@ -308,8 +307,6 @@ class AiSession(models.TransientModel):
                         'result': result,
                         'success': success,
                         'error': error,
-                        'state_before': state_before_batch,
-                        'state_after': state_after_batch,
                     })
 
             yield item
