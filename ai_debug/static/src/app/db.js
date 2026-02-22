@@ -29,7 +29,7 @@ export async function probeIDB() {
  * Note: expanded (UI-only state) is intentionally excluded.
  * Note: Date objects are preserved as-is — IDB structured clone handles them.
  */
-function serializeTrace(trace) {
+export function serializeTrace(trace) {
     return {
         trace_id: trace.trace_id,
         storedAt: Date.now(),

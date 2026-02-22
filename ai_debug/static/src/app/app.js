@@ -5,7 +5,7 @@ import { MainComponentsContainer } from "@web/core/main_components_container";
 import { LoopDetail } from "./detail/loop_detail";
 import { IterationDetail } from "./detail/iter_detail";
 import { ToolCallDetail } from "./detail/tc_detail";
-import { probeIDB, writeTrace, deleteTrace, loadAllTraces } from "./db";
+import { probeIDB, writeTrace, deleteTrace, loadAllTraces, serializeTrace } from "./db";
 
 /**
  * Reconstruct a reactive trace object from a plain IDB-stored record.
@@ -475,5 +475,27 @@ export class AiDebugApp extends Component {
                 console.warn("[ai_debug] IDB delete failed for", id, err);
             });
         }
+    }
+
+    exportSelected() {
+        const ids = [...this.state.checkedTraceIds];
+        if (ids.length === 0) return;
+        // Serialize each checked trace using the same format IDB stores.
+        // JSON round-trip strips OWL reactive Proxies (same technique as writeTrace).
+        const records = ids.map((id) => {
+            const trace = this.traces.get(id);
+            if (!trace) return null;
+            return JSON.parse(JSON.stringify(serializeTrace(trace)));
+        }).filter(Boolean);
+        if (records.length === 0) return;
+        const json = JSON.stringify(records, null, 2);
+        const blob = new Blob([json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const today = new Date().toISOString().slice(0, 10);
+        a.href = url;
+        a.download = `ai-debug-traces-${today}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
     }
 }
