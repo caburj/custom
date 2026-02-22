@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, useState } from "@odoo/owl";
+import { Component, onWillUpdateProps, useState } from "@odoo/owl";
 
 const TRUNCATION_THRESHOLD = 300;
 
@@ -11,12 +11,27 @@ export class JsonTree extends Component {
         label: { type: String, optional: true },
         depth: { type: Number, optional: true },
         onExpandText: { type: Function, optional: true },  // Callback for long-text popup
+        forceCollapsed: { type: Boolean, optional: true },
+        forceVersion: { type: Number, optional: true },
     };
     static defaultProps = { depth: 0 };
 
     setup() {
+        const forceActive = typeof this.props.forceCollapsed === "boolean";
         this.state = useState({
-            expanded: this.props.depth < 1,  // Auto-expand depth 0 only
+            expanded: forceActive ? !this.props.forceCollapsed : this.props.depth < 1,
+            childForceCollapsed: forceActive ? this.props.forceCollapsed : undefined,
+            childForceVersion: forceActive ? 1 : 0,
+        });
+
+        onWillUpdateProps((nextProps) => {
+            if (nextProps.forceVersion !== undefined &&
+                nextProps.forceVersion !== this.props.forceVersion) {
+                // Parent sent a new force signal
+                this.state.expanded = !nextProps.forceCollapsed;
+                this.state.childForceCollapsed = nextProps.forceCollapsed;
+                this.state.childForceVersion = this.state.childForceVersion + 1;
+            }
         });
     }
 
@@ -66,8 +81,14 @@ export class JsonTree extends Component {
         return "";
     }
 
-    toggle() {
+    toggle(ev) {
         this.state.expanded = !this.state.expanded;
+        if (ev.altKey) {
+            this.state.childForceCollapsed = !this.state.expanded;
+            this.state.childForceVersion = this.state.childForceVersion + 1;
+        } else {
+            this.state.childForceCollapsed = undefined;
+        }
     }
 
     onClickLongString() {
