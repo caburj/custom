@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 Milestone: v1.2 Native Theming — SHIPPED 2026-02-22
 Phase: All complete (Phases 8-9)
 Status: Milestone archived, ready for next milestone
-Last activity: 2026-02-22 - Completed quick task 15: Restyle JSON tree widget with vertical depth lines, key pills, and CSS truncation
+Last activity: 2026-02-22 - Completed quick task 16: Fix JSON tree: remove colon, square toggles, always-show count, clickable strings
 
 ```
 v1.2: [██████████] 100% — SHIPPED
@@ -46,9 +46,10 @@ None.
 | 13 | fix white background on short string results | 2026-02-21 | 2fa87e7 | [13-fix-white-background-on-short-string-res](./quick/13-fix-white-background-on-short-string-res/) |
 | 14 | add Alt/Option+click recursive expand/collapse to JsonTree | 2026-02-22 | 46dd86c | [14-add-alt-option-click-recursive-expand-co](./quick/14-add-alt-option-click-recursive-expand-co/) |
 | 15 | restyle JSON tree with depth lines, key pills, CSS truncation | 2026-02-22 | afcfef5 | [15-restyle-json-tree-widget-with-vertical-d](./quick/15-restyle-json-tree-widget-with-vertical-d/) |
+| 16 | fix JSON tree: remove colon, square toggles, always-show count, clickable strings | 2026-02-22 | e752ebe | [16-fix-json-tree-remove-colon-separator-use](./quick/16-fix-json-tree-remove-colon-separator-use/) |
 
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Quick task 15 complete — JSON tree restyle with depth lines, key pills, CSS truncation
+Stopped at: Quick task 16 complete — JSON tree fixes: no colon, square +/- toggles, always-visible count, all strings clickable
 Resume file: None
