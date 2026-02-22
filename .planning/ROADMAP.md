@@ -99,6 +99,6 @@ Plans:
 | 7. Detail Panel | v1.1 | 2/2 | Complete | 2026-02-21 |
 | 8. Theme Infrastructure | v1.2 | 1/1 | Complete | 2026-02-22 |
 | 9. SCSS Migration and Dark Accents | v1.2 | 3/3 | Complete | 2026-02-22 |
-| 10. IDB Layer and Write-Through | 1/1 | Complete   | 2026-02-22 | - |
+| 10. IDB Layer and Write-Through | 1/1 | Complete    | 2026-02-22 | - |
 | 11. Hydration and Trace Management | v1.3 | 0/? | Not started | - |
 | 12. Export and Import | v1.3 | 0/? | Not started | - |
