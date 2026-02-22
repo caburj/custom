@@ -4,8 +4,8 @@
     height: 100vh;
     width: 100vw;
     overflow: hidden;
-    background-color: #1e1e2e;
-    color: #cdd6f4;
+    background-color: $o-webclient-background-color;
+    color: $o-gray-900;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     font-size: 14px;
 
@@ -25,14 +25,14 @@
     height: 44px;
     min-height: 44px;
     padding: 0 16px;
-    background-color: #181825;
-    border-bottom: 1px solid #313244;
+    background-color: $o-webclient-background-color;
+    border-bottom: 1px solid $border-color;
 }
 
 .ai-debug-header-title {
     font-weight: 600;
     font-size: 15px;
-    color: #cdd6f4;
+    color: $o-gray-900;
     letter-spacing: 0.3px;
 }
 
@@ -41,7 +41,7 @@
     align-items: center;
     gap: 8px;
     font-size: 12px;
-    color: #a6adc8;
+    color: $o-gray-700;
 }
 
 .ai-debug-status-dot {
@@ -49,15 +49,15 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background-color: #f38ba8;
+    background-color: $o-danger;
     transition: background-color 0.3s ease;
 
     &.connected {
-        background-color: #a6e3a1;
+        background-color: $o-success;
     }
 
     &.disconnected {
-        background-color: #f38ba8;
+        background-color: $o-danger;
     }
 }
 
@@ -76,8 +76,8 @@
 .ai-debug-sidebar {
     width: 280px;
     min-width: 280px;
-    background-color: #1e1e2e;
-    border-right: 1px solid #313244;
+    background-color: $o-webclient-background-color;
+    border-right: 1px solid $border-color;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -97,7 +97,7 @@
     justify-content: center;
     height: 100%;
     gap: 12px;
-    color: #585b70;
+    color: $o-gray-500;
     font-size: 13px;
 }
 
@@ -105,7 +105,7 @@
 .ai-debug-detail {
     flex: 1;
     overflow-y: auto;
-    background-color: #11111b;
+    background-color: $o-view-background-color;
 }
 
 .ai-debug-detail-empty {
@@ -115,7 +115,7 @@
     justify-content: center;
     height: 100%;
     gap: 8px;
-    color: #585b70;
+    color: $o-gray-500;
     text-align: center;
 
     p {
@@ -126,7 +126,7 @@
 
 .ai-debug-detail-hint {
     font-size: 13px !important;
-    color: #45475a;
+    color: $o-gray-400;
     margin-top: 4px !important;
 }
 
@@ -136,7 +136,7 @@
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background-color: #585b70;
+    background-color: $o-gray-500;
     animation: ai-debug-pulse 2s ease-in-out infinite;
 
     &.large {
@@ -167,8 +167,8 @@
     font-weight: 600;
     letter-spacing: 0.8px;
     text-transform: uppercase;
-    color: #6c7086;
-    border-bottom: 1px solid #313244;
+    color: $o-gray-600;
+    border-bottom: 1px solid $border-color;
 }
 
 // Slide-in animation for newly inserted tree rows
@@ -195,16 +195,15 @@
     transition: background-color 0.1s ease;
     animation: ai-tree-slide-in 0.15s ease-out;
 
-    &:hover { background-color: #2a2a3e; }
+    &:hover { background-color: $o-gray-200; }
 
     &.selected {
-        background-color: #2d3748;
-        border-left: 3px solid #89b4fa;
+        background-color: $o-component-active-bg;
         animation: none; // Don't re-animate the selected row on each patch
     }
 
     &.ancestor {
-        background-color: rgba(137, 180, 250, 0.05);
+        background-color: rgba($o-action, 0.05);
     }
 }
 
@@ -221,7 +220,7 @@
     width: 16px;
     height: 16px;
     font-size: 12px;
-    color: #585b70;
+    color: $o-gray-500;
     transform: rotate(0deg);
     transition: transform 0.15s ease;
     flex-shrink: 0;
@@ -244,16 +243,16 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 13px;
-    color: #cdd6f4;
+    color: $o-gray-900;
     cursor: pointer;
 }
 
 .ai-tree-label-dim {
-    color: #6c7086;
+    color: $o-gray-600;
 }
 
 .ai-tree-label-error {
-    color: #f38ba8;
+    color: $o-danger;
 }
 
 // Status icons (success checkmark, error X, warn pause)
@@ -262,9 +261,9 @@
     font-size: 12px;
     flex-shrink: 0;
 
-    &.success { color: #a6e3a1; }
-    &.error { color: #f38ba8; }
-    &.warn { color: #f9e2af; }
+    &.success { color: $o-success; }
+    &.error { color: $o-danger; }
+    &.warn { color: $o-warning; }
 }
 
 // Small pulse dot for running loop indicator (in tree row status position)
@@ -288,18 +287,18 @@
 .ai-tree-clear {
     background: none;
     border: none;
-    color: #585b70;
+    color: $o-gray-500;
     cursor: pointer;
     padding: 2px 4px;
     font-size: 13px;
     line-height: 1;
 
-    &:hover { color: #f38ba8; }
+    &:hover { color: $o-danger; }
 }
 
 // Flash animation for newly arrived loop entries
 @keyframes ai-tree-flash {
-    0% { background-color: rgba(137, 180, 250, 0.3); }
+    0% { background-color: rgba($o-action, 0.3); }
     100% { background-color: transparent; }
 }
 
@@ -324,7 +323,7 @@
     align-items: center;
     gap: 8px;
     padding: 12px 16px;
-    border-bottom: 1px solid #313244;
+    border-bottom: 1px solid $border-color;
     font-size: 13px;
     flex-shrink: 0;
 }
@@ -336,65 +335,39 @@
     text-transform: uppercase;
     padding: 2px 6px;
     border-radius: 4px;
-    background-color: #313244;
-    color: #89b4fa;
+    background-color: $o-gray-300;
+    color: $o-action;
 }
 
 .ai-detail-name {
     font-weight: 600;
-    color: #cdd6f4;
+    color: $o-gray-900;
 }
 
 .ai-detail-meta {
     font-size: 11px;
-    color: #6c7086;
+    color: $o-gray-600;
 
-    &.success { color: #a6e3a1; }
-    &.error { color: #f38ba8; }
+    &.success { color: $o-success; }
+    &.error { color: $o-danger; }
 }
 
-// Notebook (tab) dark theme overrides
+// Notebook layout (flex fill for detail view)
 .ai-debug-detail .o_notebook {
     flex: 1;
     display: flex;
     flex-direction: column;
 
-    .nav-tabs {
-        background-color: #181825;
-        border-bottom: 1px solid #313244;
-
-        .nav-link {
-            color: #6c7086;
-            border: none;
-            border-bottom: 2px solid transparent;
-            background-color: transparent;
-            padding: 8px 16px;
-            font-size: 12px;
-
-            &.active {
-                color: #cdd6f4;
-                background-color: transparent;
-                border-bottom-color: #89b4fa;
-            }
-
-            &:hover:not(.active) {
-                color: #a6adc8;
-                background-color: transparent;
-            }
-        }
-    }
-
     .o_notebook_content {
         flex: 1;
         overflow-y: auto;
-        background-color: #11111b;
     }
 }
 
 // Section within a tab (header + content)
 .ai-detail-section {
     padding: 12px 16px;
-    border-bottom: 1px solid #181825;
+    border-bottom: 1px solid $o-gray-200;
 }
 
 .ai-detail-section-header {
@@ -408,38 +381,25 @@
         font-weight: 600;
         letter-spacing: 0.5px;
         text-transform: uppercase;
-        color: #6c7086;
+        color: $o-gray-600;
     }
 }
 
 // Empty tab placeholder text
 .ai-detail-empty-tab {
-    color: #585b70;
+    color: $o-gray-500;
     font-size: 13px;
     padding: 8px 0;
-}
-
-// Error banner
-.ai-detail-error-banner {
-    padding: 8px 16px;
-    background-color: rgba(243, 139, 168, 0.1);
-    border-bottom: 1px solid rgba(243, 139, 168, 0.3);
-    color: #f38ba8;
-    font-size: 13px;
-
-    span:first-child {
-        font-weight: 600;
-    }
 }
 
 // Long text preview (truncated; click to expand)
 .ai-detail-text-preview {
     font-family: "SF Mono", "Fira Code", "Consolas", monospace;
     font-size: 12px;
-    color: #a6adc8;
+    color: $o-gray-700;
     line-height: 1.5;
     cursor: pointer;
-    border: 1px solid #313244;
+    border: 1px solid $border-color;
     border-radius: 4px;
     padding: 8px;
     overflow: hidden;
@@ -448,8 +408,8 @@
     max-height: 120px;
 
     &:hover {
-        border-color: #89b4fa;
-        color: #cdd6f4;
+        border-color: $o-action;
+        color: $o-gray-900;
     }
 }
 
@@ -457,12 +417,12 @@
 .ai-detail-text-block {
     font-family: "SF Mono", "Fira Code", "Consolas", monospace;
     font-size: 12px;
-    color: #a6adc8;
+    color: $o-gray-700;
     line-height: 1.5;
-    border: 1px solid #313244;
+    border: 1px solid $border-color;
     border-radius: 4px;
     padding: 8px;
-    background-color: #181825;
+    background-color: $o-webclient-background-color;
     white-space: pre-wrap;
     word-break: break-all;
     margin: 0;
@@ -483,29 +443,29 @@
 }
 
 .ai-json-key {
-    color: #89b4fa;
+    color: $o-action;
     flex-shrink: 0;
 }
 
-.ai-json-string { color: #a6e3a1; }
-.ai-json-number { color: #fab387; }
-.ai-json-boolean { color: #cba6f7; }
-.ai-json-null { color: #585b70; font-style: italic; }
+.ai-json-string { color: $o-success; }
+.ai-json-number { color: $o-gray-700; }
+.ai-json-boolean { color: $o-main-code-color; }
+.ai-json-null { color: $o-gray-500; font-style: italic; }
 
 .ai-json-preview {
-    color: #585b70;
+    color: $o-gray-500;
     font-style: italic;
 }
 
 .ai-json-toggle {
     cursor: pointer;
-    color: #585b70;
+    color: $o-gray-500;
     user-select: none;
     width: 12px;
     flex-shrink: 0;
     text-align: center;
 
-    &:hover { color: #89b4fa; }
+    &:hover { color: $o-action; }
 }
 
 .ai-json-toggle-placeholder {
@@ -518,11 +478,11 @@
     cursor: pointer;
     text-decoration: underline;
     text-decoration-style: dotted;
-    text-decoration-color: #585b70;
+    text-decoration-color: $o-gray-500;
 
     &:hover {
-        color: #cdd6f4;
-        text-decoration-color: #89b4fa;
+        color: $o-gray-900;
+        text-decoration-color: $o-action;
     }
 }
 
@@ -531,7 +491,7 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0;
-    border: 1px solid #313244;
+    border: 1px solid $border-color;
     border-radius: 4px;
     overflow: hidden;
     font-family: "SF Mono", "Fira Code", "Consolas", monospace;
@@ -539,36 +499,36 @@
 }
 
 .ai-diff-header {
-    background-color: #181825;
-    color: #6c7086;
+    background-color: $o-webclient-background-color;
+    color: $o-gray-600;
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     padding: 6px 12px;
-    border-bottom: 1px solid #313244;
+    border-bottom: 1px solid $border-color;
 }
 
 .ai-diff-cell {
     padding: 4px 12px;
-    border-bottom: 1px solid #1e1e2e;
+    border-bottom: 1px solid $o-webclient-background-color;
     word-break: break-all;
     white-space: pre-wrap;
-    color: #a6adc8;
+    color: $o-gray-700;
 
-    &.ai-diff-added { background-color: rgba(166, 227, 161, 0.1); }
-    &.ai-diff-removed { background-color: rgba(243, 139, 168, 0.1); }
-    &.ai-diff-changed { background-color: rgba(249, 226, 175, 0.1); }
-    &.ai-diff-unchanged { color: #585b70; }
+    &.ai-diff-added { background-color: rgba($o-success, 0.1); }
+    &.ai-diff-removed { background-color: rgba($o-danger, 0.1); }
+    &.ai-diff-changed { background-color: rgba($o-warning, 0.1); }
+    &.ai-diff-unchanged { color: $o-gray-500; }
 }
 
 .ai-diff-key {
-    color: #89b4fa;
+    color: $o-action;
     font-weight: 600;
 }
 
 .ai-diff-empty {
-    color: #585b70;
+    color: $o-gray-500;
     font-size: 13px;
     padding: 8px 0;
 }
@@ -578,7 +538,7 @@
 }
 
 .ai-diff-no-changes-label {
-    color: #585b70;
+    color: $o-gray-500;
     font-size: 12px;
     margin-bottom: 8px;
     display: block;
@@ -587,12 +547,12 @@
 .ai-diff-snapshot {
     font-family: "SF Mono", "Fira Code", "Consolas", monospace;
     font-size: 12px;
-    color: #a6adc8;
+    color: $o-gray-700;
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-all;
-    background-color: #181825;
-    border: 1px solid #313244;
+    background-color: $o-webclient-background-color;
+    border: 1px solid $border-color;
     border-radius: 4px;
     padding: 8px;
     margin: 0;
@@ -605,45 +565,6 @@
     line-height: 1.6;
     white-space: pre-wrap;
     word-break: break-word;
-    margin: 0;
-    color: #cdd6f4;
-    background-color: #1e1e2e;
-    padding: 16px;
-    border-radius: 4px;
     max-height: 70vh;
     overflow-y: auto;
-}
-
-// Dialog dark theme overrides (for TextPopupDialog)
-.o_dialog {
-    .modal-content {
-        background-color: #1e1e2e;
-        border-color: #313244;
-        color: #cdd6f4;
-    }
-
-    .modal-header {
-        background-color: #181825;
-        border-bottom-color: #313244;
-        color: #cdd6f4;
-
-        .modal-title {
-            color: #cdd6f4;
-        }
-
-        .btn-close {
-            filter: invert(1);
-        }
-    }
-}
-
-// CopyButton styling adjustments for dark theme
-.ai-detail-section-header .o_clipboard_button {
-    background: none;
-    border: none;
-    color: #585b70;
-    padding: 2px 6px;
-    font-size: 12px;
-
-    &:hover { color: #89b4fa; }
 }
