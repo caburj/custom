@@ -10,25 +10,25 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 ## Current Position
 
 Phase: 11 of 12 (Hydration and Trace Management)
-Plan: 1 of 1 complete
-Status: Phase 11 Plan 01 complete — hydration read path implemented
-Last activity: 2026-02-22 — completed plan 11-01 (IDB hydration on page load)
+Plan: 2 of 2 complete
+Status: Phase 11 complete — hydration + trace management UI implemented
+Last activity: 2026-02-22 — completed plan 11-02 (checkbox bulk delete)
 
-Progress: [██░░░░░░░░] 20% (v1.3)
+Progress: [████░░░░░░] 40% (v1.3)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2 (v1.3)
-- Average duration: ~8 minutes
-- Total execution time: ~17 minutes
+- Total plans completed: 3 (v1.3)
+- Average duration: ~6 minutes
+- Total execution time: ~18 minutes
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 10 | 1 | ~15m | ~15m |
-| 11 | 1 | ~2m | ~2m |
+| 11 | 2 | ~3m | ~1.5m |
 
 *Updated after each plan completion*
 
@@ -59,6 +59,10 @@ Key decisions from Phase 11 execution:
 - iterations and toolCalls Maps explicitly wrapped in reactive(new Map()) — required for post-hydration bus event re-renders
 - hydrated: true is a permanent marker never removed — used by template badge
 - at(-1) selects most recent trace for auto-select (insertion order = arrival order)
+- deleteCheckedTraces is non-async — IDB deletes fire-and-forget via .catch(), consistent with writeTrace pattern
+- indeterminate property set via t-ref + onPatched (not t-att-indeterminate which is not an HTML attribute)
+- t-att-disabled uses "expr or undefined" idiom — removes attribute entirely when false (avoids disabled="false" still disabling)
+- clearAll() fully replaced by deleteCheckedTraces() — old method did not delete from IDB
 
 ### Pending Todos
 
@@ -72,5 +76,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed plan 11-01 (IDB hydration on page load) — Phase 11 Plan 01 complete
+Stopped at: Completed plan 11-02 (checkbox bulk delete) — Phase 11 complete
 Resume file: None

@@ -47,7 +47,7 @@ Full details: `.planning/milestones/v1.2-ROADMAP.md`
 **Milestone Goal:** Persist traces locally via IndexedDB so they survive page refresh, with delete/clear and export/import capabilities.
 
 - [x] **Phase 10: IDB Layer and Write-Through** - Create db.js, define schema, wire fire-and-forget writes into bus event handlers (completed 2026-02-22)
-- [ ] **Phase 11: Hydration and Trace Management** - Load traces from IDB on startup, implement delete and clear-all controls
+- [x] **Phase 11: Hydration and Trace Management** - Load traces from IDB on startup, implement delete and clear-all controls (completed 2026-02-22)
 - [ ] **Phase 12: Export and Import** - Download all traces as JSON file, import from previously exported file with validation
 
 ## Phase Details
@@ -74,7 +74,7 @@ Plans:
   2. New bus events from a running agentic loop continue to populate the sidebar normally after hydration, with no regression in real-time updates
   3. Clicking delete on an individual trace removes it from the sidebar immediately and it does not reappear on the next page refresh
   4. Clicking "Clear all" shows a confirmation dialog; confirming wipes all traces from both the sidebar and IndexedDB — they are gone on next refresh
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [ ] 11-01-PLAN.md — Hydrate all stored traces from IDB on page load with reactive Map reconstruction
 - [ ] 11-02-PLAN.md — Checkbox-based multi-select sidebar with header action bar for bulk delete
@@ -103,5 +103,5 @@ Plans:
 | 8. Theme Infrastructure | v1.2 | 1/1 | Complete | 2026-02-22 |
 | 9. SCSS Migration and Dark Accents | v1.2 | 3/3 | Complete | 2026-02-22 |
 | 10. IDB Layer and Write-Through | 1/1 | Complete    | 2026-02-22 | - |
-| 11. Hydration and Trace Management | 1/2 | In Progress|  | - |
+| 11. Hydration and Trace Management | 2/2 | Complete   | 2026-02-22 | - |
 | 12. Export and Import | v1.3 | 0/? | Not started | - |

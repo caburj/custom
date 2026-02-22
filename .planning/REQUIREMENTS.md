@@ -16,8 +16,8 @@ Requirements for local persistence milestone. Each maps to roadmap phases.
 
 ### Trace Management
 
-- [ ] **MGMT-01**: User can delete an individual trace (removed from both UI and IndexedDB)
-- [ ] **MGMT-02**: User can clear all traces with a confirmation dialog before execution
+- [x] **MGMT-01**: User can delete an individual trace (removed from both UI and IndexedDB)
+- [x] **MGMT-02**: User can clear all traces with a confirmation dialog before execution
 
 ### Export/Import
 
@@ -69,8 +69,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PERS-04 | Phase 10 | Complete |
 | PERS-02 | Phase 11 | Complete |
 | PERS-03 | Phase 11 | Complete |
-| MGMT-01 | Phase 11 | Pending |
-| MGMT-02 | Phase 11 | Pending |
+| MGMT-01 | Phase 11 | Complete |
+| MGMT-02 | Phase 11 | Complete |
 | XPRT-01 | Phase 12 | Pending |
 | XPRT-02 | Phase 12 | Pending |
 | XPRT-03 | Phase 12 | Pending |
