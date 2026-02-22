@@ -278,6 +278,10 @@ class AiSession(models.TransientModel):
         # tools_context['state'], so the diff is always empty.
         # state_before_batch = copy.deepcopy(tools_context.get('state') or {})
 
+        # Build a call_id -> tool_call lookup so confirmation events (which only
+        # carry call_id) can recover tool_name and args from the original request.
+        tool_calls_by_id = {tc['call_id']: tc for tc in tool_calls}
+
         for item in super()._handle_tool_calls(
             tool_calls, tools_by_name, tools_context, record,
             confirmed_tool_id, refuse_all,
@@ -308,5 +312,25 @@ class AiSession(models.TransientModel):
                         'success': success,
                         'error': error,
                     })
+
+            elif confirmation := item.get('tool_confirmation_request'):
+                call_id = confirmation.get('call_id')
+                originating_tc = tool_calls_by_id.get(call_id, {})
+                _debug_ctx['tool_call_count'] += 1
+
+                self._ai_debug_bus_send('tool_call', {
+                    'type': 'tool_call',
+                    'trace_id': _debug_ctx['trace_id'],
+                    'iteration_id': _debug_ctx['iteration_id'],
+                    'tool_call_id': uuid.uuid4().hex,
+                    'tool_name': originating_tc.get('name', 'unknown'),
+                    'call_id': call_id,
+                    'args': originating_tc.get('args', {}),
+                    'result': None,
+                    'success': None,
+                    'error': None,
+                    'triggered_confirmation': True,
+                    'confirmation_message': confirmation.get('message', ''),
+                })
 
             yield item
