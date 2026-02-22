@@ -33,6 +33,7 @@ export function serializeTrace(trace) {
     return {
         trace_id: trace.trace_id,
         storedAt: Date.now(),
+        created_ts: trace.created_ts,
         agent_name: trace.agent_name,
         model_name: trace.model_name,
         user_query: trace.user_query,

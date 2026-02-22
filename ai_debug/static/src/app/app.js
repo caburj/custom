@@ -39,6 +39,7 @@ function hydrateTrace(plain) {
         ...plain,
         started_at: plain.started_at ? new Date(plain.started_at) : null,
         ended_at: plain.ended_at ? new Date(plain.ended_at) : null,
+        created_ts: plain.created_ts || (plain.started_at ? new Date(plain.started_at).getTime() : 0),
         expanded: false,
         hydrated: true,
         iterations,
@@ -95,6 +96,7 @@ export class AiDebugApp extends Component {
                 model_name: payload.model_name || "",
                 user_query: payload.user_query || "",
                 status: "running",
+                created_ts: Date.now(),
                 started_at: new Date(),
                 ended_at: null,
                 duration_ms: null,
@@ -197,6 +199,12 @@ export class AiDebugApp extends Component {
             }
             // Hydrate from IDB before first render (PERS-02)
             const stored = await loadAllTraces();
+            // Sort oldest-first so Map insertion order is chronological;
+            // the template's .reverse() then yields newest-first display.
+            stored.sort((a, b) =>
+                (a.created_ts || new Date(a.started_at || 0).getTime()) -
+                (b.created_ts || new Date(b.started_at || 0).getTime())
+            );
             for (const plain of stored) {
                 this.traces.set(plain.trace_id, hydrateTrace(plain));
             }
@@ -597,6 +605,12 @@ export class AiDebugApp extends Component {
     }
 
     _applyImport(records) {
+        // Sort oldest-first so Map insertion order is chronological;
+        // the template's .reverse() then yields newest-first display.
+        records.sort((a, b) =>
+            (a.created_ts || new Date(a.started_at || 0).getTime()) -
+            (b.created_ts || new Date(b.started_at || 0).getTime())
+        );
         for (const record of records) {
             const hydrated = hydrateTrace(record);
             this.traces.set(record.trace_id, hydrated);
