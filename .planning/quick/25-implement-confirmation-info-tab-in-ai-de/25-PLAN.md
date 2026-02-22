@@ -16,7 +16,7 @@ must_haves:
   truths:
     - "When a tool triggers confirmation, a tool_call bus event is emitted with triggered_confirmation=True and the confirmation_message"
     - "The Confirmation Info tab shows the HTML confirmation message when the tool triggered confirmation"
-    - "The Confirmation Info tab shows 'No confirmation requested' when no confirmation was triggered"
+    - "The Confirmation Info tab is hidden when no confirmation was triggered"
     - "The Confirmation Info tab is only visible when triggered_confirmation is true"
   artifacts:
     - path: "ai_debug/models/ai_session.py"
