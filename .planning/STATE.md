@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 Milestone: v1.2 Native Theming — SHIPPED 2026-02-22
 Phase: All complete (Phases 8-9)
 Status: Milestone archived, ready for next milestone
-Last activity: 2026-02-22 - Completed quick task 17: Make JSON tree toggle buttons more subtle
+Last activity: 2026-02-22 - Completed quick task 18: Make JSON tree toggles semi-transparent, full opacity on hover
 
 ```
 v1.2: [██████████] 100% — SHIPPED
@@ -48,9 +48,10 @@ None.
 | 15 | restyle JSON tree with depth lines, key pills, CSS truncation | 2026-02-22 | afcfef5 | [15-restyle-json-tree-widget-with-vertical-d](./quick/15-restyle-json-tree-widget-with-vertical-d/) |
 | 16 | fix JSON tree: remove colon, square toggles, always-show count, clickable strings | 2026-02-22 | e752ebe | [16-fix-json-tree-remove-colon-separator-use](./quick/16-fix-json-tree-remove-colon-separator-use/) |
 | 17 | make JSON tree toggle buttons more subtle — lighter bg with border | 2026-02-22 | 0377b0b | [17-make-json-tree-toggle-buttons-more-subtl](./quick/17-make-json-tree-toggle-buttons-more-subtl/) |
+| 18 | make JSON tree toggles semi-transparent, full opacity on hover | 2026-02-22 | 86f5f2a | [18-make-json-tree-toggles-semi-transparent-](./quick/18-make-json-tree-toggles-semi-transparent-/) |
 
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Quick task 17 complete — Subtle toggle buttons
+Stopped at: Quick task 18 complete — Semi-transparent toggles
 Resume file: None
