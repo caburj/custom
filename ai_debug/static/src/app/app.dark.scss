@@ -17,3 +17,7 @@
 
 // JSON null/undefined
 .ai-json-null   { color: $o-gray-500; font-style: italic; }
+
+// Dark mode: depth lines and key pills
+.ai-json-nested { border-left-color: $o-gray-700; }
+.ai-json-key { background-color: rgba($o-action, 0.15); }

@@ -432,19 +432,37 @@
 .ai-json-node {
     font-family: "SF Mono", "Fira Code", "Consolas", monospace;
     font-size: 12px;
-    line-height: 1.6;
+    line-height: 1.35;
+}
+
+// Nested nodes get vertical depth lines and indentation via CSS
+.ai-json-nested {
+    margin-left: 6px;
+    padding-left: 10px;
+    border-left: 1px solid $o-gray-300;
 }
 
 .ai-json-row {
     display: flex;
     align-items: baseline;
     gap: 4px;
-    min-height: 20px;
+    min-height: 17px;
+    overflow: hidden;
 }
 
 .ai-json-key {
     color: $o-action;
     flex-shrink: 0;
+    background-color: rgba($o-action, 0.08);
+    padding: 0 4px;
+    border-radius: 3px;
+}
+
+.ai-json-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
 }
 
 .ai-json-string { color: $o-success; }
