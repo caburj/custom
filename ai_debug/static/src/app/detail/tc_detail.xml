@@ -44,8 +44,8 @@
         </div>
 
         <!-- Error banner if failed -->
-        <div t-if="props.toolCall.error" class="ai-detail-error-banner">
-            <span>Error:</span> <t t-esc="props.toolCall.error"/>
+        <div t-if="props.toolCall.error" class="alert alert-danger mb-0 rounded-0 border-start-0 border-end-0 py-2 px-3">
+            <strong>Error:</strong> <t t-esc="props.toolCall.error"/>
         </div>
 
         <!-- Tabs: State Diff + Confirmation Info -->

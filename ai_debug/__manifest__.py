@@ -11,12 +11,14 @@
         'ai_debug.assets': [
             ('include', 'web.assets_backend'),
             'ai_debug/static/src/app/**/*.scss',
+            ('remove', 'ai_debug/static/src/app/**/*.dark.scss'),
             'ai_debug/static/src/app/**/*.xml',
             'ai_debug/static/src/app/**/*.js',
         ],
         'ai_debug.assets_dark': [
             ('include', 'ai_debug.assets'),
             ('include', 'web.dark_mode_variables'),
+            'ai_debug/static/src/app/**/*.dark.scss',
         ],
         'web.assets_backend': [
             'ai_debug/static/src/debug_menu_button.js',
