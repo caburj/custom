@@ -10,52 +10,58 @@
             <span t-else="" class="ai-detail-meta error">Failed</span>
         </div>
 
-        <!-- Stacked: Args section -->
-        <div class="ai-detail-section">
-            <div class="ai-detail-section-header">
-                <span>Arguments</span>
-                <CopyButton content="() => this.argsJson"/>
-            </div>
-            <JsonTree data="props.toolCall.args"
-                      onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
-        </div>
-
-        <!-- Stacked: Result section -->
-        <div class="ai-detail-section">
-            <div class="ai-detail-section-header">
-                <span>Result</span>
-                <CopyButton content="() => this.resultString"/>
-            </div>
-            <!-- If result is an object/array, use JsonTree; otherwise show as text -->
-            <t t-if="resultIsObject">
-                <JsonTree data="props.toolCall.result"
-                          onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
-            </t>
-            <t t-else="">
-                <t t-if="resultIsLong">
-                    <div class="ai-detail-text-preview"
-                         t-on-click="() => this.openTextPopup('Result', this.resultString, 'markdown')"
-                         t-esc="resultString"/>
-                </t>
-                <t t-else="">
-                    <pre class="ai-detail-text-block" t-esc="resultString"/>
-                </t>
-            </t>
-        </div>
-
         <!-- Error banner if failed -->
         <div t-if="props.toolCall.error" class="alert alert-danger mb-0 rounded-0 border-start-0 border-end-0 py-2 px-3">
             <strong>Error:</strong> <t t-esc="props.toolCall.error"/>
         </div>
 
-        <!-- Tabs: State Diff + Confirmation Info -->
         <Notebook>
+            <t t-set-slot="arguments" title="'Arguments'" isVisible="true">
+                <div class="ai-detail-section">
+                    <div class="ai-detail-section-header">
+                        <span>Arguments</span>
+                        <CopyButton content="() => this.argsJson"/>
+                    </div>
+                    <JsonTree data="props.toolCall.args"
+                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                </div>
+            </t>
+
+            <t t-set-slot="result" title="'Result'" isVisible="true">
+                <div class="ai-detail-section">
+                    <div class="ai-detail-section-header">
+                        <span>Result</span>
+                        <CopyButton content="() => this.resultString"/>
+                    </div>
+                    <!-- If result is an object/array, use JsonTree; otherwise show as text -->
+                    <t t-if="resultIsObject">
+                        <JsonTree data="props.toolCall.result"
+                                  onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                    </t>
+                    <t t-else="">
+                        <t t-if="resultIsLong">
+                            <div class="ai-detail-text-preview"
+                                 t-on-click="() => this.openTextPopup('Result', this.resultString, 'markdown')"
+                                 t-esc="resultString"/>
+                        </t>
+                        <t t-else="">
+                            <pre class="ai-detail-text-block" t-esc="resultString"/>
+                        </t>
+                    </t>
+                </div>
+            </t>
+
             <t t-set-slot="state_diff" title="'State Diff'" isVisible="true">
                 <div class="ai-detail-section">
                     <div class="ai-detail-section-header">
                         <span>State Diff</span>
                     </div>
-                    <StateDiff before="props.toolCall.state_before" after="props.toolCall.state_after"/>
+                    <StateDiff t-if="stateBefore or stateAfter"
+                               before="stateBefore || {}"
+                               after="stateAfter || {}"/>
+                    <div t-else="" class="ai-diff-empty">
+                        <span>No state data available.</span>
+                    </div>
                 </div>
             </t>
 
