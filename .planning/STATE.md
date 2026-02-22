@@ -45,7 +45,7 @@ None — milestone complete.
 | 20 | Hide chevron icon on iteration rows that have no tool calls | 2026-02-22 | 7d87b5f | | [20-hide-chevron-icon-on-iteration-rows-that](./quick/20-hide-chevron-icon-on-iteration-rows-that/) |
 | 22 | Fix StateDiff OWL props validation error — guard with t-if and extend prop types to accept null | 2026-02-22 | b4cf5b6 | Verified | [22-fix-statediff-props-validation-error-bef](./quick/22-fix-statediff-props-validation-error-bef/) |
 | 23 | Refactor ToolCallDetail to single 4-tab Notebook with StateDiff guard | 2026-02-22 | af74663 | Verified | [23-refactor-tool-call-detail-to-use-tabs-ar](./quick/23-refactor-tool-call-detail-to-use-tabs-ar/) |
-| 24 | Remove StateDiff tabs and state capture logic | 2026-02-22 | b5b45d3 | | [24-remove-state-diff-tabs-and-associated-lo](./quick/24-remove-state-diff-tabs-and-associated-lo/) |
+| 24 | Remove StateDiff tabs and state capture logic | 2026-02-22 | b5b45d3 | Verified | [24-remove-state-diff-tabs-and-associated-lo](./quick/24-remove-state-diff-tabs-and-associated-lo/) |
 
 ## Session Continuity
 
