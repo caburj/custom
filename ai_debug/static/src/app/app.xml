@@ -39,6 +39,9 @@
                                 t-on-click="exportSelected"
                                 title="Export selected">&#x2913;</button>
                         <button class="ai-tree-action-btn"
+                                t-on-click="openImportPicker"
+                                title="Import traces">&#x2912;</button>
+                        <button class="ai-tree-action-btn"
                                 t-att-disabled="state.checkedTraceIds.size === 0 or undefined"
                                 t-on-click="deleteCheckedTraces"
                                 title="Delete selected">&#x1F5D1;</button>
@@ -172,6 +175,11 @@
 
         </div>
         <MainComponentsContainer/>
+        <input type="file"
+               accept=".json"
+               class="d-none"
+               t-ref="fileInput"
+               t-on-change="onFileSelected"/>
     </div>
 </t>
 

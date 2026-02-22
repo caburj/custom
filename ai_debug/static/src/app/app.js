@@ -6,6 +6,7 @@ import { LoopDetail } from "./detail/loop_detail";
 import { IterationDetail } from "./detail/iter_detail";
 import { ToolCallDetail } from "./detail/tc_detail";
 import { probeIDB, writeTrace, deleteTrace, loadAllTraces, serializeTrace } from "./db";
+import { ImportPreviewDialog } from "./import_dialog";
 
 /**
  * Reconstruct a reactive trace object from a plain IDB-stored record.
@@ -70,6 +71,13 @@ export class AiDebugApp extends Component {
         this.sidebarRef = useRef("sidebar");
         // Select-all checkbox DOM ref for indeterminate state sync
         this.selectAllRef = useRef("selectAll");
+        // Hidden file input ref for import file picker
+        this.fileInputRef = useRef("fileInput");
+        try {
+            this.dialog = useService("dialog");
+        } catch {
+            this.dialog = null;
+        }
         this._needsScroll = false;
         this._flashId = null;
         this._lastArrivedId = null;
@@ -497,5 +505,93 @@ export class AiDebugApp extends Component {
         a.download = `ai-debug-traces-${today}.json`;
         a.click();
         URL.revokeObjectURL(url);
+    }
+
+    openImportPicker() {
+        if (!this.fileInputRef.el) return;
+        this.fileInputRef.el.click();
+    }
+
+    async onFileSelected(ev) {
+        const file = ev.target.files[0];
+        if (!file) return;
+        ev.target.value = "";  // Reset so re-selecting same file triggers change event
+        const text = await file.text();
+        this._handleImportFile(text);
+    }
+
+    _handleImportFile(text) {
+        let parsed;
+        try {
+            parsed = JSON.parse(text);
+        } catch {
+            if (this.dialog) {
+                this.dialog.add(ImportPreviewDialog, {
+                    traceCount: 0,
+                    duplicateCount: 0,
+                    onConfirm: () => {},
+                    errorMessage: "Invalid file: could not parse JSON.",
+                });
+            }
+            return;
+        }
+
+        // Validate: must be an array
+        if (!Array.isArray(parsed)) {
+            if (this.dialog) {
+                this.dialog.add(ImportPreviewDialog, {
+                    traceCount: 0,
+                    duplicateCount: 0,
+                    onConfirm: () => {},
+                    errorMessage: "Invalid file: expected a JSON array of traces.",
+                });
+            }
+            return;
+        }
+
+        // Validate each element: must have trace_id (string) and iterations (array)
+        for (const item of parsed) {
+            if (
+                !item ||
+                typeof item !== "object" ||
+                typeof item.trace_id !== "string" ||
+                !item.trace_id ||
+                !Array.isArray(item.iterations)
+            ) {
+                if (this.dialog) {
+                    this.dialog.add(ImportPreviewDialog, {
+                        traceCount: 0,
+                        duplicateCount: 0,
+                        onConfirm: () => {},
+                        errorMessage: "Invalid file: each trace must have a trace_id string and iterations array.",
+                    });
+                }
+                return;
+            }
+        }
+
+        // Count duplicates (traces with same ID already in store)
+        const duplicateCount = parsed.filter((r) => this.traces.has(r.trace_id)).length;
+
+        if (this.dialog) {
+            this.dialog.add(ImportPreviewDialog, {
+                traceCount: parsed.length,
+                duplicateCount,
+                onConfirm: () => this._applyImport(parsed),
+            });
+        }
+    }
+
+    _applyImport(records) {
+        for (const record of records) {
+            const hydrated = hydrateTrace(record);
+            this.traces.set(record.trace_id, hydrated);
+            // Fire-and-forget IDB write — overwrites if duplicate (same pattern as _onLoopEnd)
+            if (!this.state.ephemeralMode) {
+                writeTrace(hydrated).catch((err) => {
+                    console.warn("[ai_debug] IDB write failed during import:", err);
+                });
+            }
+        }
     }
 }
