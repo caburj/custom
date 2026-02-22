@@ -74,7 +74,10 @@ Plans:
   2. New bus events from a running agentic loop continue to populate the sidebar normally after hydration, with no regression in real-time updates
   3. Clicking delete on an individual trace removes it from the sidebar immediately and it does not reappear on the next page refresh
   4. Clicking "Clear all" shows a confirmation dialog; confirming wipes all traces from both the sidebar and IndexedDB — they are gone on next refresh
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 11-01-PLAN.md — Hydrate all stored traces from IDB on page load with reactive Map reconstruction
+- [ ] 11-02-PLAN.md — Checkbox-based multi-select sidebar with header action bar for bulk delete
 
 ### Phase 12: Export and Import
 **Goal**: Users can save all traces to a JSON file and restore them later, enabling cross-session archival and sharing
@@ -100,5 +103,5 @@ Plans:
 | 8. Theme Infrastructure | v1.2 | 1/1 | Complete | 2026-02-22 |
 | 9. SCSS Migration and Dark Accents | v1.2 | 3/3 | Complete | 2026-02-22 |
 | 10. IDB Layer and Write-Through | 1/1 | Complete    | 2026-02-22 | - |
-| 11. Hydration and Trace Management | v1.3 | 0/? | Not started | - |
+| 11. Hydration and Trace Management | v1.3 | 0/2 | Not started | - |
 | 12. Export and Import | v1.3 | 0/? | Not started | - |
