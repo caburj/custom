@@ -47,4 +47,12 @@ export class ToolCallDetail extends Component {
     get resultIsLong() {
         return !this.resultIsObject && this.resultString.length > 300;
     }
+
+    get stateBefore() {
+        return this.props.toolCall.state_before;
+    }
+
+    get stateAfter() {
+        return this.props.toolCall.state_after;
+    }
 }
