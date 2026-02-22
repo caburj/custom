@@ -61,7 +61,9 @@ Full details: `.planning/milestones/v1.2-ROADMAP.md`
   2. The UI never pauses or jitters during a fast agentic loop — bus events render without delay regardless of IDB write activity
   3. In a private browsing window where IndexedDB is blocked, the app opens and captures traces normally (ephemeral mode, no crash)
   4. Reloading the page while an agentic loop is still running does not corrupt any in-flight IDB record
-**Plans**: TBD
+**Plans:** 1 plan
+Plans:
+- [ ] 10-01-PLAN.md — Create db.js IDB persistence module + wire write-through and ephemeral mode into app
 
 ### Phase 11: Hydration and Trace Management
 **Goal**: Traces from previous sessions are visible immediately on page load, and the user can remove individual traces or wipe all of them
