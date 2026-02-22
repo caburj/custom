@@ -4,8 +4,8 @@ import { Component } from "@odoo/owl";
 export class StateDiff extends Component {
     static template = "ai_debug.StateDiff";
     static props = {
-        before: { type: Object, optional: true },
-        after: { type: Object, optional: true },
+        before: { type: [Object, { value: null }], optional: true },
+        after: { type: [Object, { value: null }], optional: true },
     };
 
     get hasDiff() {

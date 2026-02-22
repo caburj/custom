@@ -43,7 +43,12 @@
                     <div class="ai-detail-section-header">
                         <span>State Diff</span>
                     </div>
-                    <StateDiff before="stateBefore" after="stateAfter"/>
+                    <StateDiff t-if="stateBefore or stateAfter"
+                               before="stateBefore || {}"
+                               after="stateAfter || {}"/>
+                    <div t-else="" class="ai-diff-empty">
+                        <span>No state data available.</span>
+                    </div>
                 </div>
             </t>
         </Notebook>
