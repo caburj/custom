@@ -11,12 +11,12 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v1.2 Native Theming
 Phase: 9 — SCSS Migration and Dark Accents
-Plan: 1 of ? (plans TBD)
-Status: Ready to start Phase 9
-Last activity: 2026-02-22 — Phase 8 complete (browser verification approved)
+Plan: 2 of ? (plans TBD)
+Status: Phase 9 in progress — Plan 02 complete
+Last activity: 2026-02-22 — 09-02 complete (dark bundle config + Bootstrap error banners)
 
 ```
-v1.2 progress: [█████░░░░░] 50% — Phase 8 complete (1/2 phases done)
+v1.2 progress: [█████░░░░░] 50% — Phase 8 complete, Phase 9 in progress
 ```
 
 ## Accumulated Context
@@ -35,6 +35,8 @@ All v1.1 decisions archived — see `.planning/milestones/v1.1-ROADMAP.md` for f
 | DARK-01/DARK-02 in Phase 9 | Dark accent file and badge verification are part of the CSS migration deliverable, not a separate phase |
 | Use webclient_rendering_context() not raw cookie reading | Handles user settings override, public user guard, and is the Odoo-standard approach used by web module |
 | Dark bundle includes ai_debug.assets not web.assets_backend | Avoids re-including the bundle that strips *.dark.scss files, which would undo dark variable injection |
+| Use $o-warning for .ai-json-number in dark mode | Warm amber contrast on dark background vs neutral gray in light mode |
+| Bootstrap alert-danger replaces custom ai-detail-error-banner | Automatic dark-mode adaptation without custom CSS |
 
 ### Pending Todos
 
@@ -60,5 +62,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Phase 8 complete — ready to start Phase 9 (SCSS Migration and Dark Accents)
+Stopped at: Completed 09-02-PLAN.md — dark bundle config and Bootstrap error banners
 Resume file: None

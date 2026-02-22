@@ -28,7 +28,7 @@ Requirements for v1.2 Native Theming. Each maps to roadmap phases.
 
 ### Dark Accent Colors
 
-- [ ] **DARK-01**: `app.dark.scss` file created with dark-mode-specific accent colors for syntax highlighting (JSON keys, strings, numbers)
+- [x] **DARK-01**: `app.dark.scss` file created with dark-mode-specific accent colors for syntax highlighting (JSON keys, strings, numbers)
 - [ ] **DARK-02**: Status badge colors (running, done, error, paused) verified and adjusted for both light and dark modes
 
 ## Future Requirements
@@ -61,7 +61,7 @@ Requirements for v1.2 Native Theming. Each maps to roadmap phases.
 | SCSS-05 | Phase 9 | Pending |
 | COMP-01 | Phase 9 | Pending |
 | COMP-02 | Phase 9 | Pending |
-| DARK-01 | Phase 9 | Pending |
+| DARK-01 | Phase 9 | Complete |
 | DARK-02 | Phase 9 | Pending |
 
 **Coverage:**
