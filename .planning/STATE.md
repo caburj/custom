@@ -44,9 +44,10 @@ None.
 | 11 | fix dialog title not legible (dark text on dark header) | 2026-02-21 | 02ed852 | [11-fix-dialog-title-not-legible-dark-text-o](./quick/11-fix-dialog-title-not-legible-dark-text-o/) |
 | 12 | fix tool result styling add truncation | 2026-02-21 | c768d6f | [12-fix-tool-result-styling-add-truncation-a](./quick/12-fix-tool-result-styling-add-truncation-a/) |
 | 13 | fix white background on short string results | 2026-02-21 | 2fa87e7 | [13-fix-white-background-on-short-string-res](./quick/13-fix-white-background-on-short-string-res/) |
+| 14 | add Alt/Option+click recursive expand/collapse to JsonTree | 2026-02-22 | 46dd86c | [14-add-alt-option-click-recursive-expand-co](./quick/14-add-alt-option-click-recursive-expand-co/) |
 
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: v1.2 milestone archived
+Stopped at: Quick task 14 complete — Alt/Option+click recursive JsonTree expand/collapse
 Resume file: None
