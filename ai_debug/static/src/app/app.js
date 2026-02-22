@@ -5,7 +5,7 @@ import { MainComponentsContainer } from "@web/core/main_components_container";
 import { LoopDetail } from "./detail/loop_detail";
 import { IterationDetail } from "./detail/iter_detail";
 import { ToolCallDetail } from "./detail/tc_detail";
-import { probeIDB, writeTrace, loadAllTraces } from "./db";
+import { probeIDB, writeTrace, deleteTrace, loadAllTraces } from "./db";
 
 /**
  * Reconstruct a reactive trace object from a plain IDB-stored record.
@@ -63,10 +63,13 @@ export class AiDebugApp extends Component {
             selectedId: null,
             selectedType: null,   // 'trace' | 'iteration' | 'tool_call'
             ephemeralMode: false, // true when IDB is unavailable (private browsing or write failure)
+            checkedTraceIds: new Set(),  // Phase 11: checkbox selection for bulk delete
         });
 
         // Sidebar DOM ref for auto-scroll
         this.sidebarRef = useRef("sidebar");
+        // Select-all checkbox DOM ref for indeterminate state sync
+        this.selectAllRef = useRef("selectAll");
         this._needsScroll = false;
         this._flashId = null;
         this._lastArrivedId = null;
@@ -239,6 +242,10 @@ export class AiDebugApp extends Component {
         // Post-render: auto-scroll to newest item + flash effect
         // ----------------------------------------------------------------
         onPatched(() => {
+            // Indeterminate state for select-all checkbox (DOM property, not HTML attribute)
+            if (this.selectAllRef.el) {
+                this.selectAllRef.el.indeterminate = this.someChecked;
+            }
             if (this._needsScroll && this._lastArrivedId && this.sidebarRef.el) {
                 const el = this.sidebarRef.el.querySelector(
                     `[data-node-id="${this._lastArrivedId}"]`,
@@ -288,12 +295,6 @@ export class AiDebugApp extends Component {
             const iteration = trace.iterations.get(typeOrIterationId);
             if (iteration) iteration.expanded = !iteration.expanded;
         }
-    }
-
-    clearAll() {
-        this.traces.clear();
-        this.state.selectedId = null;
-        this.state.selectedType = null;
     }
 
     // ----------------------------------------------------------------
@@ -417,6 +418,62 @@ export class AiDebugApp extends Component {
                 return "Disconnected";
             default:
                 return "Connecting...";
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Selection state getters — used by template and deleteCheckedTraces
+    // ----------------------------------------------------------------
+
+    get allChecked() {
+        return this.traces.size > 0 && this.state.checkedTraceIds.size === this.traces.size;
+    }
+
+    get someChecked() {
+        return this.state.checkedTraceIds.size > 0 && !this.allChecked;
+    }
+
+    // ----------------------------------------------------------------
+    // Checkbox toggle and bulk delete methods
+    // ----------------------------------------------------------------
+
+    toggleTraceCheck(traceId) {
+        if (this.state.checkedTraceIds.has(traceId)) {
+            this.state.checkedTraceIds.delete(traceId);
+        } else {
+            this.state.checkedTraceIds.add(traceId);
+        }
+    }
+
+    toggleSelectAll() {
+        if (this.allChecked) {
+            this.state.checkedTraceIds.clear();
+        } else {
+            for (const id of this.traces.keys()) {
+                this.state.checkedTraceIds.add(id);
+            }
+        }
+    }
+
+    deleteCheckedTraces() {
+        const ids = [...this.state.checkedTraceIds];
+        if (ids.length === 0) return;
+        // Clear checkbox selection first
+        this.state.checkedTraceIds.clear();
+        // Clear detail panel selection if the viewed trace is being deleted
+        if (ids.includes(this.state.selectedId)) {
+            this.state.selectedId = null;
+            this.state.selectedType = null;
+        }
+        // Remove from reactive Map (triggers OWL re-render immediately)
+        for (const id of ids) {
+            this.traces.delete(id);
+        }
+        // Delete from IDB (fire-and-forget per item)
+        for (const id of ids) {
+            deleteTrace(id).catch((err) => {
+                console.warn("[ai_debug] IDB delete failed for", id, err);
+            });
         }
     }
 }
