@@ -47,4 +47,8 @@ export class ToolCallDetail extends Component {
         return !this.resultIsObject && this.resultString.length > 300;
     }
 
+    get hasConfirmation() {
+        return !!this.props.toolCall.triggered_confirmation;
+    }
+
 }

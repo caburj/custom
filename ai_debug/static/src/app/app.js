@@ -161,6 +161,8 @@ export class AiDebugApp extends Component {
                 state_before: payload.state_before || {},
                 state_after: payload.state_after || {},
                 call_id: payload.call_id || null,
+                triggered_confirmation: payload.triggered_confirmation || false,
+                confirmation_message: payload.confirmation_message || null,
             });
             // NEVER touch this.state.selectedId here — SIDE-05
         };
