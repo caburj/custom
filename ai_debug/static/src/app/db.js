@@ -71,6 +71,8 @@ export function serializeTrace(trace) {
                         state_before: tc.state_before,
                         state_after: tc.state_after,
                         call_id: tc.call_id,
+                        triggered_confirmation: tc.triggered_confirmation,
+                        confirmation_message: tc.confirmation_message,
                     },
                 ]),
             },
