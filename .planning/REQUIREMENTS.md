@@ -1,0 +1,74 @@
+# Requirements: AI Debugger
+
+**Defined:** 2026-02-22
+**Core Value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
+
+## v1.2 Requirements
+
+Requirements for v1.2 Native Theming. Each maps to roadmap phases.
+
+### Theme Infrastructure
+
+- [ ] **INFRA-01**: App reads user's `color_scheme` preference from cookie via `webclient_rendering_context()` in the controller
+- [ ] **INFRA-02**: QWeb template conditionally loads dark or light CSS bundle based on `color_scheme` value
+- [ ] **INFRA-03**: Manifest defines `ai_debug.assets_dark` bundle that includes `web.dark_mode_variables` + dark SCSS overrides
+
+### SCSS Migration
+
+- [ ] **SCSS-01**: All hardcoded background colors in `app.scss` replaced with `$o-gray-*` SCSS variables
+- [ ] **SCSS-02**: All hardcoded border colors in `app.scss` replaced with SCSS variables
+- [ ] **SCSS-03**: All hardcoded text colors in `app.scss` replaced with SCSS variables
+- [ ] **SCSS-04**: All hardcoded accent colors (success, error, warning, info) in `app.scss` replaced with `$o-success`, `$o-danger`, `$o-warning`, `$o-action` variables
+- [ ] **SCSS-05**: All hardcoded `rgba()` values in `app.scss` audited and replaced with theme-aware equivalents
+
+### Component Cleanup
+
+- [ ] **COMP-01**: Notebook component override block removed from `app.scss` (enterprise SCSS handles dark mode natively)
+- [ ] **COMP-02**: Dialog component override block removed from `app.scss` (Bootstrap `--bs-modal-bg` handles dark mode natively)
+
+### Dark Accent Colors
+
+- [ ] **DARK-01**: `app.dark.scss` file created with dark-mode-specific accent colors for syntax highlighting (JSON keys, strings, numbers)
+- [ ] **DARK-02**: Status badge colors (running, done, error, paused) verified and adjusted for both light and dark modes
+
+## Future Requirements
+
+### Theme Enhancements
+
+- **THEME-01**: In-app theme toggle button (deferred — developers have Odoo Preferences access)
+- **THEME-02**: Real-time theme switching without page reload (deferred — not needed for developer tool)
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| In-app theme toggle | ai_debug users are developers with Odoo Preferences access; POS has one because cashiers don't |
+| Custom theme beyond light/dark | Developer tool should match the Odoo ecosystem, not introduce custom themes |
+| `prefers-color-scheme` media query | Odoo handles this via `color_scheme_service.js` + cookie; the standalone app reads the resolved cookie |
+| Catppuccin as a named theme option | Replacing with native Odoo theming is the explicit goal; Catppuccin was a placeholder |
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| INFRA-01 | — | Pending |
+| INFRA-02 | — | Pending |
+| INFRA-03 | — | Pending |
+| SCSS-01 | — | Pending |
+| SCSS-02 | — | Pending |
+| SCSS-03 | — | Pending |
+| SCSS-04 | — | Pending |
+| SCSS-05 | — | Pending |
+| COMP-01 | — | Pending |
+| COMP-02 | — | Pending |
+| DARK-01 | — | Pending |
+| DARK-02 | — | Pending |
+
+**Coverage:**
+- v1.2 requirements: 12 total
+- Mapped to phases: 0
+- Unmapped: 12
+
+---
+*Requirements defined: 2026-02-22*
+*Last updated: 2026-02-22 after initial definition*
