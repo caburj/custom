@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 Milestone: v1.2 Native Theming — SHIPPED 2026-02-22
 Phase: All complete (Phases 8-9)
 Status: Milestone archived, ready for next milestone
-Last activity: 2026-02-22 — v1.2 milestone completed and archived
+Last activity: 2026-02-22 - Completed quick task 14: Add Alt/Option+Click recursive expand/collapse to JSON tree widget
 
 ```
 v1.2: [██████████] 100% — SHIPPED
