@@ -85,7 +85,10 @@ function serializeTrace(trace) {
  * and is safe to use directly as the IDB key.
  */
 export function writeTrace(trace) {
-    const record = serializeTrace(trace);
+    // JSON round-trip strips OWL reactive Proxies that IDB's structured clone
+    // cannot handle (DataCloneError). Dates become ISO strings — Phase 11
+    // hydration must parse them back.
+    const record = JSON.parse(JSON.stringify(serializeTrace(trace)));
     return idb.write(STORE, trace.trace_id, record);
 }
 
