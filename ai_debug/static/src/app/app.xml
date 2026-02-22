@@ -21,7 +21,7 @@
         <div class="ai-debug-main">
 
             <!-- Sidebar -->
-            <aside class="ai-debug-sidebar">
+            <aside class="ai-debug-sidebar" t-attf-style="width: {{state.sidebarWidth}}px; min-width: {{state.sidebarWidth}}px;">
 
                 <!-- Traces header bar with select-all + action buttons — stays pinned -->
                 <div class="ai-tree-header">
@@ -77,8 +77,18 @@
                               t-on-click.stop="() => this.toggleExpand(traceId, 'trace')">&#x203A;</span>
                         <span class="ai-tree-label"
                               t-on-click="() => this.selectItem(traceId, 'trace')">
-                            <t t-esc="trace.agent_name or 'Unknown Agent'"/>
-                            <span class="ai-tree-label-dim"> &#xB7; <t t-esc="trace.model_name or ''"/></span>
+                            <t t-if="trace.user_query">
+                                <span class="ai-tree-query-title"
+                                      t-att-title="trace.user_query"
+                                      t-on-click="(ev) => this.showFullQuery(ev, trace.user_query)"
+                                      t-esc="trace.user_query"/>
+                            </t>
+                            <t t-else="">
+                                <t t-esc="trace.agent_name or 'Unknown Agent'"/>
+                            </t>
+                            <span class="ai-tree-meta-line">
+                                <t t-esc="trace.agent_name or 'Agent'"/> &#xB7; <t t-esc="trace.model_name or ''"/>
+                            </span>
                         </span>
                         <span t-if="trace.hydrated" class="ai-tree-hydrated-badge" title="Loaded from storage">archived</span>
                         <!-- Status indicator -->
@@ -144,6 +154,9 @@
                 </div> <!-- end .ai-tree-content -->
 
             </aside>
+
+            <div class="ai-debug-resize-handle"
+                 t-on-pointerdown="onResizeStart"/>
 
             <!-- Detail panel -->
             <main class="ai-debug-detail">

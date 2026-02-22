@@ -35,6 +35,7 @@ export function serializeTrace(trace) {
         storedAt: Date.now(),
         agent_name: trace.agent_name,
         model_name: trace.model_name,
+        user_query: trace.user_query,
         status: trace.status,
         started_at: trace.started_at,
         ended_at: trace.ended_at,

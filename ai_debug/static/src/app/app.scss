@@ -88,13 +88,25 @@
 
 // Sidebar — outer container, does NOT scroll; header is pinned here
 .ai-debug-sidebar {
-    width: 280px;
-    min-width: 280px;
     background-color: $o-webclient-background-color;
     border-right: 1px solid $border-color;
     overflow: hidden;
     display: flex;
     flex-direction: column;
+}
+
+// Resize handle between sidebar and detail panel
+.ai-debug-resize-handle {
+    width: 4px;
+    cursor: col-resize;
+    background-color: transparent;
+    transition: background-color 0.15s ease;
+    flex-shrink: 0;
+
+    &:hover,
+    &:active {
+        background-color: $o-action;
+    }
 }
 
 // Scrollable tree content area — lives below the pinned header
@@ -222,7 +234,13 @@
 }
 
 // Level indentation — level-0 reduced by 4px to accommodate checkbox; levels 1+2 adjusted equally
-.ai-tree-row.level-0 { padding-left: 4px; }
+.ai-tree-row.level-0 {
+    padding-left: 4px;
+    height: auto;
+    min-height: 44px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
 .ai-tree-row.level-1 { padding-left: 24px; }
 .ai-tree-row.level-2 { padding-left: 44px; }
 
@@ -259,6 +277,40 @@
     font-size: 13px;
     color: $o-gray-900;
     cursor: pointer;
+    min-width: 0;
+}
+
+// Two-line label layout for level-0 rows (query title + agent/model meta)
+.ai-tree-row.level-0 > .ai-tree-label {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    white-space: normal;
+}
+
+// Query title line — truncated, clickable to show full text
+.ai-tree-query-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-decoration-color: $o-gray-500;
+
+    &:hover {
+        text-decoration-color: $o-action;
+        color: $o-action;
+    }
+}
+
+// Agent · model meta line under the query title
+.ai-tree-meta-line {
+    font-size: 11px;
+    color: $o-gray-600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .ai-tree-label-dim {

@@ -7,6 +7,7 @@ function openAiDebugger() {
     return {
         type: "item",
         description: _t("Open AI Debugger"),
+        href: "/ai-debug",
         callback: () => {
             browser.open("/ai-debug", "_blank");
         },

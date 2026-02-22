@@ -7,6 +7,7 @@ import { IterationDetail } from "./detail/iter_detail";
 import { ToolCallDetail } from "./detail/tc_detail";
 import { probeIDB, writeTrace, deleteTrace, loadAllTraces, serializeTrace } from "./db";
 import { ImportPreviewDialog } from "./import_dialog";
+import { TextPopupDialog } from "./detail/text_popup";
 
 /**
  * Reconstruct a reactive trace object from a plain IDB-stored record.
@@ -58,13 +59,13 @@ export class AiDebugApp extends Component {
         // callback when accessed through this proxy chain.
         this.traces = useState(new Map());
 
-        // Selection and connection state — completely separate from trace data (SIDE-05)
+        // Selection state — completely separate from trace data (SIDE-05)
         this.state = useState({
-            connectionStatus: "connecting",
             selectedId: null,
             selectedType: null,   // 'trace' | 'iteration' | 'tool_call'
             ephemeralMode: false, // true when IDB is unavailable (private browsing or write failure)
             checkedTraceIds: new Set(),  // Phase 11: checkbox selection for bulk delete
+            sidebarWidth: 280,
         });
 
         // Sidebar DOM ref for auto-scroll
@@ -83,19 +84,6 @@ export class AiDebugApp extends Component {
         this._lastArrivedId = null;
 
         // ----------------------------------------------------------------
-        // Bus connection lifecycle handler
-        // ----------------------------------------------------------------
-        this._onWorkerState = ({ detail }) => {
-            if (detail === "CONNECTED") {
-                this.state.connectionStatus = "connected";
-            } else if (detail === "CONNECTING") {
-                this.state.connectionStatus = "reconnecting";
-            } else {
-                this.state.connectionStatus = "disconnected";
-            }
-        };
-
-        // ----------------------------------------------------------------
         // Bus event handlers — NEVER touch this.state.selectedId (SIDE-05)
         // ----------------------------------------------------------------
 
@@ -105,6 +93,7 @@ export class AiDebugApp extends Component {
                 trace_id: payload.trace_id,
                 agent_name: payload.agent_name || "Unknown Agent",
                 model_name: payload.model_name || "",
+                user_query: payload.user_query || "",
                 status: "running",
                 started_at: new Date(),
                 ended_at: null,
@@ -223,10 +212,6 @@ export class AiDebugApp extends Component {
         // Bus lifecycle
         // ----------------------------------------------------------------
         onMounted(async () => {
-            this.busService.addEventListener(
-                "BUS:WORKER_STATE_UPDATED",
-                this._onWorkerState,
-            );
             this.busService.subscribe("new_trace", this._onNewTrace);
             this.busService.subscribe("iteration", this._onIteration);
             this.busService.subscribe("tool_call", this._onToolCall);
@@ -235,10 +220,6 @@ export class AiDebugApp extends Component {
         });
 
         onWillUnmount(() => {
-            this.busService.removeEventListener(
-                "BUS:WORKER_STATE_UPDATED",
-                this._onWorkerState,
-            );
             this.busService.unsubscribe("new_trace", this._onNewTrace);
             this.busService.unsubscribe("iteration", this._onIteration);
             this.busService.unsubscribe("tool_call", this._onToolCall);
@@ -288,6 +269,15 @@ export class AiDebugApp extends Component {
             const trace = this.traces.get(id);
             if (trace) trace.expanded = true;
         }
+    }
+
+    showFullQuery(_ev, query) {
+        if (!this.dialog || !query) return;
+        this.dialog.add(TextPopupDialog, {
+            title: "User Query",
+            content: query,
+            language: "markdown",
+        });
     }
 
     toggleExpand(idOrTraceId, typeOrIterationId) {
@@ -411,18 +401,18 @@ export class AiDebugApp extends Component {
     // ----------------------------------------------------------------
 
     get statusColor() {
-        return this.state.connectionStatus === "connected"
+        return this.busService.workerState === "CONNECTED"
             ? "connected"
             : "disconnected";
     }
 
     get statusLabel() {
-        switch (this.state.connectionStatus) {
-            case "connected":
+        switch (this.busService.workerState) {
+            case "CONNECTED":
                 return "Connected";
-            case "reconnecting":
-                return "Reconnecting...";
-            case "disconnected":
+            case "CONNECTING":
+                return "Connecting...";
+            case "DISCONNECTED":
                 return "Disconnected";
             default:
                 return "Connecting...";
@@ -580,6 +570,30 @@ export class AiDebugApp extends Component {
                 onConfirm: () => this._applyImport(parsed),
             });
         }
+    }
+
+    onResizeStart(ev) {
+        ev.preventDefault();
+        const startX = ev.clientX;
+        const startWidth = this.state.sidebarWidth;
+
+        const onMove = (e) => {
+            const delta = e.clientX - startX;
+            const newWidth = Math.max(180, Math.min(600, startWidth + delta));
+            this.state.sidebarWidth = newWidth;
+        };
+
+        const onUp = () => {
+            document.removeEventListener("pointermove", onMove);
+            document.removeEventListener("pointerup", onUp);
+            document.body.style.cursor = "";
+            document.body.style.userSelect = "";
+        };
+
+        document.addEventListener("pointermove", onMove);
+        document.addEventListener("pointerup", onUp);
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
     }
 
     _applyImport(records) {

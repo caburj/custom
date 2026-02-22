@@ -80,6 +80,44 @@ class AiSession(models.TransientModel):
             _logger.exception("ai_debug: failed to serialize tools for new_trace")
             return []
 
+    def _generate_next_response(self, message, confirm_pending=False):
+        """Override to capture the raw user query before provider formatting.
+
+        _generate_next_response receives the user message in Odoo's internal
+        format ({role, parts: [{type: 'text', content: '...'}]}) before it
+        gets transformed by _format_to_llm into provider-specific structures.
+        We extract the text here and thread it via env context so
+        _run_agentic_loop can include it in the new_trace bus event.
+        """
+        user_query = ""
+        if not confirm_pending and message.get('parts'):
+            for part in message['parts']:
+                if part.get('type') == 'text':
+                    user_query = part['content']
+                    break
+        self = self.with_context(_ai_debug_user_query=user_query)
+        yield from super()._generate_next_response(message, confirm_pending=confirm_pending)
+
+    @api.model
+    def _get_direct_response(self, model, instructions, message, temperature=0.5, tools=None,
+            schema=None, web_grounding=False, record=None, tool_results_collector=None):
+        """Override to capture the raw user query before provider formatting.
+
+        _get_direct_response receives message as a raw parts list
+        ([{type: 'text', content: '...'}]) before _format_to_llm.
+        """
+        user_query = ""
+        for part in message or []:
+            if isinstance(part, dict) and part.get('type') == 'text':
+                user_query = part['content']
+                break
+        self = self.with_context(_ai_debug_user_query=user_query)
+        return super()._get_direct_response(
+            model, instructions, message, temperature=temperature, tools=tools,
+            schema=schema, web_grounding=web_grounding, record=record,
+            tool_results_collector=tool_results_collector,
+        )
+
     @api.model
     def _run_agentic_loop(self, model, instructions, messages, temperature, tools, tools_context, record=None, schema=None, web_grounding=False):
         """Override to instrument the agentic loop with bus events.
@@ -109,11 +147,19 @@ class AiSession(models.TransientModel):
         iteration_count = 0
         started_at = time.monotonic()
 
+        # User query is captured from the raw message in _generate_next_response
+        # or _get_direct_response (before provider formatting) and threaded here
+        # via env context — no need to reverse-parse provider-specific formats.
+        user_query = self.env.context.get('_ai_debug_user_query', '')
+        if len(user_query) > 200:
+            user_query = user_query[:200]
+
         self._ai_debug_bus_send('new_trace', {
             'type': 'new_trace',
             'trace_id': trace_id,
             'agent_name': self.agent_id.name if self.agent_id else None,
             'model_name': model,
+            'user_query': user_query,
             # system prompt only; RAG context is in messages (captured in iteration events)
             'instructions': instructions,
             'tools': self._ai_debug_serialize_tools(tools, model),
