@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 Milestone: v1.2 Native Theming — SHIPPED 2026-02-22
 Phase: All complete (Phases 8-9)
 Status: Milestone archived, ready for next milestone
-Last activity: 2026-02-22 - Completed quick task 16: Fix JSON tree: remove colon, square toggles, always-show count, clickable strings
+Last activity: 2026-02-22 - Completed quick task 17: Make JSON tree toggle buttons more subtle
 
 ```
 v1.2: [██████████] 100% — SHIPPED
@@ -47,9 +47,10 @@ None.
 | 14 | add Alt/Option+click recursive expand/collapse to JsonTree | 2026-02-22 | 46dd86c | [14-add-alt-option-click-recursive-expand-co](./quick/14-add-alt-option-click-recursive-expand-co/) |
 | 15 | restyle JSON tree with depth lines, key pills, CSS truncation | 2026-02-22 | afcfef5 | [15-restyle-json-tree-widget-with-vertical-d](./quick/15-restyle-json-tree-widget-with-vertical-d/) |
 | 16 | fix JSON tree: remove colon, square toggles, always-show count, clickable strings | 2026-02-22 | e752ebe | [16-fix-json-tree-remove-colon-separator-use](./quick/16-fix-json-tree-remove-colon-separator-use/) |
+| 17 | make JSON tree toggle buttons more subtle — lighter bg with border | 2026-02-22 | 0377b0b | [17-make-json-tree-toggle-buttons-more-subtl](./quick/17-make-json-tree-toggle-buttons-more-subtl/) |
 
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Quick task 16 complete — JSON tree fixes: no colon, square +/- toggles, always-visible count, all strings clickable
+Stopped at: Quick task 17 complete — Subtle toggle buttons
 Resume file: None
