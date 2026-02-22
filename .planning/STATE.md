@@ -39,11 +39,11 @@ None — milestone complete.
 
 ### Quick Tasks Completed
 
-| # | Description | Date | Commit | Directory |
-|---|-------------|------|--------|-----------|
-| 19 | Sort traces by timestamp (desc) — add timestamp to each trace item for predictable ordering during export/import | 2026-02-22 | 360f64f | [19-sort-traces-by-timestamp-desc-add-timest](./quick/19-sort-traces-by-timestamp-desc-add-timest/) |
-| 20 | Hide chevron icon on iteration rows that have no tool calls | 2026-02-22 | 7d87b5f | [20-hide-chevron-icon-on-iteration-rows-that](./quick/20-hide-chevron-icon-on-iteration-rows-that/) |
-| 22 | Fix StateDiff OWL props validation error — guard with t-if and extend prop types to accept null | 2026-02-22 | b4cf5b6 | [22-fix-statediff-props-validation-error-bef](./quick/22-fix-statediff-props-validation-error-bef/) |
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 19 | Sort traces by timestamp (desc) — add timestamp to each trace item for predictable ordering during export/import | 2026-02-22 | 360f64f | | [19-sort-traces-by-timestamp-desc-add-timest](./quick/19-sort-traces-by-timestamp-desc-add-timest/) |
+| 20 | Hide chevron icon on iteration rows that have no tool calls | 2026-02-22 | 7d87b5f | | [20-hide-chevron-icon-on-iteration-rows-that](./quick/20-hide-chevron-icon-on-iteration-rows-that/) |
+| 22 | Fix StateDiff OWL props validation error — guard with t-if and extend prop types to accept null | 2026-02-22 | b4cf5b6 | Verified | [22-fix-statediff-props-validation-error-bef](./quick/22-fix-statediff-props-validation-error-bef/) |
 
 ## Session Continuity
 
