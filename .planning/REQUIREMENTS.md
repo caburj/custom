@@ -65,21 +65,21 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PERS-01 | — | Pending |
-| PERS-02 | — | Pending |
-| PERS-03 | — | Pending |
-| PERS-04 | — | Pending |
-| MGMT-01 | — | Pending |
-| MGMT-02 | — | Pending |
-| XPRT-01 | — | Pending |
-| XPRT-02 | — | Pending |
-| XPRT-03 | — | Pending |
+| PERS-01 | Phase 10 | Pending |
+| PERS-04 | Phase 10 | Pending |
+| PERS-02 | Phase 11 | Pending |
+| PERS-03 | Phase 11 | Pending |
+| MGMT-01 | Phase 11 | Pending |
+| MGMT-02 | Phase 11 | Pending |
+| XPRT-01 | Phase 12 | Pending |
+| XPRT-02 | Phase 12 | Pending |
+| XPRT-03 | Phase 12 | Pending |
 
 **Coverage:**
 - v1.3 requirements: 9 total
-- Mapped to phases: 0
-- Unmapped: 9
+- Mapped to phases: 9
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-22*
-*Last updated: 2026-02-22 after initial definition*
+*Last updated: 2026-02-22 after roadmap creation — all 9 requirements mapped*

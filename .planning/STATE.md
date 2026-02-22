@@ -5,14 +5,31 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.3 Local Persistence
+**Current focus:** v1.3 Local Persistence — Phase 10: IDB Layer and Write-Through
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-02-22 — Milestone v1.3 started
+Phase: 10 of 12 (IDB Layer and Write-Through)
+Plan: — (not yet planned)
+Status: Ready to plan
+Last activity: 2026-02-22 — v1.3 roadmap created, phases 10-12 defined
+
+Progress: [░░░░░░░░░░] 0% (v1.3)
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 0 (v1.3)
+- Average duration: —
+- Total execution time: —
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| — | — | — | — |
+
+*Updated after each plan completion*
 
 ## Accumulated Context
 
@@ -21,33 +38,24 @@ Last activity: 2026-02-22 — Milestone v1.3 started
 Decisions are logged in PROJECT.md Key Decisions table.
 All v1.2 decisions archived — see `.planning/milestones/v1.2-ROADMAP.md` for full list.
 
+Key decisions for v1.3 (pre-implementation):
+- Write-through cache pattern: reactive Map is UI source of truth; IDB writes are fire-and-forget, never awaited in bus handlers
+- Hydration goes in `onWillStart`, not `onMounted` — prevents flash of empty state
+- `hydrateTrace()` must explicitly reconstruct `reactive(new Map())` for all nested Maps — plain objects from IDB break live-event reactivity
+- Delete is always dual: reactive Map delete + `db.deleteTrace()` in same operation
+- IDB schema: database `ai_debug_traces`, version 1, single store `traces`, keyPath = `trace_id`
+
 ### Pending Todos
 
 None.
 
 ### Blockers/Concerns
 
-- Payload size for RAG-enabled sessions unknown — needs empirical baseline before meta/detail split strategy
-
-### Quick Tasks Completed
-
-| # | Description | Date | Commit | Directory |
-|---|-------------|------|--------|-----------|
-| 7 | fix the cosmetic gaps | 2026-02-21 | 4e321a3 | [7-fix-the-cosmetic-gaps](./quick/7-fix-the-cosmetic-gaps/) |
-| 8 | fix json tree compounding indentation | 2026-02-21 | 9efe0f2 | [8-fix-json-tree-compounding-indentation](./quick/8-fix-json-tree-compounding-indentation/) |
-| 9 | fix TextPopupDialog not opening in standalone app | 2026-02-21 | b74eeba | [9-fix-textpopupdialog-not-opening-in-stand](./quick/9-fix-textpopupdialog-not-opening-in-stand/) |
-| 10 | hide mail ChatHub/ChatBubble in standalone app | 2026-02-21 | 1fe2c3b | [10-hide-o-mail-chathub-chatbox-in-standalon](./quick/10-hide-o-mail-chathub-chatbox-in-standalon/) |
-| 11 | fix dialog title not legible (dark text on dark header) | 2026-02-21 | 02ed852 | [11-fix-dialog-title-not-legible-dark-text-o](./quick/11-fix-dialog-title-not-legible-dark-text-o/) |
-| 12 | fix tool result styling add truncation | 2026-02-21 | c768d6f | [12-fix-tool-result-styling-add-truncation-a](./quick/12-fix-tool-result-styling-add-truncation-a/) |
-| 13 | fix white background on short string results | 2026-02-21 | 2fa87e7 | [13-fix-white-background-on-short-string-res](./quick/13-fix-white-background-on-short-string-res/) |
-| 14 | add Alt/Option+click recursive expand/collapse to JsonTree | 2026-02-22 | 46dd86c | [14-add-alt-option-click-recursive-expand-co](./quick/14-add-alt-option-click-recursive-expand-co/) |
-| 15 | restyle JSON tree with depth lines, key pills, CSS truncation | 2026-02-22 | afcfef5 | [15-restyle-json-tree-widget-with-vertical-d](./quick/15-restyle-json-tree-widget-with-vertical-d/) |
-| 16 | fix JSON tree: remove colon, square toggles, always-show count, clickable strings | 2026-02-22 | e752ebe | [16-fix-json-tree-remove-colon-separator-use](./quick/16-fix-json-tree-remove-colon-separator-use/) |
-| 17 | make JSON tree toggle buttons more subtle — lighter bg with border | 2026-02-22 | 0377b0b | [17-make-json-tree-toggle-buttons-more-subtl](./quick/17-make-json-tree-toggle-buttons-more-subtl/) |
-| 18 | make JSON tree toggles semi-transparent, full opacity on hover | 2026-02-22 | 86f5f2a | [18-make-json-tree-toggles-semi-transparent-](./quick/18-make-json-tree-toggles-semi-transparent-/) |
+- RAG session payload sizes empirically unknown — verify actual trace sizes with a real RAG session during Phase 12 export implementation before deciding on chunked stringify
+- Verify `IndexedDB.invalidate("traces")` single-store clear behavior against `indexed_db.js` lines 215-244 before using in `clearAllTraces()`
 
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Quick task 18 complete — Semi-transparent toggles
+Stopped at: Roadmap created — phases 10-12 defined, ready to plan Phase 10
 Resume file: None
