@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.3 Local Persistence — Phase 11: Hydration and Trace Management
+**Current focus:** v1.3 Local Persistence — Phase 12: Export and Import
 
 ## Current Position
 
-Phase: 11 of 12 (Hydration and Trace Management)
-Plan: 2 of 2 complete
-Status: Phase 11 complete — hydration + trace management UI implemented
-Last activity: 2026-02-22 — completed plan 11-02 (checkbox bulk delete)
+Phase: 12 of 12 (Export and Import)
+Plan: 1 of 2 complete
+Status: Phase 12 in progress — export implemented (plan 01)
+Last activity: 2026-02-22 — completed plan 12-01 (export selected traces as JSON download)
 
-Progress: [████░░░░░░] 40% (v1.3)
+Progress: [█████░░░░░] 50% (v1.3)
 
 ## Performance Metrics
 
@@ -29,6 +29,7 @@ Progress: [████░░░░░░] 40% (v1.3)
 |-------|-------|-------|----------|
 | 10 | 1 | ~15m | ~15m |
 | 11 | 2 | ~3m | ~1.5m |
+| 12 | 1 (of 2) | ~4m | ~4m |
 
 *Updated after each plan completion*
 
@@ -64,17 +65,25 @@ Key decisions from Phase 11 execution:
 - t-att-disabled uses "expr or undefined" idiom — removes attribute entirely when false (avoids disabled="false" still disabling)
 - clearAll() fully replaced by deleteCheckedTraces() — old method did not delete from IDB
 
+Key decisions from Phase 12 plan 01 execution:
+- serializeTrace exported with minimal one-word change (function → export function) — no refactoring
+- Raw JSON array format (no metadata envelope) — locked from CONTEXT.md
+- URL.revokeObjectURL runs immediately after a.click() — browser queues download before URL is revoked
+- filter(Boolean) in exportSelected handles race condition where checked ID's trace was removed before export
+- Export button ordered before delete button; import button will insert between them in Plan 02
+- &#x2913; (DOWNWARDS ARROW TO BAR) used as export button icon
+
 ### Pending Todos
 
 None.
 
 ### Blockers/Concerns
 
-- RAG session payload sizes empirically unknown — verify actual trace sizes with a real RAG session during Phase 12 export implementation before deciding on chunked stringify
 - Verify `IndexedDB.invalidate("traces")` single-store clear behavior against `indexed_db.js` lines 215-244 before using in `clearAllTraces()`
+- RAG session payload sizes: export plan 01 complete without chunked stringify; confirmed acceptable for initial implementation
 
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed plan 11-02 (checkbox bulk delete) — Phase 11 complete
+Stopped at: Completed plan 12-01 (export selected traces as JSON download)
 Resume file: None

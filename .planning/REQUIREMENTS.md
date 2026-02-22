@@ -21,7 +21,7 @@ Requirements for local persistence milestone. Each maps to roadmap phases.
 
 ### Export/Import
 
-- [ ] **XPRT-01**: User can export all traces as a JSON file download
+- [x] **XPRT-01**: User can export all traces as a JSON file download
 - [ ] **XPRT-02**: User can import a previously exported JSON file to restore traces
 - [ ] **XPRT-03**: Invalid import files are rejected with a user-facing error notification
 
@@ -71,7 +71,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PERS-03 | Phase 11 | Complete |
 | MGMT-01 | Phase 11 | Complete |
 | MGMT-02 | Phase 11 | Complete |
-| XPRT-01 | Phase 12 | Pending |
+| XPRT-01 | Phase 12 | Complete |
 | XPRT-02 | Phase 12 | Pending |
 | XPRT-03 | Phase 12 | Pending |
 
