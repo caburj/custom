@@ -11,12 +11,12 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v1.2 Native Theming
 Phase: 8 — Theme Infrastructure
-Plan: —
-Status: Roadmap complete, ready for planning
-Last activity: 2026-02-22 — v1.2 roadmap created (phases 8-9)
+Plan: 1 of 1
+Status: Awaiting checkpoint verification (08-01 Task 2: browser verify)
+Last activity: 2026-02-22 — 08-01 Task 1 complete (theme infrastructure wired)
 
 ```
-v1.2 progress: [░░░░░░░░░░] 0% — Phase 8 not started
+v1.2 progress: [█░░░░░░░░░] 10% — Phase 8 Plan 1 infrastructure complete, awaiting verify
 ```
 
 ## Accumulated Context
@@ -33,6 +33,8 @@ All v1.1 decisions archived — see `.planning/milestones/v1.1-ROADMAP.md` for f
 | 2 phases for v1.2 (not 3+) | Infrastructure and CSS migration are the only natural delivery boundary; "quick" depth confirms aggressive compression |
 | COMP-01/COMP-02 in Phase 9 (not Phase 8) | Notebook and Dialog override removal is a CSS operation — it belongs with the CSS migration, not the wiring phase |
 | DARK-01/DARK-02 in Phase 9 | Dark accent file and badge verification are part of the CSS migration deliverable, not a separate phase |
+| Use webclient_rendering_context() not raw cookie reading | Handles user settings override, public user guard, and is the Odoo-standard approach used by web module |
+| Dark bundle includes ai_debug.assets not web.assets_backend | Avoids re-including the bundle that strips *.dark.scss files, which would undo dark variable injection |
 
 ### Pending Todos
 
@@ -58,5 +60,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: v1.2 roadmap created — phases 8-9 defined
+Stopped at: 08-01 Task 2 — checkpoint:human-verify (browser verification of theme-aware CSS loading)
 Resume file: None

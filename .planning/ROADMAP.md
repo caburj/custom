@@ -33,7 +33,7 @@ Full details: `.planning/milestones/v1.1-ROADMAP.md`
 
 ### v1.2 Native Theming
 
-- [ ] **Phase 8: Theme Infrastructure** - Wire controller, template, and manifest to load CSS bundles conditionally based on color_scheme cookie
+- [x] **Phase 8: Theme Infrastructure** - Wire controller, template, and manifest to load CSS bundles conditionally based on color_scheme cookie
 - [ ] **Phase 9: SCSS Migration and Dark Accents** - Replace all hardcoded colors in app.scss with SCSS variables and create dark-only accent overrides
 
 ## Phase Details
@@ -49,7 +49,7 @@ Full details: `.planning/milestones/v1.1-ROADMAP.md`
   4. The rendered HTML source contains `color_scheme` in the template context (visible via page source inspection), confirming `webclient_rendering_context()` is called in the controller
 **Plans:** 1 plan
 Plans:
-- [ ] 08-01-PLAN.md — Wire controller, manifest, and template for theme-aware CSS loading
+- [x] 08-01-PLAN.md — Wire controller, manifest, and template for theme-aware CSS loading
 
 ### Phase 9: SCSS Migration and Dark Accents
 **Goal**: The app is visually consistent with the Odoo theme in both light and dark modes, with zero hardcoded Catppuccin colors remaining
@@ -74,5 +74,5 @@ Plans:
 | 5. Bus Instrumentation | v1.1 | 1/1 | Complete | 2026-02-21 |
 | 6. Sidebar Tree | v1.1 | 5/5 | Complete | 2026-02-21 |
 | 7. Detail Panel | v1.1 | 2/2 | Complete | 2026-02-21 |
-| 8. Theme Infrastructure | v1.2 | 0/1 | Planning | - |
+| 8. Theme Infrastructure | v1.2 | 1/1 | Complete | 2026-02-22 |
 | 9. SCSS Migration and Dark Accents | v1.2 | 0/? | Not started | - |

@@ -9,9 +9,9 @@ Requirements for v1.2 Native Theming. Each maps to roadmap phases.
 
 ### Theme Infrastructure
 
-- [ ] **INFRA-01**: App reads user's `color_scheme` preference from cookie via `webclient_rendering_context()` in the controller
-- [ ] **INFRA-02**: QWeb template conditionally loads dark or light CSS bundle based on `color_scheme` value
-- [ ] **INFRA-03**: Manifest defines `ai_debug.assets_dark` bundle that includes `web.dark_mode_variables` + dark SCSS overrides
+- [x] **INFRA-01**: App reads user's `color_scheme` preference from cookie via `webclient_rendering_context()` in the controller
+- [x] **INFRA-02**: QWeb template conditionally loads dark or light CSS bundle based on `color_scheme` value
+- [x] **INFRA-03**: Manifest defines `ai_debug.assets_dark` bundle that includes `web.dark_mode_variables` + dark SCSS overrides
 
 ### SCSS Migration
 
@@ -51,9 +51,9 @@ Requirements for v1.2 Native Theming. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INFRA-01 | Phase 8 | Pending |
-| INFRA-02 | Phase 8 | Pending |
-| INFRA-03 | Phase 8 | Pending |
+| INFRA-01 | Phase 8 | Complete |
+| INFRA-02 | Phase 8 | Complete |
+| INFRA-03 | Phase 8 | Complete |
 | SCSS-01 | Phase 9 | Pending |
 | SCSS-02 | Phase 9 | Pending |
 | SCSS-03 | Phase 9 | Pending |
