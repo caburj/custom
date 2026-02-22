@@ -9,7 +9,5 @@ class AiDebugController(http.Controller):
     def ai_debug(self, **kw):
         if not is_user_internal(request.session.uid):
             return request.redirect('/web/login', 303)
-        session_info = request.env['ir.http'].session_info()
-        return request.render('ai_debug.index', {
-            'session_info': session_info,
-        })
+        context = request.env['ir.http'].webclient_rendering_context()
+        return request.render('ai_debug.index', context)

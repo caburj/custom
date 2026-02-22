@@ -14,7 +14,15 @@
                         __session_info__: <t t-out="json.dumps(session_info)"/>,
                     };
                 </script>
-                <t t-call-assets="ai_debug.assets"/>
+                <!-- JS-only, always loaded -->
+                <t t-call-assets="ai_debug.assets" t-css="false"/>
+                <!-- CSS-only, scheme-conditional -->
+                <t t-if="color_scheme == 'dark'">
+                    <t t-call-assets="ai_debug.assets_dark" media="screen" t-js="false"/>
+                </t>
+                <t t-else="">
+                    <t t-call-assets="ai_debug.assets" media="screen" t-js="false"/>
+                </t>
             </head>
             <body/>
         </html>
