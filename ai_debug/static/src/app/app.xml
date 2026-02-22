@@ -109,9 +109,11 @@
                                      'ancestor': selectedIterationId === iterationId and state.selectedId !== iterationId
                                  }"
                                  t-att-data-node-id="iterationId">
-                                <span class="ai-tree-chevron"
+                                <span t-if="iteration.toolCalls.size > 0"
+                                      class="ai-tree-chevron"
                                       t-att-class="{'expanded': iteration.expanded}"
                                       t-on-click.stop="() => this.toggleExpand(traceId, iterationId)">&#x203A;</span>
+                                <span t-else="" class="ai-tree-chevron-placeholder"/>
                                 <span class="ai-tree-label"
                                       t-on-click="() => this.selectItem(iterationId, 'iteration')">
                                     Iteration <t t-esc="iteration.iteration_index"/>
