@@ -2,7 +2,7 @@
 <templates xml:space="preserve">
 
 <t t-name="ai_debug.JsonTree">
-    <div class="ai-json-node" t-att-style="props.depth > 0 ? 'padding-left:12px' : false">
+    <div t-att-class="'ai-json-node' + (props.depth > 0 ? ' ai-json-nested' : '')">
 
         <!-- Expandable node (object or array) -->
         <t t-if="isExpandable">
@@ -15,7 +15,7 @@
                     <span class="ai-json-key" t-esc="props.label"/>:
                 </t>
                 <t t-if="!state.expanded">
-                    <span class="ai-json-preview" t-esc="collapsedPreview"/>
+                    <span class="ai-json-preview ai-json-value" t-esc="collapsedPreview"/>
                 </t>
             </div>
             <t t-if="state.expanded">
@@ -38,20 +38,20 @@
                     <span class="ai-json-key" t-esc="props.label"/>:
                 </t>
                 <t t-if="isLongString">
-                    <span class="ai-json-string ai-json-truncated" t-on-click="onClickLongString"
+                    <span class="ai-json-string ai-json-value ai-json-truncated" t-on-click="onClickLongString"
                           t-esc="displayValue" title="Click to expand"/>
                 </t>
                 <t t-elif="type === 'string'">
-                    <span class="ai-json-string" t-esc="displayValue"/>
+                    <span class="ai-json-string ai-json-value" t-esc="displayValue"/>
                 </t>
                 <t t-elif="type === 'number'">
-                    <span class="ai-json-number" t-esc="displayValue"/>
+                    <span class="ai-json-number ai-json-value" t-esc="displayValue"/>
                 </t>
                 <t t-elif="type === 'boolean'">
-                    <span class="ai-json-boolean" t-esc="displayValue"/>
+                    <span class="ai-json-boolean ai-json-value" t-esc="displayValue"/>
                 </t>
                 <t t-else="">
-                    <span class="ai-json-null" t-esc="displayValue"/>
+                    <span class="ai-json-null ai-json-value" t-esc="displayValue"/>
                 </t>
             </div>
         </t>
