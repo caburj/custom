@@ -5,18 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.2 Native Theming
+**Current focus:** Planning next milestone
 
 ## Current Position
 
-Milestone: v1.2 Native Theming
-Phase: 9 — SCSS Migration and Dark Accents (COMPLETE)
-Plan: 3 of 3 — All plans complete
-Status: Phase 9 complete — v1.2 Native Theming milestone complete
-Last activity: 2026-02-22 — 09-03 complete (visual verification approved)
+Milestone: v1.2 Native Theming — SHIPPED 2026-02-22
+Phase: All complete (Phases 8-9)
+Status: Milestone archived, ready for next milestone
+Last activity: 2026-02-22 — v1.2 milestone completed and archived
 
 ```
-v1.2 progress: [██████████] 100% — Phases 8 and 9 complete, v1.2 milestone done
+v1.2: [██████████] 100% — SHIPPED
 ```
 
 ## Accumulated Context
@@ -24,21 +23,7 @@ v1.2 progress: [██████████] 100% — Phases 8 and 9 complete
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
-All v1.1 decisions archived — see `.planning/milestones/v1.1-ROADMAP.md` for full list.
-
-### v1.2 Key Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| 2 phases for v1.2 (not 3+) | Infrastructure and CSS migration are the only natural delivery boundary; "quick" depth confirms aggressive compression |
-| COMP-01/COMP-02 in Phase 9 (not Phase 8) | Notebook and Dialog override removal is a CSS operation — it belongs with the CSS migration, not the wiring phase |
-| DARK-01/DARK-02 in Phase 9 | Dark accent file and badge verification are part of the CSS migration deliverable, not a separate phase |
-| Use webclient_rendering_context() not raw cookie reading | Handles user settings override, public user guard, and is the Odoo-standard approach used by web module |
-| Dark bundle includes ai_debug.assets not web.assets_backend | Avoids re-including the bundle that strips *.dark.scss files, which would undo dark variable injection |
-| Use $o-warning for .ai-json-number in dark mode | Warm amber contrast on dark background vs neutral gray in light mode |
-| Bootstrap alert-danger replaces custom ai-detail-error-banner | Automatic dark-mode adaptation without custom CSS |
-| JSON numbers use $o-gray-700 in light mode (not $o-warning) | $o-warning (#ffac00) is too bright on white background in light mode |
-| All panels use same $o-webclient-background-color | Borders define visual separation, not background depth (per locked decision) |
+All v1.2 decisions archived — see `.planning/milestones/v1.2-ROADMAP.md` for full list.
 
 ### Pending Todos
 
@@ -63,5 +48,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 09-03-PLAN.md — visual verification approved, Phase 9 and v1.2 milestone complete
+Stopped at: v1.2 milestone archived
 Resume file: None

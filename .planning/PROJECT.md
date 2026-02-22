@@ -2,34 +2,27 @@
 
 ## What This Is
 
-A custom Odoo module that instruments the enterprise `ai` module's agentic loop to provide live visibility into every LLM call, tool execution, state change, and loop iteration. Delivered as a standalone OWL app at `/ai-debug` — open it in a browser tab and it streams agentic loop events in real time via `bus.bus`. Features a 3-level sidebar tree (Loop > Iteration > Tool Call) with type-aware detail panels showing system prompts, messages, raw responses, tool args/results, and state diffs. No database persistence; all data lives in the frontend for the duration of the browser session.
+A custom Odoo module that instruments the enterprise `ai` module's agentic loop to provide live visibility into every LLM call, tool execution, state change, and loop iteration. Delivered as a standalone OWL app at `/ai-debug` that respects the user's Odoo light/dark theme preference. Open it in a browser tab and it streams agentic loop events in real time via `bus.bus`. Features a 3-level sidebar tree (Loop > Iteration > Tool Call) with type-aware detail panels showing system prompts, messages, raw responses, tool args/results, and state diffs. No database persistence; all data lives in the frontend for the duration of the browser session.
 
 ## Core Value
 
 Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
 
-## Current Milestone: v1.2 Native Theming
-
-**Goal:** Replace hardcoded Catppuccin Mocha colors with Odoo's Bootstrap CSS variables so the app respects the user's light/dark theme preference.
-
-**Target features:**
-- Use Odoo/Bootstrap CSS custom properties instead of hardcoded color values
-- Conditionally load correct asset bundle based on `color_scheme` cookie
-- App automatically adapts to user's light or dark theme setting
-
 ## Current State
 
-**Shipped v1.1** (2026-02-22) — Live Tracer Standalone App
+**Shipped v1.2** (2026-02-22) — Native Theming
 
 The module is a fully functional developer tool with:
-- Standalone OWL app at `/ai-debug` (dark Catppuccin Mocha theme, no Odoo navbar)
+- Standalone OWL app at `/ai-debug` with Odoo-native light/dark theme support
 - Real-time bus.bus streaming with separate cursors for immediate event delivery
 - 3-level sidebar tree with expand/collapse, stable selection, reverse chronological ordering, animations
 - Type-aware detail panels with tabbed Notebook views, JSON tree rendering, state diff visualization
 - Session-scoped ephemeral data (refresh clears all traces)
+- Conditional CSS bundle loading via `webclient_rendering_context()` — automatically adapts to user's theme preference
+- All SCSS uses Odoo `$o-*` variables — zero hardcoded colors
 
 **Tech stack:** Odoo OWL standalone app, bus.bus WebSocket, generator yield passthrough instrumentation.
-**LOC:** ~2,061 (JS/XML/SCSS/Python)
+**LOC:** ~2,013 (JS/XML/SCSS/Python) — net reduction from v1.1 via dead code removal
 **Module:** `ai_debug` — depends on `ai_app` and `bus`.
 
 ## Requirements
@@ -45,12 +38,17 @@ The module is a fully functional developer tool with:
 - ✓ 3-level sidebar tree (Loop > Iteration > Tool Call) with stable selection — v1.1
 - ✓ Type-aware detail panels (system prompt, messages, raw response, args/result, state diff) — v1.1
 - ✓ Session-scoped ephemeral data (no database persistence) — v1.1
+- ✓ Controller reads `color_scheme` via `webclient_rendering_context()` for theme-aware rendering — v1.2
+- ✓ QWeb template conditionally loads dark or light CSS bundle — v1.2
+- ✓ Manifest defines `ai_debug.assets_dark` bundle with `web.dark_mode_variables` — v1.2
+- ✓ All hardcoded colors replaced with Odoo `$o-*` SCSS variables (231 hex/rgba → 66 variable refs) — v1.2
+- ✓ Dead component override blocks removed (Notebook, Dialog, CopyButton, error banner, popup) — v1.2
+- ✓ Dark-specific `app.dark.scss` with syntax highlighting overrides — v1.2
+- ✓ Status badge colors use semantic `$o-success`/`$o-danger`/`$o-warning` — v1.2
 
 ### Active
 
-<!-- Current milestone: v1.2 Native Theming -->
-
-(Defining requirements)
+(No active milestone — use `/gsd:new-milestone` to start next)
 
 ### Out of Scope
 
@@ -102,8 +100,13 @@ The module is a fully functional developer tool with:
 | Standalone OWL app (like POS) | Clean separation from Odoo backend, no navbar/chrome interference | ✓ Good — clean dark theme, no UI conflicts |
 | Sidebar + detail panel layout (v1.1) | Master/detail pattern suits hierarchical data (loop > iteration > tool) | ✓ Good — natural tree navigation |
 | useState(new Map()) for trace store | reactive() without callback uses NO_CALLBACK sentinel, blocking OWL render | ✓ Good — fixed via 06-03 gap closure |
-| Batch-level state granularity | Per-tool would require re-implementing upstream method body | ⚠️ Revisit — deferred to v1.2 |
+| Batch-level state granularity | Per-tool would require re-implementing upstream method body | ⚠️ Revisit — still deferred |
 | Full conversation history per iteration | Downstream simplicity over payload efficiency | ✓ Good — simple detail rendering |
+| webclient_rendering_context() for theme | Handles user settings, public user guard, Odoo-standard approach | ✓ Good — correct dark/light detection |
+| Dark bundle includes ai_debug.assets not web.assets_backend | Avoids re-including bundle that strips *.dark.scss files | ✓ Good — dark variables preserved |
+| $o-warning for JSON numbers in dark mode | Warm amber contrast on dark background vs neutral gray in light | ✓ Good — legible in both modes |
+| Bootstrap alert-danger for error banners | Automatic dark-mode adaptation without custom CSS | ✓ Good — zero custom dark styling needed |
+| All panels use same $o-webclient-background-color | Borders define visual separation, not background depth | ✓ Good — consistent with Odoo patterns |
 
 ---
-*Last updated: 2026-02-22 after v1.2 milestone started*
+*Last updated: 2026-02-22 after v1.2 milestone*

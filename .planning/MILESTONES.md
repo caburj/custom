@@ -46,3 +46,34 @@
 
 ---
 
+
+## v1.2 Native Theming (Shipped: 2026-02-22)
+
+**Phases completed:** 2 phases, 4 plans, 7 tasks
+**Commits:** 22 (507cbd6 → d45d4a3)
+**Code changes:** 117 insertions, 165 deletions across 7 files (net -48 lines)
+**Timeline:** 1 day (2026-02-22)
+
+**Delivered:** Replaced hardcoded Catppuccin Mocha colors with Odoo's native SCSS variable system so the app respects the user's light/dark theme preference automatically.
+
+**Key accomplishments:**
+- Wired controller, manifest, and template for Odoo native dark mode via `webclient_rendering_context()` + split `t-call-assets` pattern
+- Replaced all 231 hardcoded Catppuccin hex/rgba values in app.scss with 66 Odoo `$o-*` variable references
+- Removed five dead component override blocks (Notebook colors, Dialog incl. filter:invert hack, CopyButton, error banner, popup content colors)
+- Created `app.dark.scss` with `$o-*` syntax highlighting, excluded from light bundle and loaded after `web.dark_mode_variables` in dark bundle
+- Migrated error banners from custom CSS to Bootstrap `alert-danger` for automatic dark-mode adaptation
+- Browser visual verification confirmed both light and dark modes render correctly with zero regressions
+
+**Key decisions:**
+- `webclient_rendering_context()` over raw cookie reading — handles user settings, public user guard, Odoo-standard approach
+- Dark bundle includes `ai_debug.assets` (not `web.assets_backend`) — avoids stripping dark variables
+- JSON numbers use `$o-gray-700` light / `$o-warning` dark — warm amber contrast on dark background
+- Bootstrap `alert-danger` replaces custom error banner — automatic dark-mode adaptation without custom CSS
+- All panels use same `$o-webclient-background-color` — borders define separation, not background depth
+
+**Known tech debt:**
+- CSS visual correctness requires browser verification (inherent to CSS work, not a code gap)
+- Per-tool state granularity still deferred (batch-level before/after from v1.1)
+
+---
+
