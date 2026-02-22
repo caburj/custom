@@ -11,7 +11,7 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Phase: All phases complete through v1.3
 Status: v1.3 Local Persistence shipped
-Last activity: 2026-02-22 — completed milestone v1.3
+Last activity: 2026-02-22 - Completed quick task 19: Sort traces by timestamp (desc) — add timestamp to each trace item for predictable ordering during export/import
 
 Progress: [██████████] 100% (v1.3)
 
@@ -36,6 +36,12 @@ None.
 ### Blockers/Concerns
 
 None — milestone complete.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 19 | Sort traces by timestamp (desc) — add timestamp to each trace item for predictable ordering during export/import | 2026-02-22 | 360f64f | [19-sort-traces-by-timestamp-desc-add-timest](./quick/19-sort-traces-by-timestamp-desc-add-timest/) |
 
 ## Session Continuity
 
