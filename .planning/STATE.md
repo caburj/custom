@@ -10,13 +10,13 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 ## Current Position
 
 Milestone: v1.2 Native Theming
-Phase: 8 — Theme Infrastructure
-Plan: 1 of 1
-Status: Awaiting checkpoint verification (08-01 Task 2: browser verify)
-Last activity: 2026-02-22 — 08-01 Task 1 complete (theme infrastructure wired)
+Phase: 9 — SCSS Migration and Dark Accents
+Plan: 1 of ? (plans TBD)
+Status: Ready to start Phase 9
+Last activity: 2026-02-22 — Phase 8 complete (browser verification approved)
 
 ```
-v1.2 progress: [█░░░░░░░░░] 10% — Phase 8 Plan 1 infrastructure complete, awaiting verify
+v1.2 progress: [█████░░░░░] 50% — Phase 8 complete (1/2 phases done)
 ```
 
 ## Accumulated Context
@@ -60,5 +60,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: 08-01 Task 2 — checkpoint:human-verify (browser verification of theme-aware CSS loading)
+Stopped at: Phase 8 complete — ready to start Phase 9 (SCSS Migration and Dark Accents)
 Resume file: None

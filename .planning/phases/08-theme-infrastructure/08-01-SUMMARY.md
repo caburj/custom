@@ -52,8 +52,8 @@ completed: 2026-02-22
 
 - **Duration:** ~5 min
 - **Started:** 2026-02-22T08:44:37Z
-- **Completed:** 2026-02-22T08:49:00Z
-- **Tasks:** 1 of 2 (Task 2 is a human-verify checkpoint)
+- **Completed:** 2026-02-22 (browser verification approved)
+- **Tasks:** 2 of 2 (including Task 2 human-verify checkpoint — approved)
 - **Files modified:** 3
 
 ## Accomplishments
@@ -67,8 +67,11 @@ completed: 2026-02-22
 Each task was committed atomically:
 
 1. **Task 1: Wire controller, manifest, and template for theme-aware CSS loading** - `3789290` (feat)
+2. **Task 2: Verify theme-aware CSS loading in browser** - checkpoint approved (human-verify)
 
-**Plan metadata:** pending (docs commit after human-verify checkpoint)
+**Fix commit:** `f5635de` — swapped dark bundle include order (ai_debug.assets before web.dark_mode_variables)
+
+**Plan metadata:** `ba7eda4` (docs: pre-checkpoint summary), updated after verification approval
 
 ## Files Created/Modified
 - `ai_debug/controllers/main.py` - Replaced session_info() with webclient_rendering_context(), passes full context dict to template
@@ -82,7 +85,20 @@ Each task was committed atomically:
 
 ## Deviations from Plan
 
-None - plan executed exactly as written.
+### Auto-fixed Issues
+
+**1. [Rule 1 - Bug] Swapped dark bundle include order**
+- **Found during:** Task 2 (browser verification)
+- **Issue:** Dark bundle had `web.dark_mode_variables` before `ai_debug.assets` — but dark_mode_variables must override variables from ai_debug.assets, so ai_debug.assets must load first
+- **Fix:** Swapped to `('include', 'ai_debug.assets')` first, then `('include', 'web.dark_mode_variables')` second in the manifest
+- **Files modified:** `ai_debug/__manifest__.py`
+- **Verification:** Browser test confirmed dark mode CSS bundle loaded correctly after swap
+- **Committed in:** `f5635de`
+
+---
+
+**Total deviations:** 1 auto-fixed (1 bug)
+**Impact on plan:** Fix was required for dark mode to work correctly. No scope creep.
 
 ## Issues Encountered
 
@@ -93,9 +109,9 @@ None.
 None - no external service configuration required.
 
 ## Next Phase Readiness
-- Theme infrastructure wiring is complete and committed
+- Theme infrastructure wiring is complete, committed, and browser-verified
+- Browser verification confirmed: dark cookie loads `ai_debug.assets_dark`, light/no-cookie loads `ai_debug.assets`
 - Phase 9 can add `ai_debug/static/src/app/app.dark.scss` and prepend it to `ai_debug.assets_dark` in the manifest
-- Awaiting human verification (Task 2 checkpoint): DevTools Network tab tests for dark/light cookie switching
 
 ---
 *Phase: 08-theme-infrastructure*
