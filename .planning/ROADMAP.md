@@ -61,7 +61,7 @@ Plans:
   3. In dark mode, the app renders with a dark background consistent with Odoo's dark palette; JSON syntax highlighting is legible and status dots (running, done, error, paused) are visually distinct
   4. StateDiff tints (add/remove row highlights) are visible but not overpowering in both light and dark modes
   5. The connection status dot uses `$o-success` (connected) and `$o-danger` (disconnected) — semantic Odoo colors, not Catppuccin-specific values
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 Plans:
 - [ ] 09-01-PLAN.md — Migrate all hardcoded colors in app.scss to SCSS variables and remove dead override blocks
 - [ ] 09-02-PLAN.md — Create dark accent file, update manifest, and migrate error banners to Bootstrap alerts
@@ -79,4 +79,4 @@ Plans:
 | 6. Sidebar Tree | v1.1 | 5/5 | Complete | 2026-02-21 |
 | 7. Detail Panel | v1.1 | 2/2 | Complete | 2026-02-21 |
 | 8. Theme Infrastructure | v1.2 | 1/1 | Complete | 2026-02-22 |
-| 9. SCSS Migration and Dark Accents | 1/3 | In Progress|  | - |
+| 9. SCSS Migration and Dark Accents | 2/3 | In Progress|  | - |

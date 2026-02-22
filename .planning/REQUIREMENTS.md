@@ -15,21 +15,21 @@ Requirements for v1.2 Native Theming. Each maps to roadmap phases.
 
 ### SCSS Migration
 
-- [ ] **SCSS-01**: All hardcoded background colors in `app.scss` replaced with `$o-gray-*` SCSS variables
-- [ ] **SCSS-02**: All hardcoded border colors in `app.scss` replaced with SCSS variables
-- [ ] **SCSS-03**: All hardcoded text colors in `app.scss` replaced with SCSS variables
-- [ ] **SCSS-04**: All hardcoded accent colors (success, error, warning, info) in `app.scss` replaced with `$o-success`, `$o-danger`, `$o-warning`, `$o-action` variables
-- [ ] **SCSS-05**: All hardcoded `rgba()` values in `app.scss` audited and replaced with theme-aware equivalents
+- [x] **SCSS-01**: All hardcoded background colors in `app.scss` replaced with `$o-gray-*` SCSS variables
+- [x] **SCSS-02**: All hardcoded border colors in `app.scss` replaced with SCSS variables
+- [x] **SCSS-03**: All hardcoded text colors in `app.scss` replaced with SCSS variables
+- [x] **SCSS-04**: All hardcoded accent colors (success, error, warning, info) in `app.scss` replaced with `$o-success`, `$o-danger`, `$o-warning`, `$o-action` variables
+- [x] **SCSS-05**: All hardcoded `rgba()` values in `app.scss` audited and replaced with theme-aware equivalents
 
 ### Component Cleanup
 
-- [ ] **COMP-01**: Notebook component override block removed from `app.scss` (enterprise SCSS handles dark mode natively)
-- [ ] **COMP-02**: Dialog component override block removed from `app.scss` (Bootstrap `--bs-modal-bg` handles dark mode natively)
+- [x] **COMP-01**: Notebook component override block removed from `app.scss` (enterprise SCSS handles dark mode natively)
+- [x] **COMP-02**: Dialog component override block removed from `app.scss` (Bootstrap `--bs-modal-bg` handles dark mode natively)
 
 ### Dark Accent Colors
 
 - [x] **DARK-01**: `app.dark.scss` file created with dark-mode-specific accent colors for syntax highlighting (JSON keys, strings, numbers)
-- [ ] **DARK-02**: Status badge colors (running, done, error, paused) verified and adjusted for both light and dark modes
+- [x] **DARK-02**: Status badge colors (running, done, error, paused) verified and adjusted for both light and dark modes
 
 ## Future Requirements
 
@@ -54,15 +54,15 @@ Requirements for v1.2 Native Theming. Each maps to roadmap phases.
 | INFRA-01 | Phase 8 | Complete |
 | INFRA-02 | Phase 8 | Complete |
 | INFRA-03 | Phase 8 | Complete |
-| SCSS-01 | Phase 9 | Pending |
-| SCSS-02 | Phase 9 | Pending |
-| SCSS-03 | Phase 9 | Pending |
-| SCSS-04 | Phase 9 | Pending |
-| SCSS-05 | Phase 9 | Pending |
-| COMP-01 | Phase 9 | Pending |
-| COMP-02 | Phase 9 | Pending |
+| SCSS-01 | Phase 9 | Complete |
+| SCSS-02 | Phase 9 | Complete |
+| SCSS-03 | Phase 9 | Complete |
+| SCSS-04 | Phase 9 | Complete |
+| SCSS-05 | Phase 9 | Complete |
+| COMP-01 | Phase 9 | Complete |
+| COMP-02 | Phase 9 | Complete |
 | DARK-01 | Phase 9 | Complete |
-| DARK-02 | Phase 9 | Pending |
+| DARK-02 | Phase 9 | Complete |
 
 **Coverage:**
 - v1.2 requirements: 12 total

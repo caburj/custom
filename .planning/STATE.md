@@ -11,9 +11,9 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Milestone: v1.2 Native Theming
 Phase: 9 — SCSS Migration and Dark Accents
-Plan: 2 of ? (plans TBD)
-Status: Phase 9 in progress — Plan 02 complete
-Last activity: 2026-02-22 — 09-02 complete (dark bundle config + Bootstrap error banners)
+Plan: 2 of ? (plans TBD) — Plans 01 and 02 complete
+Status: Phase 9 in progress — Plans 01 and 02 complete
+Last activity: 2026-02-22 — 09-01 complete (SCSS variable migration + dead block removal)
 
 ```
 v1.2 progress: [█████░░░░░] 50% — Phase 8 complete, Phase 9 in progress
@@ -37,6 +37,8 @@ All v1.1 decisions archived — see `.planning/milestones/v1.1-ROADMAP.md` for f
 | Dark bundle includes ai_debug.assets not web.assets_backend | Avoids re-including the bundle that strips *.dark.scss files, which would undo dark variable injection |
 | Use $o-warning for .ai-json-number in dark mode | Warm amber contrast on dark background vs neutral gray in light mode |
 | Bootstrap alert-danger replaces custom ai-detail-error-banner | Automatic dark-mode adaptation without custom CSS |
+| JSON numbers use $o-gray-700 in light mode (not $o-warning) | $o-warning (#ffac00) is too bright on white background in light mode |
+| All panels use same $o-webclient-background-color | Borders define visual separation, not background depth (per locked decision) |
 
 ### Pending Todos
 
@@ -62,5 +64,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 09-02-PLAN.md — dark bundle config and Bootstrap error banners
+Stopped at: Completed 09-01-PLAN.md — SCSS variable migration and dead block removal
 Resume file: None
