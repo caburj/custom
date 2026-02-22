@@ -15,8 +15,8 @@
             'ai_debug/static/src/app/**/*.js',
         ],
         'ai_debug.assets_dark': [
-            ('include', 'web.dark_mode_variables'),
             ('include', 'ai_debug.assets'),
+            ('include', 'web.dark_mode_variables'),
         ],
         'web.assets_backend': [
             'ai_debug/static/src/debug_menu_button.js',
