@@ -1,400 +1,437 @@
 # Pitfalls Research
 
-**Domain:** Native Odoo theming migration — hardcoded dark standalone OWL app to Bootstrap CSS variables
+**Domain:** Adding IndexedDB persistence and export/import to an existing OWL standalone app with a reactive Map store
 **Researched:** 2026-02-22
-**Confidence:** HIGH (direct source inspection at all referenced paths)
+**Confidence:** HIGH (direct codebase inspection + official IndexedDB documentation + OWL source)
 
-This document is scoped to v1.2: replacing hardcoded Catppuccin Mocha colors with Odoo's Bootstrap CSS variables so the app respects the user's light/dark theme preference. The v1.1 pitfalls (bus architecture, DB migration) are superseded. This document focuses on CSS specificity conflicts, incomplete variable replacement, component-level color assumptions, asset bundle loading order, and theme-switching edge cases.
+This document is scoped to v1.3: adding IndexedDB persistence, hydration on load, delete/clear, export, and import to the existing `ai_debug` OWL app. The v1.2 pitfalls (CSS/theming) are superseded. This document focuses on async/sync mismatches between IndexedDB and OWL rendering, write pressure from rapid bus events, large payload handling, schema design, and import validation.
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Controller Missing `color_scheme` — Template Renders Wrong Bundle Every Time
+### Pitfall 1: Writing to IndexedDB Synchronously in Every Bus Event Handler Blocks the UI
 
 **What goes wrong:**
 
-The current controller calls `request.env['ir.http'].session_info()` but does NOT call `webclient_rendering_context()`. The `color_scheme` variable is never passed to the template. When the template checks `t-if="color_scheme == 'dark'"`, the variable is undefined and evaluates falsy — the dark bundle is never loaded regardless of the user's preference. The app always loads the light bundle, making the theming feature appear to work only for one theme.
+Bus events arrive rapidly during an agentic loop — `new_trace`, `iteration`, `tool_call`, `loop_end` can fire in bursts with no natural throttle. If each handler calls `await db.put(...)` inline, two problems compound: (1) the handler is now async, which changes OWL's render scheduling, and (2) even though IndexedDB writes are nominally "asynchronous," the structured clone algorithm that serializes the object before storing it **runs on the main thread synchronously**. A trace object carrying a full conversation history (all prior messages per iteration) can take 2–10ms per clone operation. At 5–10 events per second, this adds up to janky scroll and missed renders during active loop execution.
 
 **Why it happens:**
 
-`session_info()` and `color_scheme()` are separate methods on `ir.http`. The webclient template calls `webclient_rendering_context()` which bundles both. The existing `ai_debug` controller was written to get only `session_info` (which was all it needed for v1.1 bus authentication). Adding theming requires the second piece, but developers only remember to add the dark bundle conditional in the template, not the corresponding Python-side variable.
-
-The enterprise `web_enterprise` module overrides `color_scheme()` to read from the `color_scheme` cookie AND `res.users.settings_id.color_scheme`. Without calling this method and passing its result to the template, the conditonal is always false.
+The natural reflex when adding persistence is to add the write at the end of the existing handler: "the event arrives, update the Map, then persist it." This feels safe because the write is awaited. But it means every render cycle now includes a main-thread clone operation plus an async IDB transaction overhead, all firing at bus frequency.
 
 **How to avoid:**
 
-Change the controller to call `webclient_rendering_context()` instead of `session_info()` directly:
+Decouple persistence from the bus handlers entirely. The bus handlers write to the reactive Map (existing behavior — stays sync). A separate persistence layer observes completions and writes to IndexedDB on its own cadence:
 
-```python
-# controllers/main.py — correct pattern
-@http.route('/ai-debug', type='http', auth='user', readonly=True)
-def ai_debug(self, **kw):
-    if not is_user_internal(request.session.uid):
-        return request.redirect('/web/login', 303)
-    context = request.env['ir.http'].webclient_rendering_context()
-    return request.render('ai_debug.index', context)
-```
+- Use a pending-write queue: bus handlers push the trace ID to a Set of "dirty" traces. A `setTimeout(flush, 0)` or microtask debounce drains the queue by writing only changed traces.
+- Write at natural checkpoint events, not on every sub-event: persist the full trace record on `loop_end`, and persist in-progress trace state at a throttled interval (e.g., every 2s) for crash recovery only.
+- Per-record storage: store each trace as one IDB record (keyed by `trace_id`). On update, overwrite the full trace record. This is one `put()` call per trace per flush cycle, not one per bus event.
 
-`webclient_rendering_context()` returns `{'color_scheme': ..., 'session_info': ...}`, so the template receives both variables in one call.
+The transaction cost for inserting 1k records one-at-a-time is ~2s vs ~80ms batched. For traces this is not the bottleneck, but the structured clone per write is. Keep individual records small by accepting a full-trace-per-record model rather than a per-event-append model.
 
 **Warning signs:**
 
-- The dark bundle conditional in the template renders correctly in dev tools inspection but the app always shows light styles
-- Logging `request.cookies.get('color_scheme')` in the controller shows `'dark'` but the dark bundle is not loaded
-- Switching to dark in Odoo preferences has no effect on the debug app even after a hard reload
+- UI stutters or scroll jank during fast agentic loops (multi-tool iterations)
+- DevTools Performance timeline shows main thread busy with `IDBRequest` during bus event callbacks
+- Bus event handlers become `async` functions — check that OWL doesn't misinterpret the returned Promise as a component lifecycle concern
 
-**Phase to address:** Phase 1 (Color scheme detection) — the first thing to fix before any CSS work
+**Phase to address:** Phase 1 (IndexedDB layer design) — decide the write strategy before writing a line of IDB code
 
 ---
 
-### Pitfall 2: Hardcoded Colors Override Bootstrap Variables via Specificity
+### Pitfall 2: IndexedDB Transaction Auto-Commits If an `await` Spans a Microtask Boundary Mid-Transaction
 
 **What goes wrong:**
 
-The existing `app.scss` uses class selectors like `.ai-debug-app`, `.ai-debug-header`, `.ai-json-key`, etc. Bootstrap CSS custom properties (`--bs-body-bg`, `--bs-body-color`, `$body-bg`) are set on `body` or `:root`. When the hardcoded color declarations are simply left in place alongside the new Bootstrap variable declarations, the hardcoded values win because they are declared later in the cascade and are not less specific — they are on the same specificity level but come after the variables in the compiled CSS output order.
+An IndexedDB transaction auto-commits once there are no pending IDB requests within the transaction scope. If you open a transaction, then `await` something that is NOT an IDB request (e.g., a `Promise.resolve()`, a `fetch()`, a `setTimeout`, or even an OWL render tick), the transaction commits before you make additional requests against it. You get a `TransactionInactiveError` on the second request. This is especially acute in Safari, which closes transactions more aggressively than Chrome.
 
-More critically: when the dark bundle (`web.assets_web_dark`) loads, it sets SCSS variables that compile to different hex values in its CSS output. But the hardcoded Catppuccin values in `app.scss` are not Bootstrap variables — they are literal hex strings. The dark bundle cannot override literal hex values. The app's custom classes remain Catppuccin-dark regardless of theme.
+Example of the trap:
+```javascript
+const tx = db.transaction('traces', 'readwrite');
+const store = tx.objectStore('traces');
+await store.put(traceData);       // OK — this IS an IDB request
+const extra = await someHelper(); // NOT an IDB request — transaction may auto-commit here
+await store.put(moreData);        // TransactionInactiveError in Safari
+```
 
 **Why it happens:**
 
-Developers think "I'll use `var(--bs-body-bg)` for the main background and leave the rest for later." They replace a few properties but leave dozens of hardcoded hex values in the same file. When testing in dark mode (which matches the existing Catppuccin dark palette roughly), everything looks fine — the hardcoded dark values accidentally approximate the dark theme variables. The bug only manifests clearly in light mode, where `background-color: #1e1e2e` renders over a light Bootstrap background.
-
-The current `app.scss` has approximately 40 distinct hardcoded color values spread across 650 lines. A partial replacement leaves an inconsistent mix that appears correct in dark mode but breaks in light mode.
+The spec intends transactions to be short-lived. The auto-commit behavior is by design. Developers familiar with SQL transactions assume "open transaction, do work, commit" — but IDB commits eagerly, not at explicit `.commit()`. When using `async/await` with IDB, it's easy to accidentally yield the microtask queue to non-IDB work inside a transaction scope.
 
 **How to avoid:**
 
-Replace ALL hardcoded color values in `app.scss` in a single pass before doing anything else. Use Odoo's SCSS variables (not CSS custom properties) because `app.scss` compiles in the same bundle as the rest of Odoo's SCSS:
+Keep all IDB requests within a transaction contiguous — no awaiting non-IDB Promises between requests in the same transaction:
 
-```scss
-// Replace this pattern:
-background-color: #1e1e2e;    // Catppuccin Mantle
-color: #cdd6f4;               // Catppuccin Text
-
-// With Odoo SCSS variables:
-background-color: $o-view-background-color;
-color: $o-main-text-color;
+```javascript
+// CORRECT: prepare data first, then open transaction and do all IDB work
+const cloned = structuredClone(traceData); // prepare outside transaction
+const tx = db.transaction('traces', 'readwrite');
+const store = tx.objectStore('traces');
+store.put(cloned);
+await tx.done; // idb library helper — waits for transaction to complete
 ```
 
-Key Odoo SCSS variables available in both light and dark bundles (defined in `primary_variables.scss` and overridden in `primary_variables.dark.scss`):
+Use the `idb` library (Jake Archibald) which wraps IDB in Promises with correct transaction semantics and a `tx.done` promise that resolves on commit. This eliminates most transaction-close timing bugs. Alternatively, use Dexie which fully abstracts transaction management.
 
-| Catppuccin Color | Role | Odoo Variable |
-|------------------|------|---------------|
-| `#1e1e2e` (Base) | App background | `$o-view-background-color` |
-| `#181825` (Mantle) | Header/darker bg | `$o-webclient-background-color` |
-| `#313244` (Surface1) | Borders | `$border-color` |
-| `#cdd6f4` (Text) | Primary text | `$o-main-text-color` |
-| `#6c7086` (Overlay1) | Muted/dim text | `$o-gray-500` |
-| `#585b70` (Overlay0) | Very muted text | `$o-gray-400` |
-| `#89b4fa` (Blue) | Accent/selection | `$o-action` |
-| `#a6e3a1` (Green) | Success | `$o-success` |
-| `#f38ba8` (Red) | Error/danger | `$o-danger` |
-| `#f9e2af` (Yellow) | Warning | `$o-warning` |
-| `#fab387` (Peach) | Numbers | `$o-warning` |
-| `#cba6f7` (Mauve) | Booleans | (no direct match — use `$o-info`) |
-
-Do not mix SCSS variables and hardcoded hex in the same file. Complete the replacement before testing.
+For the `ai_debug` use case: since writes are one `put()` per trace per flush, this pitfall only appears if the flush function tries to write multiple stores or performs non-IDB async work between requests. Keep flush functions to: get store reference, `store.put()`, `await tx.done` — nothing else in between.
 
 **Warning signs:**
 
-- Running in light mode shows dark backgrounds on the app's own elements while Odoo chrome is light
-- `grep -n "#[0-9a-f]\{3,6\}" app.scss` returns more than 0 results after the migration
-- The sidebar tree rows show Catppuccin hover colors (`#2a2a3e`) over a white detail panel background
+- `TransactionInactiveError` exceptions in the console during writes, especially in Safari
+- Writes succeed in Chrome but silently fail (or throw) in Firefox/Safari
+- Any non-IDB `await` expression between two `store.put()` or `store.get()` calls in the same function
 
-**Phase to address:** Phase 1 (Variable audit and replacement) — do this before the dark bundle conditional
+**Phase to address:** Phase 1 (IDB wrapper implementation) — use `idb` library to eliminate this class of bugs
 
 ---
 
-### Pitfall 3: Notebook Component Dark Tab Overrides Conflict With App's Tab Overrides
+### Pitfall 3: Hydrating the Reactive Map Before OWL Mounts Causes a Render Before State Is Ready
 
 **What goes wrong:**
 
-The app's current `app.scss` (lines 357–392) manually overrides Notebook's `.nav-tabs` and `.nav-link` inside `.ai-debug-detail .o_notebook` with hardcoded Catppuccin colors. The enterprise `notebook.dark.scss` sets CSS custom properties on `.o_notebook` (e.g., `--Notebook__link-background-color: #{$o-gray-300}`). The enterprise notebook SCSS uses these custom properties via `var()` inside `notebook.scss`.
+The most natural place to hydrate `this.traces` from IndexedDB is in `onMounted`. But `onMounted` runs AFTER the first render. If the component renders with an empty Map, shows "No traces" state, then hydrates from IDB and triggers a second render, the user sees a flash of empty state on every page load — even when traces are already persisted.
 
-When both files are loaded:
-1. `notebook.scss` sets the variables via CSS custom properties on `.o_notebook`
-2. `notebook.dark.scss` overrides those custom properties for dark mode
-3. `app.scss` then applies hardcoded hex values directly to `.nav-link`, bypassing the custom property mechanism entirely
-
-The result: the Notebook tabs ignore the dark/light theme switch and remain hardcoded. In light mode, the dark Catppuccin tab colors look wrong against the now-themed page background.
+Worse: if hydration is awaited inside `onMounted` and the IDB read returns a large dataset, the component has already rendered the empty state and now must patch the full tree of traces into the DOM in a single large render. This causes perceptible jank on load.
 
 **Why it happens:**
 
-When the app was built (v1.1), the Notebook component didn't have native dark theme support that the app needed, so the developer wrote custom overrides. Now that the enterprise `notebook.dark.scss` properly handles dark theming via CSS custom properties, those overrides are redundant and conflicting. The developer migrating to native theming doesn't realize the conflict because testing in dark mode makes both approaches produce similar results.
+OWL's `onMounted` is the familiar DOM-ready hook from React/Vue. Developers reach for it to do "initialization after render." But OWL also provides `onWillStart`, which runs asynchronously BEFORE the first render, blocking it until the hook resolves. `onWillStart` is the correct place for data loading that should be present for initial render.
 
 **How to avoid:**
 
-Remove the entire Notebook dark theme override block from `app.scss` (lines 357–392):
+Use `onWillStart` for IDB hydration:
 
-```scss
-// DELETE this entire block — notebook.scss + notebook.dark.scss handle it natively:
-.ai-debug-detail .o_notebook {
-    .nav-tabs { ... }  // REMOVE
-    .o_notebook_content { ... }  // REMOVE (or keep only layout rules, not color rules)
+```javascript
+setup() {
+    this.traces = useState(new Map());
+    this.state = useState({ hydrating: true, ... });
+
+    onWillStart(async () => {
+        const stored = await loadTracesFromIDB();
+        for (const trace of stored) {
+            // Reconstruct nested reactive Maps — IDB stores plain objects
+            const iterations = reactive(new Map());
+            for (const iter of trace.iterations) {
+                const toolCalls = reactive(new Map());
+                for (const tc of iter.toolCalls) {
+                    toolCalls.set(tc.tool_call_id, tc);
+                }
+                iterations.set(iter.iteration_id, { ...iter, toolCalls });
+            }
+            this.traces.set(trace.trace_id, { ...trace, iterations });
+        }
+        this.state.hydrating = false;
+    });
 }
 ```
 
-Keep only structural/layout rules (flex, overflow) and remove all color properties. Test both light and dark modes after removal to confirm the Notebook's native theming is adequate. If the native Notebook styles are insufficient (e.g., the tab indicator color is wrong in dark mode), create a dedicated `app.dark.scss` file following the Odoo pattern and set the CSS custom property variables there:
-
-```scss
-// app.dark.scss — only if needed
-.ai-debug-detail .o_notebook {
-    --Notebook__link-border-top-color--active: #{$o-action};
-}
-```
+Keep the `onWillStart` read fast — IDB bulk reads of the trace index are fast; the bottleneck is deserializing large payloads. If there are many traces, consider loading only metadata (trace_id, agent_name, status, started_at) during `onWillStart` and lazy-loading full payloads on selection.
 
 **Warning signs:**
 
-- Notebook tabs render correctly in one theme but not the other after SCSS variable migration
-- Browser devtools shows the `.nav-link` getting a background from `app.scss` that conflicts with `--Notebook__link-background-color`
-- The active tab indicator (the colored top border) is the wrong color in one of the two modes
+- Hydration logic in `onMounted` (not `onWillStart`)
+- A visible flash of "No traces" on page load even when IDB has data
+- Console logs showing trace data being set after the initial render completes
 
-**Phase to address:** Phase 2 (Component-specific overrides) — after the main variable replacement
+**Phase to address:** Phase 2 (Hydration implementation) — use `onWillStart` from the start, not as a fix
 
 ---
 
-### Pitfall 4: `.o_dialog` Dark Overrides Conflict With Bootstrap Modal Variables
+### Pitfall 4: IDB Stores Plain Objects — Nested `reactive()` Maps Are Lost on Roundtrip
 
 **What goes wrong:**
 
-The current `app.scss` (lines 618–638) overrides `.o_dialog .modal-content` and `.o_dialog .modal-header` with hardcoded Catppuccin colors. Bootstrap 5 in Odoo uses CSS custom properties on `.modal-content` (`--bs-modal-bg`, `--bs-modal-color`, `--bs-modal-border-color`). The dark bundle (`bootstrap_overridden.dark.scss`) overrides these CSS custom properties for dark mode.
+The current store uses a nested structure of reactive Maps: `this.traces` is `useState(new Map())`, each trace contains `iterations: reactive(new Map())`, each iteration contains `toolCalls: reactive(new Map())`. IndexedDB uses the structured clone algorithm to serialize objects for storage. Structured clone **cannot** clone Proxy objects (which is what `reactive()` returns). It strips proxy wrappers and stores the underlying plain object — and a Map is stored as a Map, but NOT as a reactive Map.
 
-The hardcoded app override in `app.scss` sets `background-color: #1e1e2e` directly on `.modal-content`, which overrides the Bootstrap CSS custom property. This means:
-- In dark mode: the hardcoded Catppuccin color and the Bootstrap dark color are similar, so no visible problem
-- In light mode: the modal has a dark Catppuccin background on a light-themed page, making it look completely wrong
-
-Additionally, the `.btn-close { filter: invert(1) }` hack (which was needed to make the close button visible on a dark background) will make the close button look wrong in light mode, where the button is already dark-colored.
+When data is read back from IDB on hydration, the returned objects are plain — no reactivity. If you do `this.traces.set(traceId, storedTrace)` where `storedTrace.iterations` is a plain `Map`, OWL will not observe mutations on `storedTrace.iterations`. Adding an iteration from a live bus event after hydration will not trigger a re-render unless the iterations Map is wrapped in `reactive()` again.
 
 **Why it happens:**
 
-The `.o_dialog` override was added in a quick-fix (quick-11: "fix dialog title not legible dark text on dark background") and solved an immediate problem. The fix was correct for a hardcoded dark theme. It becomes a problem when the theme is now dynamic.
+Developers test persistence with a fresh trace (write then read), see the UI populate correctly, and conclude it works. The bug only manifests when a bus event arrives AFTER hydration for an in-progress trace that was loaded from IDB — the new iteration appears in the Map but the UI doesn't update.
 
 **How to avoid:**
 
-Remove the color properties from the `.o_dialog` override block. Bootstrap 5's modal already has proper theming support via CSS custom properties. The dark bundle handles this automatically. Only keep structural overrides if needed:
+Deserialize IDB data by explicitly wrapping nested structures in `reactive()` during hydration. Treat IDB as a serialization format, not a live store:
 
-```scss
-// Keep only if structural layout is needed:
-.o_dialog {
-    // No color overrides needed — Bootstrap's --bs-modal-* variables handle theming
+```javascript
+// Hydration: always reconstruct reactivity from plain IDB data
+function hydrateTrace(rawTrace) {
+    const toolCallsMaps = new Map(
+        rawTrace.iterations.map(iter => [
+            iter.iteration_id,
+            {
+                ...iter,
+                toolCalls: reactive(new Map(
+                    iter.toolCalls.map(tc => [tc.tool_call_id, tc])
+                )),
+            }
+        ])
+    );
+    return {
+        ...rawTrace,
+        iterations: reactive(toolCallsMaps),
+    };
 }
 ```
 
-Remove `filter: invert(1)` from `.btn-close` — Bootstrap handles this in dark mode automatically via `$btn-close-color` and `$btn-close-filter` variables.
+Also: store traces in IDB as plain serializable objects — use `Array.from(trace.iterations.values())` when serializing, not the Map itself (Map serializes and deserializes correctly via structured clone, but the nested reactive wrapping is what needs reconstruction). Consider storing iterations and toolCalls as arrays in IDB (more portable, simpler to reconstruct).
 
 **Warning signs:**
 
-- TextPopupDialog appears dark-on-dark or light-on-dark depending on mode
-- The `X` close button in the dialog is invisible (too light) or inverted (too dark) in one of the two modes
-- Browser devtools shows `background-color: #1e1e2e` from `app.scss` overriding `--bs-modal-bg` set by Bootstrap
+- UI shows stale iteration count after page refresh + new bus events arrive for an in-progress trace
+- Clicking a trace loaded from IDB shows correct detail data but live events don't append to the sidebar
+- Console shows `trace.iterations.set(...)` being called but no render cycle fires
 
-**Phase to address:** Phase 2 (Component-specific overrides)
+**Phase to address:** Phase 2 (Hydration implementation) — add reactivity reconstruction as a design constraint from the start
 
 ---
 
-### Pitfall 5: Dark-Only Asset Bundle Approach — Light Mode Gets No Bundle, App Breaks
+### Pitfall 5: `Date` Objects in Stored Traces Become Strings After IDB Roundtrip If JSON Is Used
 
 **What goes wrong:**
 
-When implementing the conditional bundle loading in the template, developers copy the webclient pattern:
+The current trace objects contain `started_at: new Date()`, `ended_at: new Date()`, and `receivedAt: new Date()` (per iteration). IndexedDB's structured clone algorithm CAN store `Date` objects natively — they are round-tripped as `Date` instances. However, if at any point the data is passed through `JSON.stringify` / `JSON.parse` (e.g., during export, or if using `JSON.stringify` as a serialization shortcut for IDB), the `Date` objects become ISO string strings. After that, `trace.ended_at - trace.started_at` (used in `getIterationDuration`) returns `NaN` because string subtraction doesn't work.
 
-```xml
-<t t-if="color_scheme == 'dark'">
-    <t t-call-assets="ai_debug.assets_dark"/>  <!-- CSS only -->
-</t>
-<t t-else="">
-    <t t-call-assets="ai_debug.assets"/>       <!-- Always loads -->
-</t>
-```
+**Why it happens:**
 
-The mistake is structuring the bundle so that `ai_debug.assets` is the "base" bundle (no dark files) and `ai_debug.assets_dark` is a separate bundle that includes the dark overrides. But the current `ai_debug.assets` bundle uses `('include', 'web.assets_backend')` which already includes ALL Odoo CSS (light mode, with `('remove', 'web/static/src/**/*.dark.scss')` applied). Adding a separate dark bundle that includes `web.assets_web_dark` alongside `ai_debug.assets` causes the entire backend CSS to be compiled twice into two separate bundles — expensive and slow.
+Export/import necessarily involves `JSON.stringify` / `JSON.parse`. If the same data model is used for both IDB storage and JSON export without explicit Date handling, and if import restores data directly from parsed JSON into the IDB (bypassing reconstruction), all Dates become strings. The symptom is that duration calculations show `NaN` or `NaN ms` in the UI, only for imported traces.
 
-The correct approach (used by POS and the webclient) is:
-- The main bundle (`ai_debug.assets`) loads JS and light CSS
-- The dark bundle (`ai_debug.assets_dark`) uses `('include', 'ai_debug.assets')` PLUS dark overrides — it replaces the main bundle entirely in dark mode (not loads alongside it)
-
-Looking at the webclient template (lines 311-319): it loads JS once via `t-js="true"` (implicitly) from `web.assets_web`, then loads CSS-only from either `web.assets_web_dark` or `web.assets_web` based on the scheme. The JS is only loaded once.
+Additionally: the code uses `new Date()` at event-receipt time for `receivedAt` and `started_at`. On hydration from IDB, if Dates are correctly stored as Date objects, the subtraction in `getIterationDuration` will work. But after a JSON import roundtrip, it will not unless Dates are explicitly reconstructed.
 
 **How to avoid:**
 
-Follow the exact webclient and POS pattern:
+Establish a consistent serialization contract:
 
-```xml
-<!-- Template: always load JS from the base bundle (t-css="false") -->
-<t t-call-assets="ai_debug.assets" t-css="false"/>
+1. **IDB storage**: Let structured clone handle `Date` objects natively. Never pre-serialize with `JSON.stringify` before storing in IDB.
+2. **JSON export**: Convert `Date` objects to ISO strings explicitly (`date.toISOString()`). Document this in the export schema.
+3. **JSON import**: Explicitly reconstruct `Date` objects from ISO strings after `JSON.parse`:
 
-<!-- Conditionally load the right CSS bundle (t-js="false") -->
-<t t-if="color_scheme == 'dark'">
-    <t t-call-assets="ai_debug.assets_dark" media="screen" t-js="false"/>
-</t>
-<t t-else="">
-    <t t-call-assets="ai_debug.assets" media="screen" t-js="false"/>
-</t>
-```
-
-In `__manifest__.py`:
-
-```python
-'assets': {
-    'ai_debug.assets': [
-        ('include', 'web.assets_backend'),
-        # Remove dark scss from the base bundle (light mode)
-        ('remove', 'ai_debug/static/src/**/*.dark.scss'),
-        'ai_debug/static/src/app/**/*.scss',
-        'ai_debug/static/src/app/**/*.xml',
-        'ai_debug/static/src/app/**/*.js',
-    ],
-    'ai_debug.assets_dark': [
-        ('include', 'web.dark_mode_variables'),
-        ('before', 'web_enterprise/static/src/scss/bootstrap_overridden.scss',
-                   'web_enterprise/static/src/scss/bootstrap_overridden.dark.scss'),
-        ('after', 'web/static/lib/bootstrap/scss/_functions.scss',
-                  'web_enterprise/static/src/scss/bs_functions_overridden.dark.scss'),
-        ('include', 'ai_debug.assets'),
-        'web_enterprise/static/src/**/*.dark.scss',
-        'ai_debug/static/src/**/*.dark.scss',  # your own dark overrides if any
-    ],
-    ...
+```javascript
+function deserializeTrace(raw) {
+    return {
+        ...raw,
+        started_at: raw.started_at ? new Date(raw.started_at) : null,
+        ended_at: raw.ended_at ? new Date(raw.ended_at) : null,
+        iterations: raw.iterations.map(iter => ({
+            ...iter,
+            receivedAt: new Date(iter.receivedAt),
+        })),
+    };
 }
 ```
 
 **Warning signs:**
 
-- Two full copies of Bootstrap CSS in the page (browser devtools shows duplicate `html, body { ... }` blocks)
-- Asset bundle compilation takes noticeably longer after adding the dark bundle
-- In dark mode, some Bootstrap elements have correct dark styling while others show double-applied styles causing visual glitches
+- `getIterationDuration()` returns `'NaNms'` or `'NaN ms'` for imported traces
+- `trace.started_at instanceof Date` returns `false` after import
+- `typeof trace.started_at === 'string'` returns `true` after import
 
-**Phase to address:** Phase 1 (Asset bundle structure) — must be correct before any CSS work
-
----
-
-### Pitfall 6: RGBA Hardcoded Colors Are Invisible to Simple `grep` Audit
-
-**What goes wrong:**
-
-The `app.scss` contains several hardcoded colors expressed as `rgba()` rather than hex, for example:
-
-```scss
-&.ai-diff-added { background-color: rgba(166, 227, 161, 0.1); }    // Catppuccin Green
-&.ai-diff-removed { background-color: rgba(243, 139, 168, 0.1); }  // Catppuccin Red
-&.ai-diff-changed { background-color: rgba(249, 226, 175, 0.1); }  // Catppuccin Yellow
-.o_dialog .modal-backdrop { background: rgba(...); }
-.ai-tree-row.ancestor { background-color: rgba(137, 180, 250, 0.05); } // Catppuccin Blue
-```
-
-An audit searching for `#[0-9a-f]{3,6}` will find the hex values but miss all the `rgba()` values. The developer declares "all hardcoded colors replaced" after fixing the hex values, ships the PR, and then discovers in light mode that the diff cells have barely-visible Catppuccin-green tint on a white background (since the RGB values map to Catppuccin colors, not Odoo colors).
-
-**Why it happens:**
-
-Semi-transparent colors (transparency composited over the background) were used intentionally because they let the background color show through. When using Catppuccin, this worked because the background was always dark. When the background becomes light, the same RGBA values produce a different visual result — the tint is more saturated and visible against white.
-
-**How to avoid:**
-
-Replace `rgba()` values using Odoo SCSS variable equivalents with opacity functions:
-
-```scss
-// Before:
-background-color: rgba(166, 227, 161, 0.1);  // success tint on Catppuccin
-
-// After:
-background-color: rgba($o-success, 0.1);     // success tint using Odoo variable
-// Or use Bootstrap's alpha utilities:
-background-color: rgba(var(--bs-success-rgb), 0.1);
-```
-
-For the ancestor row highlight:
-```scss
-// Before:
-background-color: rgba(137, 180, 250, 0.05);  // Catppuccin Blue
-
-// After:
-background-color: rgba($o-action, 0.05);       // Odoo action color
-```
-
-Run two grep passes during audit:
-1. `grep -n "#[0-9a-fA-F]\{3,6\}"` for hex values
-2. `grep -n "rgba\|rgb(" ` for RGB function calls
-
-**Warning signs:**
-
-- After variable migration, `grep -c "rgba\|rgb(" app.scss` returns more than 0
-- In light mode, the state diff grid has colored cell backgrounds that look oversaturated
-- The flash animation (`ai-tree-flash`) uses a hardcoded RGBA blue that doesn't match the new accent color
-
-**Phase to address:** Phase 1 (Variable audit) — include rgba scan in the audit checklist
+**Phase to address:** Phase 3 (Export/import) — define the export schema with explicit Date serialization before writing import logic
 
 ---
 
-### Pitfall 7: `JsonTree` and `StateDiff` Rely on SCSS Classes With Hardcoded Colors — No Theme Awareness
+### Pitfall 6: Large JSON Export Payloads Block the Main Thread During `JSON.stringify`
 
 **What goes wrong:**
 
-`JsonTree` renders with classes like `.ai-json-key`, `.ai-json-string`, `.ai-json-number`, `.ai-json-boolean`, `.ai-json-null` that are styled in `app.scss` with hardcoded Catppuccin syntax colors. `StateDiff` uses `.ai-diff-cell.ai-diff-added` etc. with hardcoded RGBA background tints.
-
-These components have no internal color logic — they just apply CSS classes. The colors are entirely controlled by SCSS. So if `app.scss` is fully migrated to Odoo variables, these components automatically get theme-aware colors. There is no JS-level change needed in `json_tree.js` or `state_diff.js`.
-
-The pitfall is the inverse: developers assume the components have built-in theme awareness and skip migrating their SCSS rules. The classes are there; they work; the colors just happen to be wrong in light mode.
+A trace with a RAG-enabled session carries full conversation history per iteration. An agentic loop with 10 iterations, each with 20-message history plus tool args/results, can easily produce a 1–5MB JSON payload per trace. `JSON.stringify` of a 5MB object is synchronous and runs entirely on the main thread. At 10MB+ (multiple traces exported together), the browser tab freezes for 100–500ms during stringify — the user sees a hang, a spinner that doesn't move, or in worst cases a "Page Unresponsive" dialog.
 
 **Why it happens:**
 
-Developers look at `json_tree.js` and `state_diff.js` and see no hardcoded colors — it's pure JS logic. They conclude "these components are theme-agnostic." They are, but only because their SCSS still has the hardcoded colors that need to be replaced.
+Export is triggered once by a user action ("Export selected traces") and feels low-frequency, so developers reach for the simple `JSON.stringify(allSelectedTraces)` approach. Traces are held in memory anyway, so it "should be fast." But structured data with deeply nested Maps serialized via `.values()` and spread operators can produce very large intermediate object graphs, and stringify on large objects is not incremental.
 
 **How to avoid:**
 
-The components themselves do NOT need changes. Only `app.scss` does. Ensure the SCSS audit covers every rule that targets component-specific classes:
+- Export one trace at a time via `JSON.stringify` per trace to avoid one giant blocking call. Generate one export file per trace, or concatenate via Blob:
 
-```scss
-// These classes are entirely SCSS-driven — audit all of them:
-.ai-json-key      → replace #89b4fa with $o-action
-.ai-json-string   → replace #a6e3a1 with $o-success
-.ai-json-number   → replace #fab387 with $o-warning
-.ai-json-boolean  → replace #cba6f7 with $o-info
-.ai-json-null     → replace #585b70 with $o-gray-400
-.ai-json-preview  → replace #585b70 with $o-gray-400
-.ai-diff-key      → replace #89b4fa with $o-action
-.ai-diff-cell     → replace rgba() tints with rgba($o-success/danger/warning, 0.1)
+```javascript
+// Stream-style export: build Blob from per-trace chunks
+const chunks = [];
+for (const trace of selectedTraces) {
+    chunks.push(JSON.stringify(serializeTrace(trace)));
+    chunks.push('\n'); // newline-delimited JSON (NDJSON)
+}
+const blob = new Blob(chunks, { type: 'application/json' });
 ```
 
-For syntax highlighting in particular, Odoo has no dedicated syntax color tokens. Use the closest semantic color (success for strings, warning for numbers, info for booleans) — the result won't be identical to Catppuccin but will be coherent with the Odoo theme palette.
+- For multi-trace export as a single JSON array, use chunked stringify with `setTimeout` yield between traces to avoid blocking. For a developer tool with typically 1–20 traces of moderate size, this is overkill — but plan the export format to support it.
+- Set a practical soft limit: warn the user if exporting more than N traces or the estimated payload exceeds a threshold (e.g., 10MB). This tool is for developer use; it's fine to communicate payload size.
+- Measure actual payload size with a real RAG-enabled session before deciding whether chunking is needed. The PROJECT.md notes this as known tech debt.
 
 **Warning signs:**
 
-- `json_tree.xml` or `state_diff.xml` are modified — they should not need any changes for theming
-- JSON string values appear green in dark mode but the same green is barely visible in light mode
-- The diff grid cells look correct in dark mode but wrong in light mode (hardcoded RGBA not adapted)
+- The "Export" button appears to hang for >200ms before the download starts
+- DevTools flame chart shows a long `JSON.stringify` block on the main thread during export
+- The app becomes briefly non-interactive during export on large trace sets
 
-**Phase to address:** Phase 1 (Variable audit and replacement) — part of the SCSS pass
+**Phase to address:** Phase 3 (Export implementation) — measure payload size with a real session before deciding on chunking strategy
 
 ---
 
-### Pitfall 8: The `color_scheme` Cookie Is Read-Only at Request Time — Real-Time Switching Requires Reload
+### Pitfall 7: JSON Import With No Schema Validation Causes Runtime Errors Deep in the Component Tree
 
 **What goes wrong:**
 
-The `color_scheme` cookie is set by Odoo when the user changes their theme preference in the user menu. The standalone app reads the cookie server-side at request time (in the Python controller) and bakes the choice into the HTML (which asset bundle to load). This means: if the user changes their Odoo theme while the debug app is open in another tab, the debug app does NOT update automatically — it continues showing whichever bundle was loaded at page load time. The user must reload the debug app tab manually.
-
-This is expected and correct behavior (POS does the same thing). The pitfall is developers trying to implement real-time theme switching in the standalone app by reading `cookie.get("color_scheme")` in JavaScript and applying CSS classes dynamically — which does NOT work because the CSS bundles are already compiled and loaded as separate stylesheets. Dynamic class application cannot switch between entire compiled CSS bundles.
+A user imports a JSON file that was manually edited, came from a different version of the app, or is simply malformed. The import reads the file, parses JSON, and sets the restored traces into `this.traces`. The component then tries to render the trace — accessing `trace.iterations.values()`, `iter.toolCalls.get(...)`, etc. If the imported data has a different shape (e.g., `iterations` is an array instead of a Map, `trace_id` is missing, `status` is not one of the expected enum values), the component throws a rendering exception deep in a child component. The error surface is cryptic: a blank detail panel, or an OWL render error with a stack trace pointing into template code.
 
 **Why it happens:**
 
-The Odoo backend handles real-time theme switching via the `color_scheme_service` (enterprise only), which reloads the page when the color scheme changes. Developers see this behavior and try to replicate it in the standalone app without understanding the mechanism.
+Import validation is easy to defer — "we'll add it later, for now just parse and load." The happy path works perfectly. The failure modes only appear with edge-case files (manual edits, version mismatches, corrupt downloads, truncated exports).
 
 **How to avoid:**
 
-Accept reload-on-switch as the correct behavior for the standalone app. Document this explicitly:
-- The debug app inherits the theme from the user's Odoo preference at the time the page loads
-- Changing the theme in Odoo requires reloading the debug app tab
-- Do NOT attempt real-time in-app theme switching via JavaScript class manipulation
+Validate import data before inserting it into the store. At minimum:
 
-If real-time switching is wanted: reload the page when the `color_scheme` cookie changes. Listen for cookie changes via a polling interval or use the BroadcastChannel API (Odoo's color_scheme_service uses `localStorage` events for cross-tab coordination in the backend). For a developer tool, the reload approach is adequate.
+1. Confirm the top-level structure (`Array.isArray(data)` or expected schema key exists)
+2. Validate each trace has required fields: `trace_id`, `agent_name`, `status`, `started_at`, `iterations`
+3. Validate each iteration has: `iteration_id`, `trace_id`, `toolCalls`
+4. Reject (with user-facing error message) rather than silently skip invalid records
+
+A full JSON Schema validation (e.g., with `ajv`) is not necessary for a developer tool. A simple shape-check function is sufficient:
+
+```javascript
+function validateImport(data) {
+    if (!Array.isArray(data)) throw new Error('Expected array of traces');
+    for (const trace of data) {
+        if (!trace.trace_id || !trace.agent_name) {
+            throw new Error(`Invalid trace: missing required fields`);
+        }
+        if (!Array.isArray(trace.iterations)) {
+            throw new Error(`Trace ${trace.trace_id}: iterations must be array`);
+        }
+    }
+    return true;
+}
+```
+
+Also guard against import of duplicate `trace_id` values — if the same trace_id already exists in the store (from IDB or from the current session), decide the policy (skip, overwrite, or error) before writing the import code.
 
 **Warning signs:**
 
-- JavaScript code reads `cookie.get("color_scheme")` and applies `document.body.classList.add('dark')` or similar — this will not swap CSS bundles
-- A `color_scheme_service` import appears in the standalone app's JS — this service is part of `web_enterprise.webclient` and may not initialize correctly in a standalone app context
-- Developer reports "I changed the theme but the debug app didn't update" — this is expected, not a bug, but must be documented
+- Import logic does `this.traces.set(...)` without any shape validation
+- OWL rendering errors appear after import with stack traces in template code
+- Blank detail panel after selecting an imported trace (iteration or toolCall is undefined)
 
-**Phase to address:** Phase 1 (Theme detection) — decide the UX (reload-required) before building anything
+**Phase to address:** Phase 3 (Import implementation) — validation is part of the import, not an afterthought
+
+---
+
+### Pitfall 8: `clearAll()` Clears the Reactive Map But Not IDB — Deleted Data Reappears on Refresh
+
+**What goes wrong:**
+
+The existing `clearAll()` method calls `this.traces.clear()` and resets selection state. This clears the in-memory store. But on the next page load, `onWillStart` hydrates from IDB — which still has all the traces. The user clears all traces, sees an empty sidebar, then reloads the page and finds all the traces are back. This is maximally surprising behavior.
+
+The same issue applies to `deleteTrace(traceId)`: deleting from the reactive Map is immediately visible in the UI, but if IDB is not updated synchronously with the UI action, a reload restores the deleted trace.
+
+**Why it happens:**
+
+The reactive Map clear is instant and visible; the IDB delete is async and deferred. Developers test the clear behavior without testing the reload case. The reflex is to add persistence but not to update the deletion operations to be persistence-aware.
+
+**How to avoid:**
+
+Delete operations must be dual: delete from both the reactive Map AND from IDB, atomically from the user's perspective. Because both are fast, the simplest approach is to await the IDB delete before showing the empty UI — but this is only acceptable if the IDB delete is fast (it is, for record-level deletes).
+
+```javascript
+async deleteTrace(traceId) {
+    // Remove from reactive store immediately (UI updates)
+    this.traces.delete(traceId);
+    // Clear selection if the deleted trace was selected
+    if (this.state.selectedId === traceId || this._isDescendantOf(traceId)) {
+        this.state.selectedId = null;
+        this.state.selectedType = null;
+    }
+    // Persist the deletion
+    await idbDeleteTrace(traceId);
+}
+
+async clearAll() {
+    this.traces.clear();
+    this.state.selectedId = null;
+    this.state.selectedType = null;
+    await idbClearAll();
+}
+```
+
+Do not defer IDB deletes to a "flush" cycle — deletions must be immediate and unconditional.
+
+**Warning signs:**
+
+- `clearAll()` or `deleteTrace()` do not have `async` in their signature (or do not call an IDB delete)
+- After clearing and reloading the page, traces reappear in the sidebar
+- The pending-write queue has no mechanism for deletions — it only batches puts
+
+**Phase to address:** Phase 1 (IDB layer design) — deletion semantics must be part of the initial IDB layer design, not added later
+
+---
+
+### Pitfall 9: IDB Version Mismatch After Schema Change — Existing Data Becomes Inaccessible
+
+**What goes wrong:**
+
+The IndexedDB database is opened with a version number. If the code changes the schema (adds an object store, changes an index, adds a field that the IDB `keyPath` depends on) and bumps the version, the `onupgradeneeded` event fires and migrations can run. But if the code changes in a way that assumes a new schema field is present (e.g., `trace.schema_version`) without migrating existing records, IDB successfully opens (the store structure didn't change) but the JS code that reads old records crashes because the expected field is absent.
+
+More critically: if an object store needs to be deleted and recreated (e.g., to change the `keyPath`), the only safe approach is to delete the old store in `onupgradeneeded` — which destroys all existing data in that store.
+
+**Why it happens:**
+
+During development of v1.3, the schema evolves. An early implementation might store traces differently than the final design. If the schema is changed without incrementing the version number (or without writing migration code), stale IDB data in the developer's own browser causes confusing bugs — traces that should have been deleted, missing fields, or data that doesn't match the current code expectations.
+
+**How to avoid:**
+
+- Start with DB version `1`. Define the schema carefully before writing any storage code.
+- Never change the schema without incrementing the version number.
+- Write explicit migration logic for each version increment in `onupgradeneeded`.
+- For development: if the schema is still being finalized, provide a "nuke and restart" escape hatch in the `onupgradeneeded` handler (delete all stores on version mismatch during development). Document this as dev-only behavior.
+- Store a `schemaVersion` field on each trace record (application-level versioning, separate from IDB's DB version). Check this on hydration and skip/migrate records from older schema versions.
+
+**Warning signs:**
+
+- Console shows `DOMException: The database connection is closing` or similar on page reload after a code change
+- Hydration silently loads zero traces even though the IDB has data (field name mismatch causes a filter to exclude all records)
+- `onupgradeneeded` handler is missing or empty (version is hardcoded without upgrade logic)
+
+**Phase to address:** Phase 1 (IDB layer design) — define the schema and version strategy before writing any IDB code
+
+---
+
+### Pitfall 10: IDB Is Unavailable in Firefox Private Browsing (Older Versions) — App Must Not Crash
+
+**What goes wrong:**
+
+In Firefox versions before 115, IndexedDB throws a hard error in Private Browsing mode: `"A mutation operation was attempted on a database that did not allow mutations"`. The `ai_debug` app is a developer tool used in normal browser sessions, so this is unlikely — but if a developer opens `/ai-debug` in a private window for any reason (e.g., to test with a clean session), the app crashes at the IDB initialization point and becomes completely unusable, even though the core functionality (live bus streaming) works fine without persistence.
+
+**Why it happens:**
+
+IDB initialization is done in `onWillStart`, which throws if IDB fails. An unhandled Promise rejection in `onWillStart` propagates as an OWL mount error and the entire component fails to render.
+
+**How to avoid:**
+
+Wrap IDB initialization in a try/catch. Treat persistence as optional — if IDB is unavailable, fall back to in-memory-only behavior (the v1.1 baseline):
+
+```javascript
+onWillStart(async () => {
+    try {
+        this.db = await openTraceDB();
+        const stored = await loadTracesFromDB(this.db);
+        // ... hydrate store ...
+    } catch (e) {
+        console.warn('[ai_debug] IndexedDB unavailable, persistence disabled:', e);
+        this.db = null; // persistence disabled flag
+    }
+});
+```
+
+All subsequent IDB calls (put, delete, clear) should check `if (!this.db) return;` before attempting to write. The app then degrades gracefully to ephemeral mode.
+
+**Warning signs:**
+
+- `openDB()` or IDB initialization has no try/catch
+- A failed IDB open causes an unhandled Promise rejection that prevents `onWillStart` from completing
+- The app shows a blank white page in Firefox private browsing instead of the expected UI
+
+**Phase to address:** Phase 1 (IDB layer design) — error handling is part of the initial wrapper, not an afterthought
 
 ---
 
@@ -402,12 +439,13 @@ If real-time switching is wanted: reload the page when the `color_scheme` cookie
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Replace only hex colors and leave `rgba()` | Faster audit | RGBA tints use Catppuccin RGB values; appear wrong in light mode | Never — must audit rgba() too |
-| Keep Notebook dark override block "just in case" | Avoids risk of visual regression | Conflicts with enterprise notebook.dark.scss; wrong colors in light mode | Never — test removal, use app.dark.scss if needed |
-| Leave `.o_dialog` color overrides in place | Nothing breaks in dark mode | Light mode shows dark modal on light page | Never — Bootstrap handles modal theming |
-| Replace main background but leave sub-component colors | Fast partial progress | Inconsistent theming — main bg is light but sidebars/panels are Catppuccin dark | Only if followed immediately by complete replacement |
-| Read `color_scheme` cookie in JS and apply class | No page reload needed on switch | CSS bundle swap via class is impossible; compiled bundles are static | Never — accept reload-on-switch |
-| Hardcode `ai_debug.assets_dark` to always include full `web.assets_backend_dark` | Simpler bundle definition | Double-compiles all Odoo CSS; asset compilation is significantly slower | Never — follow the `include ai_debug.assets` pattern |
+| Write to IDB on every bus event (no batching) | Simple code, immediate persistence | Main thread jank during fast agentic loops; structured clone overhead per event | Never — batch writes are required |
+| Store the entire reactive Map as one IDB record | Simple serialization | Grows unbounded; structured clone on write blocks main thread for large traces | Never — per-trace records |
+| Skip `onWillStart` in favor of `onMounted` for hydration | Familiar hook | Flash of empty state on every page load | Never — `onWillStart` is the correct hook |
+| No IDB availability check / try-catch on open | Less boilerplate | Hard crash in private browsing or quota-exceeded scenarios | Never — always wrap IDB init |
+| Import restores data without Date reconstruction | Simpler import code | `getIterationDuration` returns `NaN` for imported traces | Never — Date reconstruction is required |
+| Skip import schema validation | Faster to ship | Runtime errors in render tree for malformed imports | Only in a prototype that will never see real files |
+| Use same DB version for schema changes | Avoids migration code | Old data silently breaks on field name changes | Never — always bump version on schema change |
 
 ---
 
@@ -415,12 +453,14 @@ If real-time switching is wanted: reload the page when the `color_scheme` cookie
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| Controller + `color_scheme` | Call `session_info()` only | Call `webclient_rendering_context()` which returns both `session_info` and `color_scheme` |
-| Dark bundle structure | Make `ai_debug.assets_dark` a self-contained bundle | Make it use `('include', 'ai_debug.assets')` plus dark-only overrides, following POS pattern |
-| Notebook theming | Write custom `.o_notebook .nav-tabs` overrides in `app.scss` | Remove color overrides entirely; enterprise `notebook.dark.scss` handles this via CSS custom properties |
-| Bootstrap modal theming | Set `background-color` on `.modal-content` | Let Bootstrap's `--bs-modal-bg` CSS custom property do it; dark bundle overrides it automatically |
-| SCSS variable scope | Use Bootstrap CSS custom properties (`var(--bs-body-bg)`) in SCSS | Use SCSS variables (`$o-view-background-color`) — they compile to the correct value per bundle |
-| `app.dark.scss` location | Put dark overrides in `app.scss` behind a media query | Create a separate `app.dark.scss` file following the `.dark.scss` naming convention; the dark bundle includes it automatically via glob |
+| IDB + OWL reactive Map | Await IDB reads/writes inside bus event handlers | Bus handlers stay sync; a separate flush layer handles IDB writes |
+| IDB + `reactive()` Maps | Hydrate from IDB with plain Maps and assume reactivity | Explicitly wrap nested Maps in `reactive()` during deserialization |
+| IDB + Date objects | Use `JSON.stringify` to store, lose Date type | Use structured clone (native IDB) for storage; explicit `new Date()` for import |
+| IDB + `onMounted` | Load stored data in `onMounted` | Load stored data in `onWillStart` to block initial render until hydrated |
+| IDB transactions + non-IDB `await` | `await fetch(...)` or `await someHelper()` inside a transaction scope | Prepare all data before opening the transaction; only IDB requests inside it |
+| Export + large payloads | `JSON.stringify(allTraces)` synchronously | Stringify per-trace in a loop; measure actual payload size with real sessions |
+| Import + duplicate IDs | Silently overwrite existing traces | Check for ID collision and apply a defined policy (skip, overwrite, or error) |
+| Delete + IDB | Delete from reactive Map only | Always pair reactive Map delete with IDB record delete |
 
 ---
 
@@ -428,36 +468,28 @@ If real-time switching is wanted: reload the page when the `color_scheme` cookie
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Dark bundle includes full `web.assets_backend` twice | Asset compilation takes 2–3x longer; page load has two full Bootstrap blocks | Use `('include', 'ai_debug.assets')` in the dark bundle (not `web.assets_backend`) | First run after adding the dark bundle to the manifest |
-| All colors in one `app.scss` vs split light/dark | No performance issue | Creates maintainability debt — dark overrides mixed with light defaults | Not a runtime trap; only a maintenance issue |
-| Checking `cookie.get("color_scheme")` on every render | Negligible for a developer tool | Cookie reads are synchronous and fast; not a performance concern at this scale | Never breaks at this scale |
-
----
-
-## UX Pitfalls
-
-| Pitfall | User Impact | Better Approach |
-|---------|-------------|-----------------|
-| Syntax highlight colors don't match Odoo palette | JSON tree colors look out-of-place in light mode (Catppuccin green on white is jarring) | Map Catppuccin colors to Odoo semantic equivalents (`$o-success` for strings, etc.) |
-| Status dot colors hardcoded (connected=green, disconnected=red) | Status dot always shows Catppuccin green/red regardless of theme | Replace with `$o-success` and `$o-danger` — these are correctly themed |
-| Flash animation uses hardcoded Catppuccin blue | New trace flash effect looks wrong against light background | Use `rgba($o-action, 0.3)` for the flash start color |
-| "Looks dark on a dark page" passes visual QA | Developer tests in dark mode (matching current theme) and approves; light mode bugs escape | Always test BOTH modes after any CSS change — use a simple toggle script |
-| No visual indication that the app theme follows Odoo settings | Developer confused why changing the app's appearance requires going to Odoo settings | Add a tooltip or help text noting the theme follows Odoo user preferences |
+| Structured clone on large objects (main thread) | UI jank/freeze during or after bus events | Per-trace IDB records; batch writes; measure with real RAG sessions | When a single trace exceeds ~1MB of serialized data |
+| Unbatched IDB writes (one transaction per event) | Multiple `IDBRequest` items per second in DevTools; degraded animation | Coalesce writes — dirty-Set + debounced flush | During fast multi-iteration agentic loops |
+| Synchronous `JSON.stringify` of all traces on export | Tab freeze for >200ms during export | Per-trace stringify; Blob concatenation; soft payload size limit | Multi-trace export with RAG traces >2MB each |
+| Full trace hydration on load (no lazy load) | Slow page load when IDB has many large traces | Load metadata only on `onWillStart`; lazy-load full payloads on selection | When IDB accumulates >10 large RAG traces |
+| No IDB index on `trace_id` | Slow lookups when many records exist | Define `trace_id` as the keyPath (or create an index) | After accumulating >100 traces (not likely for this tool) |
 
 ---
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **Complete variable replacement:** `grep -n "#[0-9a-fA-F]\{3,6\}\|rgba\|rgb(" app.scss` returns zero results after migration
-- [ ] **Dark bundle loads in dark mode:** Open `/ai-debug` in dark mode; browser devtools Network tab shows two CSS bundle requests (one for base, one for `assets_dark`)
-- [ ] **Light mode passes visual review:** Switch Odoo to light mode, reload `/ai-debug`, verify no dark backgrounds visible anywhere in the app UI
-- [ ] **Notebook tabs themed correctly in both modes:** In light mode, inactive tabs have light background; in dark mode, they have `$o-gray-300` background — as defined by `notebook.dark.scss`
-- [ ] **Dialog renders correctly in both modes:** Open TextPopupDialog in both modes; modal header, body, and close button all have appropriate colors for the theme
-- [ ] **JsonTree syntax colors readable in both modes:** Verify string (green), number (orange), boolean (purple/blue), null (gray) are legible against both light and dark backgrounds
-- [ ] **StateDiff tints visible in both modes:** Added/removed/changed cells show visible but subtle color tints in both light and dark backgrounds
-- [ ] **Status dot uses correct Odoo colors:** Connected = `$o-success` green, Disconnected = `$o-danger` red — verify these look correct in both modes
-- [ ] **Controller passes `color_scheme`:** Check rendered HTML source — the `<link>` tags should include the dark CSS bundle file when `color_scheme=dark` cookie is set
-- [ ] **RGBA audit complete:** No `rgba(166,` or `rgba(243,` or `rgba(137,` or `rgba(249,` literal RGB values remain (these are Catppuccin RGB triples)
+- [ ] **Persistence survives refresh:** Add a trace, reload the page, verify the trace appears in the sidebar (tests IDB write + hydration)
+- [ ] **Delete is durable:** Delete a trace, reload the page, verify the trace does NOT reappear (tests IDB delete, not just reactive Map delete)
+- [ ] **Clear all is durable:** Clear all traces, reload the page, sidebar is empty (tests IDB clearAll)
+- [ ] **Live events post-hydration work:** Load the page with stored traces, then trigger a new agentic loop; verify the new trace appears AND its iterations/tool calls append in real time (tests reactive Map reconstruction after hydration)
+- [ ] **Iteration durations are correct after hydration:** Reload with stored traces, select an iteration, verify duration displays correctly (tests Date roundtrip — not `NaN ms`)
+- [ ] **Iteration durations are correct after import:** Import a previously exported file, select an iteration, verify duration displays correctly (tests Date deserialization in import path)
+- [ ] **Import rejects malformed files:** Import a JSON file with missing `trace_id` field; verify a user-facing error appears rather than a crash
+- [ ] **Import rejects non-JSON files:** Import a `.txt` file; verify a user-facing error rather than a JSON parse exception propagating to the UI
+- [ ] **Export produces valid JSON:** Export a trace, open the file in a text editor, confirm it parses as valid JSON
+- [ ] **Export + import roundtrip:** Export a trace, import the exported file, verify the trace renders identically to the original
+- [ ] **IDB unavailable degrades gracefully:** Open the app in Firefox private browsing; the sidebar loads (possibly empty), bus events still appear, no blank page or uncaught exception
+- [ ] **No write jank during fast loop:** Run a multi-tool agentic loop while monitoring DevTools Performance; no main thread blocking frames >50ms attributable to IDB writes
 
 ---
 
@@ -465,12 +497,16 @@ If real-time switching is wanted: reload the page when the `color_scheme` cookie
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Controller missing `color_scheme` | LOW | Add `webclient_rendering_context()` call; update template conditional; restart server |
-| Partial variable replacement (hex done, rgba missed) | LOW | Run rgba audit; replace remaining rgba() values with `rgba($o-variable, opacity)` |
-| Notebook override conflict | LOW | Delete color properties from the override block; test both modes |
-| Dialog dark override conflicts | LOW | Delete color overrides from `.o_dialog` block; test both modes |
-| Dark bundle double-compiles Odoo CSS | MEDIUM | Restructure the dark bundle to use `('include', 'ai_debug.assets')` instead of `('include', 'web.assets_backend')` |
-| Tried real-time JS theme switching | MEDIUM | Remove JS theme switching code; implement page reload on cookie change instead |
+| IDB writes in bus handlers (jank) | MEDIUM | Extract persistence to a separate flush module; audit all bus handlers to ensure they are synchronous |
+| Transaction auto-close bug | LOW | Switch to `idb` library wrapper; `tx.done` pattern eliminates this class |
+| Hydration in `onMounted` (flash) | LOW | Move hydration to `onWillStart`; add `hydrating` state and loading indicator |
+| Reactivity not reconstructed | MEDIUM | Add `hydrateTrace()` deserialization function that wraps nested Maps in `reactive()`; test with post-hydration live events |
+| Date strings instead of Date objects | LOW | Add explicit `new Date()` reconstruction in both hydration and import deserialization |
+| Large export blocks main thread | LOW | Wrap stringify in per-trace loop with Blob concatenation |
+| Import crashes on malformed data | LOW | Add shape validation before inserting imported data into store |
+| Delete not durable | LOW | Add IDB delete call paired with every reactive Map delete |
+| Schema mismatch on version bump | HIGH | Increment IDB version; write `onupgradeneeded` migration; or nuke and recreate (data loss) |
+| IDB crash in private browsing | LOW | Wrap IDB open in try/catch; set `this.db = null` on failure; guard all IDB calls |
 
 ---
 
@@ -478,36 +514,32 @@ If real-time switching is wanted: reload the page when the `color_scheme` cookie
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Controller missing `color_scheme` | Phase 1: Theme detection | HTML source shows dark CSS `<link>` when cookie is dark |
-| Asset bundle loads wrong bundle | Phase 1: Bundle structure | DevTools Network shows two CSS bundles in dark mode, one in light |
-| Hex hardcoded colors not replaced | Phase 1: Variable audit | `grep "#[0-9a-f]\{3,6\}" app.scss` returns 0 results |
-| RGBA hardcoded colors missed | Phase 1: Variable audit | `grep "rgba(1\|rgba(2\|rgba(9" app.scss` returns 0 results |
-| Notebook override conflict | Phase 2: Component overrides | Notebook tabs correctly themed in both modes without app.scss color rules |
-| Dialog dark override conflict | Phase 2: Component overrides | TextPopupDialog looks correct in both modes without app.scss color rules |
-| JsonTree colors not adapted | Phase 1: Variable audit | JSON strings/numbers/booleans legible in both modes |
-| StateDiff tints not adapted | Phase 1: Variable audit | Diff cells have subtle tints in both modes |
-| Real-time switching attempted | Phase 1: Architecture decision | No `cookie.get("color_scheme")` in JS for visual switching; only reload-on-switch |
-| Full audit misses rgba() | Phase 1: QA | Both grep passes return 0 after migration |
+| Writes block UI (no batching) | Phase 1: IDB layer design | DevTools Performance shows no IDB-related jank during fast loops |
+| Transaction auto-close | Phase 1: IDB wrapper | Use `idb` library; zero `TransactionInactiveError` in console |
+| Hydration in wrong hook | Phase 2: Hydration | No flash of empty state on page load with stored traces |
+| Reactivity not reconstructed | Phase 2: Hydration | Live bus events update the sidebar for traces loaded from IDB |
+| Date type loss | Phase 2 + Phase 3 | Duration displays correctly for both hydrated and imported traces |
+| Large export blocking | Phase 3: Export | Export of 5+ traces completes in <100ms measured in DevTools |
+| Import without validation | Phase 3: Import | Malformed file produces user error, not a render exception |
+| Delete not durable | Phase 1: IDB layer design | Delete + reload shows empty sidebar |
+| Schema version mismatch | Phase 1: IDB layer design | `onupgradeneeded` handler present and versioned from the start |
+| IDB unavailable crash | Phase 1: IDB layer design | App loads in Firefox private browsing without blank page |
 
 ---
 
 ## Sources
 
-- Direct source inspection: `/Users/joseph/clones/odoo/custom/ai_debug/static/src/app/app.scss` — 650 lines, ~40 hardcoded hex values, rgba() tints in diff grid and flash animation, Notebook + Dialog dark overrides
-- Direct source inspection: `/Users/joseph/clones/odoo/custom/ai_debug/controllers/main.py` — current controller calls `session_info()` only, missing `color_scheme`
-- Direct source inspection: `/Users/joseph/clones/odoo/custom/ai_debug/views/ai_debug_index.xml` — template has no `color_scheme` conditional, loads only `ai_debug.assets`
-- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/models/ir_http.py` — `webclient_rendering_context()` returns both `color_scheme` and `session_info`; base `color_scheme()` always returns `"light"`
-- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/models/ir_http.py` — enterprise override reads `color_scheme` cookie AND `res.users.settings_id.color_scheme`
-- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/views/webclient_templates.xml` lines 311–319 — JS loaded once with `t-css="false"`; CSS loaded conditionally with `t-js="false"`
-- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/views/pos_assets_index.xml` — uses `request.cookies.get('pos_color_scheme') == 'dark'` conditional with separate `assets_prod_dark` bundle
-- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/__manifest__.py` — `web.assets_backend` removes `*.dark.scss`; `web.assets_web_dark` includes `web.assets_web` plus all `*.dark.scss`
-- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/__manifest__.py` — `web.dark_mode_variables` pattern; `web.assets_web_dark` uses `('include', 'web.dark_mode_variables')` plus dark SCSS files
-- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/static/src/scss/primary_variables.dark.scss` — defines dark palette: `$o-gray-100: #1B1D26`, `$o-gray-200: #262A36`, `$o-view-background-color: $o-gray-200`, `$o-webclient-background-color: $o-gray-100`
-- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/static/src/scss/primary_variables.scss` — defines light palette: `$o-gray-100: #F9FAFB`, `$o-gray-200: #e7e9ed`, `$o-view-background-color` (inherited from web module)
-- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/static/src/core/notebook/notebook.dark.scss` — sets CSS custom properties `--Notebook__link-background-color`, `--Notebook__link-border-color` etc. on `.o_notebook`
-- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/static/src/core/notebook/notebook.scss` — uses those custom properties via `var()` in `.nav-link`
-- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/pos_enterprise/__manifest__.py` — `point_of_sale.assets_prod_dark` uses `('include', 'web.dark_mode_variables')` plus dark SCSS, confirming the pattern for standalone dark bundles
+- Direct source inspection: `/Users/joseph/clones/odoo/custom/ai_debug/static/src/app/app.js` — current bus event handlers, `useState(new Map())` reactive store, `onMounted` bus subscription, existing `clearAll()` method
+- OWL lifecycle documentation: `onWillStart` is the correct async-before-render hook; `onMounted` runs post-render; modifying state in `onMounted` causes a second render — [github.com/odoo/owl/blob/master/doc/reference/component.md](https://github.com/odoo/owl/blob/master/doc/reference/component.md)
+- IndexedDB transaction auto-commit: transactions auto-close when no pending IDB requests exist after microtasks flush; no non-IDB `await` inside a transaction scope — [MDN IDBTransaction](https://developer.mozilla.org/en-US/docs/Web/API/IDBTransaction), [javascript.info/indexeddb](https://javascript.info/indexeddb)
+- IndexedDB structured clone blocks main thread: "the structured cloning process happens on the main thread. The larger the object, the longer the blocking time will be" — [web.dev/articles/indexeddb-best-practices-app-state](https://web.dev/articles/indexeddb-best-practices-app-state)
+- Write batching performance: 1k records one-at-a-time ~2s vs. batched ~80ms — [nolanlawson.com/2021/08/22/speeding-up-indexeddb-reads-and-writes](https://nolanlawson.com/2021/08/22/speeding-up-indexeddb-reads-and-writes/)
+- Safari transaction auto-close bug: more aggressive than Chrome; `Promise.resolve().then()` can close transaction prematurely — [github.com/pesterhazy/4de96193af89a6dd5ce682ce2adff49a](https://gist.github.com/pesterhazy/4de96193af89a6dd5ce682ce2adff49a)
+- Firefox private browsing IDB error: throws on open in older Firefox private mode; resolved in Firefox 115 — [bugzilla.mozilla.org/show_bug.cgi?id=781982](https://bugzilla.mozilla.org/show_bug.cgi?id=781982)
+- IDB export with large data: streaming Blob construction avoids holding entire DB in RAM — [dexie.org/docs/ExportImport/dexie-export-import](https://dexie.org/docs/ExportImport/dexie-export-import)
+- IDB schema migration: changing keyPath requires delete + recreate (data destructive); version must be incremented — [MDN Using IndexedDB](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB)
+- PROJECT.md: "Payload size for RAG-enabled sessions unknown (needs empirical baseline)" — known tech debt, informs export payload risk
 
 ---
-*Pitfalls research for: Odoo AI Debugger v1.2 — native Odoo theming migration*
+*Pitfalls research for: Odoo AI Debugger v1.3 — IndexedDB persistence and export/import*
 *Researched: 2026-02-22*

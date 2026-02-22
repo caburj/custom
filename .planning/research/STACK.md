@@ -6,15 +6,320 @@
 
 ---
 
-## v1.2 Scope: Native Odoo Theming
+## v1.3 Scope: IndexedDB Persistence, Export/Import, Trace Management
+
+This section covers stack additions for persisting traces to IndexedDB, exporting/importing as JSON files, and providing delete/clear UI. No new npm packages or Odoo module dependencies are required — all needed APIs exist in Odoo master's `web` addon or in the browser platform itself.
+
+**Existing stack unchanged.** The v1.2 theming stack (SCSS bundles, color scheme detection) and v1.1 stack (OWL standalone app, bus_service, sidebar tree) are not modified by v1.3.
+
+---
+
+## v1.3 Recommended Stack
+
+### Core Technologies
+
+| Technology | Version | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| `IndexedDB` from `@web/core/utils/indexed_db` | Odoo master | Structured local storage for trace data | Odoo's own IndexedDB wrapper handles versioning, schema upgrades, quota errors, and mutex-serialized transactions. Used in production by `menu_service`, `localization_service`, `rpc_cache`, and `offline_service`. Import path: `import { IndexedDB } from "@web/core/utils/indexed_db"`. Zero external dependency. |
+| `downloadFile` from `@web/core/network/download` | Odoo master | Trigger a browser file download from in-memory data | Creates a temporary `<a download>` element, sets an object URL from a `Blob`, clicks it, then revokes the URL. Handles all cross-browser edge cases. Used throughout Odoo for report downloads. Import: `import { downloadFile } from "@web/core/network/download"`. Pass a `Blob` or string + filename + MIME type. |
+| Native `FileReader` API | Browser (all modern) | Read a user-selected JSON file into memory | `FileReader.readAsText(file)` delivers the file content as a string. Wrap in a `Promise` for async/await. No Odoo wrapper needed — the download.js source in Odoo itself uses raw `FileReader` in the same pattern. |
+| Hidden `<input type="file" accept=".json">` | Browser (all modern) | Trigger OS file picker for import | A `useRef`-held hidden input element, programmatically `.click()`-ed from a button handler, with `.change` event handling. This is the pattern used by Odoo's own component library (`FileInput` in `@web/core/file_input/file_input`). For local-only import we do NOT use `FileInput` (it uploads to server) — just the raw input element. |
+| `notification` service via `useService("notification")` | Odoo master | User feedback for import errors, quota exceeded | `notification.add(message, { type: "danger" })`. Available in the standalone OWL app — registered in `web.assets_backend` which is included by `ai_debug.assets`. Already available to all OWL components via `useService`. |
+| `dialog` service via `useService("dialog")` + `ConfirmationDialog` | Odoo master | Delete-confirmation modal before destructive operations | `dialogService.add(ConfirmationDialog, { body, confirm, cancel })` opens a Bootstrap modal with "Confirm" / "Discard" buttons. Import `ConfirmationDialog` from `@web/core/confirmation_dialog/confirmation_dialog`. Available automatically through `web.assets_backend`. |
+
+### Supporting APIs (Browser-Native, No New Dependencies)
+
+| API | Purpose | Notes |
+|-----|---------|-------|
+| `IndexedDB.execute(callback)` | Run raw IDB operations not covered by `read`/`write`/`getAllKeys` | The `execute` method gives the callback a live `IDBDatabase` instance. Use `db.transaction(table, "readonly").objectStore(table).getAll()` to bulk-read all trace records on startup hydration. The `IndexedDB` class itself only exposes `read(table, key)` and `getAllKeys(table)` — use `execute` for `getAll`. |
+| `IndexedDB.invalidate()` | Clear all entries in all stores | Odoo's API: `invalidate(null)` clears all stores; `invalidate("traces")` clears one store. Use for "Clear All" button. |
+| `IndexedDB.execute` with `objectStore.delete(key)` | Delete a single trace by ID | No `delete(key)` method on the `IndexedDB` class. Use `execute((db) => new Promise((res, rej) => { const tx = db.transaction("traces", "readwrite"); tx.objectStore("traces").delete(traceId); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }))`. |
+| `JSON.stringify` / `JSON.parse` | Serialize trace data for IndexedDB and export | IndexedDB stores structured clones natively — pass plain objects directly to `write()`. For export: `JSON.stringify(payload, null, 2)` for readable output. For import: `JSON.parse(text)` then validate schema version field before merging. |
+| `URL.createObjectURL` + `URL.revokeObjectURL` | Called internally by `downloadFile` | Do not call these directly — `downloadFile` handles the object URL lifecycle. |
+
+---
+
+## v1.3 Integration with Existing `useState(new Map())` Store
+
+The existing reactive store uses `useState(new Map())` at the top level with nested `reactive(new Map())` for iterations and tool calls. IndexedDB persistence requires a serialization strategy because:
+
+1. OWL `reactive` proxies are not JSON-serializable.
+2. `Date` objects become strings in JSON round-trips and must be reconstructed.
+3. Nested `reactive(new Map())` must be recreated when hydrating from IndexedDB.
+
+### Serialization Pattern
+
+Store each trace as a **plain JSON object** keyed by `trace_id`. The object stores only the raw data fields — no `reactive`, no `Map`, no `Date` objects. On load, reconstruct the reactive Maps and Date instances.
+
+```javascript
+// Serialize one trace to a plain object for IndexedDB storage
+function serializeTrace(trace) {
+    return {
+        trace_id: trace.trace_id,
+        agent_name: trace.agent_name,
+        model_name: trace.model_name,
+        status: trace.status,
+        started_at: trace.started_at?.toISOString() ?? null,
+        ended_at: trace.ended_at?.toISOString() ?? null,
+        duration_ms: trace.duration_ms,
+        instructions: trace.instructions,
+        tools: trace.tools,
+        state_snapshot: trace.state_snapshot,
+        iterations: Object.fromEntries(
+            [...trace.iterations.entries()].map(([iterId, iter]) => [
+                iterId,
+                {
+                    iteration_id: iter.iteration_id,
+                    trace_id: iter.trace_id,
+                    iteration_index: iter.iteration_index,
+                    has_error: iter.has_error,
+                    receivedAt: iter.receivedAt?.toISOString() ?? null,
+                    is_final: iter.is_final,
+                    error: iter.error,
+                    messages_sent: iter.messages_sent,
+                    raw_response: iter.raw_response,
+                    toolCalls: Object.fromEntries(
+                        [...iter.toolCalls.entries()].map(([tcId, tc]) => [tcId, { ...tc }])
+                    ),
+                },
+            ])
+        ),
+    };
+}
+
+// Hydrate a plain object back to the reactive store format
+function hydrateTrace(plain) {
+    const iterations = reactive(new Map());
+    for (const [iterId, iterPlain] of Object.entries(plain.iterations || {})) {
+        const toolCalls = reactive(new Map());
+        for (const [tcId, tcPlain] of Object.entries(iterPlain.toolCalls || {})) {
+            toolCalls.set(tcId, { ...tcPlain });
+        }
+        iterations.set(iterId, {
+            ...iterPlain,
+            receivedAt: iterPlain.receivedAt ? new Date(iterPlain.receivedAt) : null,
+            expanded: false,  // UI state always starts collapsed on hydration
+            toolCalls,
+        });
+    }
+    return {
+        ...plain,
+        started_at: plain.started_at ? new Date(plain.started_at) : null,
+        ended_at: plain.ended_at ? new Date(plain.ended_at) : null,
+        expanded: false,  // UI state always starts collapsed on hydration
+        iterations,
+    };
+}
+```
+
+### Write Pattern (Fire-and-Forget on Every Bus Event)
+
+Write to IndexedDB after each bus event mutates the store. The write is async but does not block the reactive update — OWL re-renders immediately; IndexedDB write happens in the background:
+
+```javascript
+// In _onNewTrace, _onIteration, _onToolCall, _onLoopEnd handlers — after store mutation:
+this._db.write("traces", payload.trace_id, serializeTrace(this.traces.get(payload.trace_id)));
+// No await — fire-and-forget. Failures are logged by IndexedDB class internally.
+```
+
+**Why fire-and-forget:** The bus events arrive quickly (multiple per second during an agentic loop). Awaiting each write would block the event handler and delay store updates, causing visual lag. IndexedDB writes with `durability: "relaxed"` are fast (sub-millisecond typically). The worst case on failure is one event not persisted — acceptable for a dev tool.
+
+### Hydration Pattern (onMounted, Before Bus Subscription)
+
+```javascript
+onMounted(async () => {
+    // Hydrate from IndexedDB BEFORE subscribing to bus
+    // so that existing traces are visible immediately,
+    // and new bus events append to (not overwrite) them.
+    const keys = await this._db.getAllKeys("traces");
+    for (const key of keys) {
+        const plain = await this._db.read("traces", key);
+        if (plain) {
+            this.traces.set(plain.trace_id, hydrateTrace(plain));
+        }
+    }
+    // Then subscribe to bus...
+    this.busService.subscribe("new_trace", this._onNewTrace);
+    // ...
+});
+```
+
+**Why `getAllKeys` then individual `read` calls:** The `IndexedDB` class from `@web/core/utils/indexed_db` does not have a `getAll()` method that returns values (only `getAllKeys()` exists). To bulk-read, either: (a) loop `getAllKeys` → `read` per key (simple, works), or (b) use `execute((db) => new Promise(res => db.transaction("traces","readonly").objectStore("traces").getAll().onsuccess = e => res(e.target.result)))`. Option (a) is simpler and readable for the expected trace count (dozens, not thousands). Use option (b) if startup time becomes a concern.
+
+---
+
+## v1.3 Schema
+
+Store one object store named `"traces"` in a database named `"ai_debug_traces"`.
+
+```javascript
+// In setup():
+this._db = new IndexedDB("ai_debug_traces", 1);
+// Version 1 — bump if schema changes. The IndexedDB class auto-deletes and re-creates
+// the database when the version changes (verified in _checkVersion() source).
+```
+
+**Database name:** `"ai_debug_traces"` — scoped to this app, avoids conflicts with Odoo's other IndexedDB databases (`"webclient_menu"`, `"odoo_rpc_cache"`, etc.).
+
+**Object store name:** `"traces"` — one store, one key per trace (`trace_id`), full serialized trace as value.
+
+**Schema version strategy:** Start at `1`. The Odoo `IndexedDB` class's `_checkVersion()` deletes and re-creates the entire database if the version changes. This is acceptable for a dev tool. Bump to `2` if the stored schema changes in a future milestone.
+
+---
+
+## v1.3 Export Pattern
+
+```javascript
+exportTraces(traceIds) {
+    // traceIds: array of trace_id strings to export, or null for all
+    const toExport = traceIds
+        ? traceIds.map((id) => serializeTrace(this.traces.get(id))).filter(Boolean)
+        : [...this.traces.values()].map(serializeTrace);
+
+    const payload = {
+        version: 1,  // export schema version — bump if format changes
+        exported_at: new Date().toISOString(),
+        traces: toExport,
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const filename = `ai-traces-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.json`;
+    downloadFile(blob, filename, "application/json");
+}
+```
+
+**Why `downloadFile` not `<a>` directly:** `downloadFile` from `@web/core/network/download` handles cross-browser edge cases (Safari, IE11 fallback, object URL lifecycle). It is already in the bundle via `web.assets_backend`.
+
+---
+
+## v1.3 Import Pattern
+
+```javascript
+importTraces(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const payload = JSON.parse(e.target.result);
+                if (payload.version !== 1) {
+                    reject(new Error(`Unsupported export version: ${payload.version}`));
+                    return;
+                }
+                for (const plain of payload.traces) {
+                    // Merge: imported traces are added; existing traces with same ID are overwritten
+                    this.traces.set(plain.trace_id, hydrateTrace(plain));
+                    this._db.write("traces", plain.trace_id, plain);  // fire-and-forget
+                }
+                resolve(payload.traces.length);
+            } catch (err) {
+                reject(err);
+            }
+        };
+        reader.onerror = () => reject(new Error("FileReader error"));
+        reader.readAsText(file);
+    });
+}
+```
+
+**Error surface:** Wrap the call in a try/catch in the button handler and show `notification.add(err.message, { type: "danger" })` on failure.
+
+---
+
+## v1.3 Delete Patterns
+
+```javascript
+// Delete single trace — from store and IndexedDB
+async deleteTrace(traceId) {
+    this.traces.delete(traceId);
+    if (this.state.selectedId === traceId) {
+        this.state.selectedId = null;
+        this.state.selectedType = null;
+    }
+    await this._db.execute((db) => new Promise((res, rej) => {
+        const tx = db.transaction("traces", "readwrite");
+        tx.objectStore("traces").delete(traceId);
+        tx.oncomplete = res;
+        tx.onerror = () => rej(tx.error);
+    }));
+}
+
+// Clear all — both store and IndexedDB
+async clearAll() {
+    this.traces.clear();
+    this.state.selectedId = null;
+    this.state.selectedType = null;
+    await this._db.invalidate("traces");  // clears the "traces" object store
+}
+```
+
+**Confirmation before delete:** Use `dialogService.add(ConfirmationDialog, { body: "Delete this trace?", confirm: () => this.deleteTrace(id), confirmClass: "btn-danger", confirmLabel: "Delete" })`. The existing `clearAll()` method in `app.js` already exists but only clears the in-memory store — v1.3 adds the IndexedDB side.
+
+---
+
+## What NOT to Use
+
+| Avoid | Why | Use Instead |
+|-------|-----|-------------|
+| `localStorage` for trace storage | 5-10 MB limit in most browsers. A single large RAG-enabled session can produce megabytes of trace data. Size cap causes silent data loss with no error surfacing. | `IndexedDB` via `@web/core/utils/indexed_db` — browser-managed quota with explicit `QuotaExceededError`. |
+| `idb` npm package (jakearchibald/idb) | External npm dependency; not in Odoo's asset pipeline; adds 2 KB gzip for a wrapper we get for free from `@web/core/utils/indexed_db`. | `IndexedDB` from `@web/core/utils/indexed_db` — already in the bundle via `web.assets_backend`. |
+| `idb-keyval` (already vendored in mail/website_event_track) | Vendored as a service worker utility in the `mail` addon — not accessible from `@web/core/utils`. Importing across addons from a vendor lib path is fragile. | `IndexedDB` from `@web/core/utils/indexed_db`. |
+| POS `IndexedDB` class (`@point_of_sale/app/models/utils/indexed_db`) | POS IndexedDB is designed for POS-specific batch ORM data — heavyweight, callback-based, not exposed as an `@web/*` import. | `IndexedDB` from `@web/core/utils/indexed_db`. |
+| Storing OWL reactive proxies in IndexedDB | `structuredClone` (used internally by IndexedDB) cannot clone OWL Proxy objects and will throw `DataCloneError`. | Serialize to plain objects via `serializeTrace()` before writing. |
+| Awaiting IndexedDB writes in bus event handlers | Blocks the event handler and delays OWL reactive updates, causing sidebar to stutter during fast loop execution. | Fire-and-forget writes — `this._db.write(...)` without `await` in event handlers. |
+| `FileInput` component from `@web/core/file_input/file_input` | `FileInput` is hardwired to upload files to a server route (`/web/binary/upload_attachment`). We need client-side `FileReader` — no server round-trip. | Hidden `<input type="file">` with `FileReader.readAsText()`. |
+| Server-side persistence (Odoo model, SQL) | Adds a migration, a model, ORM overhead, and database I/O for every bus event. Out of scope per PROJECT.md constraints. | IndexedDB for persistence; nothing for coordination. |
+
+---
+
+## Version Compatibility
+
+| API | Odoo Version | Notes |
+|-----|--------------|-------|
+| `IndexedDB` class at `@web/core/utils/indexed_db` | Odoo master | Verified imported by `menu_service`, `localization_service`, `rpc_cache`, `offline_service`. The class is stable and widely used. |
+| `IndexedDB.execute(callback)` | Odoo master | Exposes raw `IDBDatabase` for operations not in the class API. `getAll()` for values requires this. |
+| `IndexedDB.invalidate(tableName)` | Odoo master | Passing a string clears one store. Passing null clears all stores except `__DBVersion__`. |
+| `downloadFile(data, filename, mimetype)` | Odoo master | Exported from `@web/core/network/download`. Accepts `Blob`, `string`, or data URL as `data`. |
+| `ConfirmationDialog` | Odoo master | At `@web/core/confirmation_dialog/confirmation_dialog`. Props: `body`, `confirm`, `cancel`, `confirmLabel`, `cancelLabel`, `confirmClass`, `title`. |
+| `notification` service | Odoo master | `useService("notification")` in any OWL component mounted via `mountComponent`. API: `notification.add(message, { type: "success"|"danger"|"warning"|"info" })`. |
+| `dialog` service | Odoo master | `useService("dialog")` in any OWL component. API: `dialogService.add(Component, props)`. Returns a close function. |
+| `IDBQuotaExceededError` | Odoo master | Exported from `@web/core/utils/indexed_db`. Thrown (not just logged) when quota is exceeded. Catch it to show a user-facing notification. |
+| `FileReader` | Browser — all modern | `readAsText(file)` → `onload` → `event.target.result` string. No Odoo dependency. |
+
+---
+
+## Sources
+
+All patterns verified against Odoo master source code at `/Users/joseph/clones/odoo/odoo/.worktrees/master/`:
+
+- `addons/web/static/src/core/utils/indexed_db.js` — Full `IndexedDB` class source: `read`, `write`, `getAllKeys`, `invalidate`, `execute`, `_checkVersion`, `IDBQuotaExceededError` (HIGH confidence)
+- `addons/web/static/src/webclient/menus/menu_service.js` — `new IndexedDB("webclient_menu", session.registry_hash)` + `read`/`write` pattern (HIGH confidence)
+- `addons/web/static/src/core/network/rpc_cache.js` — `IDBQuotaExceededError` catch pattern + `execute` usage (HIGH confidence)
+- `addons/web/static/src/core/network/download.js` — `downloadFile(data, filename, mimetype)` implementation, Blob + object URL lifecycle (HIGH confidence)
+- `addons/web/static/src/core/confirmation_dialog/confirmation_dialog.js` — `ConfirmationDialog` props, `AlertDialog` variant (HIGH confidence)
+- `addons/web/static/src/core/file_input/file_input.js` — `FileInput` server-upload pattern (confirmed: NOT suitable for local import) (HIGH confidence)
+- `addons/web/static/src/core/utils/files.js` — `useFileUploader` uploads to server route; raw `FileReader` needed instead for local import (HIGH confidence)
+- `addons/web/static/src/core/utils/indexed_db.js` lines 215-244 — `_invalidate` implementation: `objectStore.clear()` for each named table (HIGH confidence)
+- `addons/mail/static/lib/idb-keyval/idb-keyval.js` — idb-keyval confirmed vendored in mail addon; not usable from `@web/*` path (HIGH confidence)
+- `addons/point_of_sale/static/src/app/models/utils/indexed_db.js` — POS-specific IndexedDB, batch-oriented, not appropriate for this use case (HIGH confidence)
+
+---
+
+## v1.2 Stack (Prior Milestone — Retained for Reference)
+
+**Domain:** Odoo standalone OWL app — AI agentic loop live tracer (v1.2)
+**Researched:** 2026-02-22
+
+---
+
+### v1.2 Scope: Native Odoo Theming
 
 This document adds a v1.2 section focused on replacing hardcoded Catppuccin Mocha colors with Odoo's Bootstrap CSS variable theming system. The v1.1 stack content (standalone OWL app, bus.bus, sidebar tree, asset bundle) follows at the bottom and is not re-researched.
 
 ---
 
-## v1.2 Recommended Stack
+### v1.2 Recommended Stack
 
-### Core Technologies
+#### Core Technologies
 
 | Technology | Version | Purpose | Why Recommended |
 |------------|---------|---------|-----------------|
@@ -23,7 +328,7 @@ This document adds a v1.2 section focused on replacing hardcoded Catppuccin Moch
 | `request.env['ir.http'].color_scheme()` | web_enterprise `ir_http.py` | Server-side detection of user's color preference | Returns `'light'` or `'dark'`. Reads the `color_scheme` cookie first, then falls back to `res.users.settings.color_scheme`. The community `ir.http` base always returns `'light'`; the enterprise override (in `web_enterprise/models/ir_http.py`) adds the cookie and user preference. Called once at page render time — no JS needed. |
 | `color_scheme` cookie | Browser cookie set by `web_enterprise` controller | Persists user's light/dark toggle preference across page loads | Set by `web_enterprise/controllers/home.py` on every `/web` or `/odoo` request. The cookie value is `'dark'` or `'light'`. Reading it server-side via `color_scheme()` and loading the correct bundle server-side is the same approach used by the main webclient template (`web.webclient_bootstrap` lines 314-319). |
 
-### Supporting Libraries (No New Dependencies)
+#### Supporting Libraries (No New Dependencies)
 
 No new npm packages, Python libraries, or Odoo modules required. All the infrastructure is already present:
 
@@ -34,11 +339,11 @@ No new npm packages, Python libraries, or Odoo modules required. All the infrast
 
 ---
 
-## Pattern 1: Conditional Bundle Loading in Controller + Template
+### Pattern 1: Conditional Bundle Loading in Controller + Template
 
 This is the exact same mechanism used by `web.webclient_bootstrap`. The controller calls `color_scheme()` and passes it to the template. The template conditionally loads the light or dark bundle.
 
-### Controller Change (`controllers/main.py`)
+#### Controller Change (`controllers/main.py`)
 
 ```python
 from odoo import http
@@ -64,7 +369,7 @@ class AiDebugController(http.Controller):
 
 **Why `debug` is not passed explicitly:** QWeb auto-injects `debug` from `request.session.debug` into the template rendering context (`ir_qweb.py` line 1297: `values.setdefault('debug', debug)`). No need to pass it manually.
 
-### Template Change (`views/ai_debug_index.xml`)
+#### Template Change (`views/ai_debug_index.xml`)
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
@@ -101,7 +406,7 @@ class AiDebugController(http.Controller):
 
 **Why not load both dark and light CSS with a media query:** Odoo does not use `prefers-color-scheme` media queries. The dark/light choice is explicit via a user cookie, not an OS preference. The server decides which bundle to load based on the cookie value.
 
-### Asset Bundle Changes (`__manifest__.py`)
+#### Asset Bundle Changes (`__manifest__.py`)
 
 ```python
 'assets': {
@@ -130,11 +435,11 @@ class AiDebugController(http.Controller):
 
 ---
 
-## Pattern 2: Replacing Hardcoded Colors with CSS Custom Properties
+### Pattern 2: Replacing Hardcoded Colors with CSS Custom Properties
 
 The app.scss currently uses hardcoded Catppuccin Mocha hex values. These map to Bootstrap/Odoo CSS custom properties that automatically carry dark or light values depending on which bundle is loaded.
 
-### Color Mapping: Catppuccin Mocha → Odoo CSS Custom Properties
+#### Color Mapping: Catppuccin Mocha → Odoo CSS Custom Properties
 
 | Catppuccin Hex | Semantic Role | Replace With | Notes |
 |----------------|---------------|--------------|-------|
@@ -155,7 +460,7 @@ The app.scss currently uses hardcoded Catppuccin Mocha hex values. These map to 
 
 **Important caveat on secondary/tertiary Bootstrap vars:** Odoo sets `$enable-dark-mode: false` in `bootstrap_overridden.scss` line 60. This disables Bootstrap 5's built-in `[data-bs-theme="dark"]` block in `_root.scss`, which means `--secondary-bg`, `--tertiary-bg`, `--secondary-color`, `--tertiary-color` may not be emitted at `:root`. Verify in the compiled bundle before using. Safe fallback: define component-scoped CSS custom properties anchored to `$o-gray-*` SCSS variables directly in the module's SCSS files, which get the correct values at compile time.
 
-### SCSS Approach for Compile-Time Color Values
+#### SCSS Approach for Compile-Time Color Values
 
 For values with no direct CSS custom property match, use SCSS variables directly in the app's SCSS. These get the correct dark/light values at compile time because `web.dark_mode_variables` is included first:
 
@@ -177,7 +482,7 @@ For values with no direct CSS custom property match, use SCSS variables directly
 
 **Why SCSS variables are safe:** When `ai_debug.assets_dark` is loaded, `web.dark_mode_variables` runs `('before', primary_variables.scss, primary_variables.dark.scss)`, which makes `$o-gray-100 = #1B1D26` during the entire SCSS compilation of `ai_debug.assets`. The compiled CSS has the dark value baked in. This is the same mechanism used by every enterprise dark SCSS file.
 
-### Dark-Specific Override Pattern (`.dark.scss` files)
+#### Dark-Specific Override Pattern (`.dark.scss` files)
 
 For colors that cannot be expressed as CSS custom properties or SCSS variables — such as complex rgba() calls with specific alpha values tied to the Catppuccin palette — create `.dark.scss` override files. These are only included in the dark bundle:
 
@@ -205,9 +510,9 @@ For colors that cannot be expressed as CSS custom properties or SCSS variables �
 
 ---
 
-## Pattern 3: Color Scheme Cookie Detection
+### Pattern 3: Color Scheme Cookie Detection
 
-### Server-Side (Recommended Approach)
+#### Server-Side (Recommended Approach)
 
 The controller reads the color_scheme cookie via `ir.http.color_scheme()` and conditionally loads the correct asset bundle server-side. No JavaScript cookie parsing needed at mount time:
 
@@ -218,7 +523,7 @@ return request.render('ai_debug.index', {'color_scheme': color_scheme, ...})
 
 The template then loads `ai_debug.assets_dark` (CSS only) or `ai_debug.assets` based on `color_scheme == 'dark'`. The app JS never needs to know which theme is active — the CSS just works.
 
-### Client-Side Cookie Parsing (Only If Needed)
+#### Client-Side Cookie Parsing (Only If Needed)
 
 If any JS component needs to know the current color scheme at runtime (e.g., for a JS charting library that can't use CSS variables), parse the cookie client-side:
 
@@ -236,7 +541,7 @@ function getColorScheme() {
 
 ---
 
-## What NOT to Use
+### What NOT to Use (v1.2)
 
 | Avoid | Why | Use Instead |
 |-------|-----|-------------|
@@ -249,7 +554,7 @@ function getColorScheme() {
 
 ---
 
-## Version Compatibility
+### Version Compatibility (v1.2)
 
 | Pattern | Odoo Version | Notes |
 |---------|--------------|-------|
@@ -263,7 +568,7 @@ function getColorScheme() {
 
 ---
 
-## Sources
+### Sources (v1.2)
 
 All patterns verified against Odoo master source, not training data or web search:
 
@@ -299,7 +604,7 @@ The v1.0 stack entries (generator yield passthrough, model inheritance, backend 
 
 ---
 
-### Core Technologies
+### Core Technologies (v1.1)
 
 | Technology | Version | Purpose | Why Recommended |
 |------------|---------|---------|-----------------|
@@ -327,6 +632,6 @@ The v1.0 stack entries (generator yield passthrough, model inheritance, backend 
 
 ---
 
-*Stack research for: AI Debugger — standalone OWL app theming (v1.2)*
+*Stack research for: AI Debugger — IndexedDB persistence, export/import, trace management (v1.3)*
 *Researched: 2026-02-22*
-*All patterns verified against Odoo master and enterprise source code*
+*All patterns verified against Odoo master source code at `/Users/joseph/clones/odoo/odoo/.worktrees/master/`*

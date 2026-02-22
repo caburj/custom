@@ -1,66 +1,18 @@
 # Feature Research
 
-**Domain:** Native Odoo theming in standalone OWL app (ai_debug v1.2)
+**Domain:** Local persistence, export/import, and trace management in a browser-based developer tool
 **Researched:** 2026-02-22
-**Confidence:** HIGH — all findings verified by direct source code review of Odoo master branch (enterprise + core)
+**Confidence:** HIGH — IndexedDB API is stable and well-documented. UX patterns drawn from Chrome DevTools, Edge DevTools, Redux DevTools, and MDN official sources.
 
 ---
 
-## Context: What Already Exists vs What This Milestone Adds
+## Context: What This Milestone Adds
 
-**v1.1 (shipped):** All colors hardcoded as Catppuccin Mocha values in `app.scss` (~97 hardcoded hex/rgba values in one file). App is permanently dark regardless of user preference.
+**v1.2 (shipped):** All data is session-scoped and ephemeral. Refreshing the page destroys all captured traces. The reactive store is a `useState(new Map())` in the OWL component tree. No persistence mechanism exists.
 
-**v1.2 goal:** App respects the user's Odoo theme preference (light or dark) by reading the `color_scheme` cookie at server render time and loading the appropriate asset bundle.
+**v1.3 goal:** Traces survive page refresh via IndexedDB. Users can delete individual traces or clear all. Users can export traces as JSON and import them back.
 
----
-
-## How Odoo Theming Actually Works (Source-Verified)
-
-### The `color_scheme` Cookie System
-
-Odoo Enterprise's theming infrastructure is cookie-driven with three components:
-
-**1. Server-side cookie (Python):** `web_enterprise/controllers/home.py` sets a `color_scheme` cookie on every `/web` response. The value is resolved by `ir.http.color_scheme()` which checks (in priority order): the user's `res.users.settings.color_scheme` field (`system` | `light` | `dark`), then falls back to `"light"`. When `system` is selected, the server returns `"light"` (it cannot detect `prefers-color-scheme` server-side).
-
-**2. Client-side reconciliation (JS):** `color_scheme_service.js` (web_enterprise) runs at startup. It compares the cookie to `window.matchMedia('(prefers-color-scheme:dark)').matches`. If they disagree, it updates the cookie and does `location.reload()`. This is what makes `system` preference actually work for Odoo's main backend.
-
-**3. Template-side bundle switching (XML):** The webclient template checks `color_scheme == 'dark'` and conditionally loads `web.assets_web_dark` (CSS-only) instead of `web.assets_web` (CSS-only, loaded separately from JS).
-
-### How the POS Standalone App Does It
-
-The POS index template (`point_of_sale/views/pos_assets_index.xml`) checks `request.cookies.get('pos_color_scheme') == 'dark'` and loads either `point_of_sale.assets_prod_dark` or `point_of_sale.assets_prod`. The POS uses its own separate cookie (`pos_color_scheme`) because it's a different auth context (public kiosk). The dark toggle is added by `pos_enterprise` via a navbar button that sets the cookie and reloads.
-
-### What `web.assets_web_dark` Contains
-
-From `web/__manifest__.py`:
-```python
-"web.assets_web_dark": [
-    ('include', 'web.assets_web'),  # includes all light mode CSS + JS
-    'web/static/src/**/*.dark.scss', # adds dark overrides on top
-],
-```
-
-From `web_enterprise/__manifest__.py`, it also adds:
-- `web.dark_mode_variables` (dark SASS variable overrides for `$o-gray-*`, `$o-webclient-background-color`, etc.)
-- `web_enterprise/static/src/**/*.dark.scss` (component-specific dark overrides)
-
-### How `ai_debug.assets` Currently Works
-
-The current bundle is:
-```python
-'ai_debug.assets': [
-    ('include', 'web.assets_backend'),  # includes all light mode CSS + JS
-    'ai_debug/static/src/app/**/*.scss',  # app.scss with hardcoded Catppuccin Mocha
-    'ai_debug/static/src/app/**/*.xml',
-    'ai_debug/static/src/app/**/*.js',
-],
-```
-
-`web.assets_backend` already excludes `*.dark.scss` files (`('remove', 'web/static/src/**/*.dark.scss')`). This means the current bundle is always light-mode Bootstrap + dark Catppuccin Mocha custom CSS — a contradictory mix.
-
-### The `color_scheme` Cookie Is Already Set
-
-When any internal user loads `/web` in Odoo Enterprise before navigating to `/ai-debug`, the `color_scheme` cookie is already set by `web_enterprise`'s home controller. The cookie value is `"light"` or `"dark"`. The ai_debug controller can read it immediately at `request.httprequest.cookies.get('color_scheme')`.
+The existing reactive store (`useState(new Map())`) remains the source of truth for the UI. IndexedDB is a write-through persistence layer that mirrors the in-memory store and provides the initial hydration payload on page load.
 
 ---
 
@@ -68,83 +20,105 @@ When any internal user loads `/web` in Odoo Enterprise before navigating to `/ai
 
 ### Table Stakes (Users Expect These)
 
-These are the features that make the theming "complete" from the user's perspective. Missing them makes the UI feel broken or inconsistent.
+Features a developer will assume exist in any tool that claims to "persist" data. Missing these makes the persistence feel broken or untrustworthy.
 
 | Feature | Why Expected | Complexity | Notes |
 |---------|--------------|------------|-------|
-| **App respects user's Odoo theme preference** — dark for dark users, light for light users | User sets "Dark" in Odoo Preferences. Every other Odoo page is dark. The ai_debug standalone app is jarring if it ignores the preference. | LOW | Read `color_scheme` cookie in the controller. Conditionally load dark vs light asset bundle. No new user-facing settings needed. |
-| **Correct Bootstrap CSS custom properties** — `$body-bg`, `$body-color`, `$border-color`, `$dropdown-bg` match the active theme | The app uses Bootstrap classes on Odoo OWL components (Notebook, Dialog). If the Bootstrap SASS variables are not from the dark variant, Bootstrap components look visually wrong even if custom CSS is correct. | LOW | Solved by including `web.dark_mode_variables` in the dark bundle, which re-declares `$o-gray-*` and `$o-webclient-background-color` before Bootstrap compiles them. |
-| **Custom app colors respond to theme switch** — hardcoded Catppuccin Mocha values replaced | Currently 97 hardcoded hex/rgba values. In light mode these make the app look dark regardless of user preference. In dark mode they should also be replaced with SASS variables from Odoo's dark palette. | MEDIUM | All hardcoded values in `app.scss` replaced with `$o-gray-*`, `$o-action`, `$o-danger`, etc. This is the main implementation work. |
-| **Page reload when theme changes in Odoo** — switching theme in Odoo Preferences takes effect on next visit | Odoo's `color_scheme_service.js` reloads the main backend when the cookie changes. The ai_debug app (in a separate tab) gets the correct theme on next page load. No real-time theme switching is needed within the tab itself. | LOW | Correct-by-default. The bundle is selected at server render time from the cookie. Odoo's existing reload mechanism handles the main backend. |
+| **Traces survive page refresh** — IndexedDB hydrates the reactive store on page load | This is the definition of persistence. Without it the feature doesn't exist. | LOW | `openDB()` on startup, `getAll()` from the traces store, populate reactive Map. Write-through: every bus.bus event that adds a trace also calls `put()` into IndexedDB. |
+| **Delete individual trace** — remove one loop trace from both store and IndexedDB | Users accumulate traces across sessions. Being able to discard a stale one is fundamental to managing the list. | LOW | A delete button in the sidebar per trace item. Calls `delete(traceId)` on the IDB store and removes from the reactive Map. No confirmation dialog needed for individual items — the action is low-stakes and reversible (the agent can be re-run). |
+| **Clear all traces** — bulk wipe of every persisted trace | Essential counterpart to persistence. Without it, the list grows unbounded and there's no clean-slate mechanism. | LOW | A "Clear all" button in the toolbar. Calls IDB `clear()` on the traces store and resets the reactive Map. A confirmation prompt (browser `confirm()` or inline warning) is standard practice when the action is irreversible. |
+| **New live traces still appear in real time** — persistence layer does not block bus.bus event delivery | The existing real-time behavior must not regress. If IDB writes are slow or fail, the UI should still update. | LOW | IDB writes are fire-and-forget (`await put()` but do not block UI update). Update reactive Map synchronously, write IDB asynchronously. |
 
-### Differentiators (Optional Polish — Not Blocking)
+### Differentiators (Valuable, Not Required)
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| **Monochrome palette** — replace Catppuccin accent colors (blue, green, red, yellow) with Odoo's semantic colors (`$o-action`, `$o-danger`, `$o-success`, `$o-warning`) | The current Catppuccin palette has arbitrary accent colors. Using Odoo's semantic variables means status colors (error = `$o-danger`, running = `$o-action`) are consistent with what the developer sees elsewhere in Odoo. | LOW | A subset of the color replacement work. Replace `#f38ba8` (Catppuccin red) with `$o-danger`, `#a6e3a1` with `$o-success`, `#89b4fa` with `$o-action`, `#f9e2af` with `$o-warning`. |
-| **`system` preference support** — app detects OS-level dark mode when user has chosen "System" | Odoo's main backend supports this via `color_scheme_service.js` reconciling the cookie with `prefers-color-scheme`. The ai_debug app gets this for free if `color_scheme_service.js` is included in the bundle (it is, via `web.assets_backend`). | LOW | Requires the controller to pass `color_scheme` to the template. The service then reconciles at client startup. Cookie is already set to the correct value by `web_enterprise`'s home controller when user visits `/web` first. |
-| **Smooth first-paint** — no flash of unstyled/wrong-theme content | Odoo's main webclient avoids theme flicker by blocking render until `color_scheme_service` has reconciled the cookie. The ai_debug app can achieve this simply by always loading the cookie-appropriate bundle at server render time (no client-side reconciliation needed for first paint). | LOW | Correct-by-default if bundle selection happens server-side in the controller. No special blocking needed since the app isn't going to "switch theme on the fly". |
+| **Export selected traces as JSON file** — download one or more traces to disk | Developers can share a failing trace with a colleague, attach to a bug report, or archive for later analysis. Covers the multi-session and cross-machine sharing use cases that IndexedDB alone cannot. | LOW | `JSON.stringify(selectedTraces, null, 2)` + programmatic `<a download>` click. No server round-trip. Filename: `ai-traces-{timestamp}.json`. |
+| **Import previously exported JSON file** — restore a JSON export back into the store and IndexedDB | Closes the sharing loop. A teammate can reproduce the exact trace context you captured. | LOW | `<input type="file" accept=".json">` with `FileReader.readAsText()`. Parse JSON, validate structure, insert into reactive Map and IDB. Merge semantics: imported traces are added alongside existing ones (not replace). |
+| **Manual retention only — no auto-expiry** | For a developer tool, the developer decides when data is stale. Auto-expiry on a timer or size limit would delete traces the developer still needs. | NONE | This is explicitly not a feature. Do not implement TTLs, LRU eviction, or size-based pruning. Storage quota for dev tools usage is not a practical concern (Chrome: up to 60% of disk). |
 
 ### Anti-Features (Do Not Build)
 
 | Feature | Why Requested | Why Problematic | Alternative |
 |---------|---------------|-----------------|-------------|
-| **In-app theme toggle button** — a sun/moon button in the ai_debug header | "I want to switch themes without going back to Odoo Preferences." | The ai_debug app is a developer tool, not a consumer product. A theme toggle duplicates Odoo's existing preference system (Preferences → Theme). The POS does this (`pos_enterprise` adds a navbar button and its own `pos_color_scheme` cookie) because POS is used by cashiers who may not have access to Odoo backend settings. ai_debug users are always internal Odoo developers who already have Preferences access. Maintaining a second cookie creates sync problems. | Direct users to Odoo Preferences for theme changes. |
-| **CSS custom properties at runtime** — switching theme without page reload via JS-toggled CSS variables | "Real-time theme switching is smoother." | Odoo's entire theming system is compile-time (SASS variables compiled into two separate CSS bundles). Implementing runtime switching would require either duplicating all variable declarations as CSS custom properties, or shipping both bundles and toggling stylesheets — neither of which Odoo's own main backend does. | Match Odoo's behavior: bundle selected at server render time, page reload required to change theme. |
-| **Custom color palette user preference** — "I want to use a different theme color" | "The Odoo dark theme is purple. I prefer a blue theme." | Out of scope for a developer tool. Odoo does not expose theme color customization to internal users (only website themes support this). The ai_debug app should be minimal and consistent with the Odoo design system. | Use `$o-enterprise-color` and `$o-action` as-is. No color customization. |
-| **Separate dark SCSS files (`app.dark.scss`)** — mirroring web_enterprise's component-by-component pattern | "That's the Odoo pattern for dark mode." | The web_enterprise pattern (one `.dark.scss` per component) exists because web_enterprise must override thousands of light-mode values across hundreds of components. The ai_debug app has one SCSS file with ~97 color values. Splitting into `app.scss` + `app.dark.scss` creates two files to maintain when one file using `$o-gray-*` variables covers both modes with zero duplication. | Replace hardcoded values with SASS variables. One file, no duplication. The dark bundle's `web.dark_mode_variables` re-declares those variables before compilation, so the same `app.scss` compiles to different values depending on which bundle is built. |
+| **Auto-expiry / TTL** — delete traces older than N days automatically | "I don't want IndexedDB to fill up." | Unexpectedly deletes traces the developer still needs. Storage quota is not a practical constraint for this use case (the average agentic trace is tens of KB; quota is GBs). Introduces complexity (timestamp indexing, background cleanup) for no real benefit. | Manual delete and "Clear all" are sufficient. Inform the user of storage used if needed via `navigator.storage.estimate()`. |
+| **Server-side sync / backup** — push traces to an Odoo model or external service | "I want to access traces from another machine." | Adds database models, migrations, backend code, and auth complexity. The `ai_debug` module's explicit design decision was no database persistence. Cross-machine sharing is solved by export/import. | Export to JSON file, send the file. |
+| **Search and filter within persisted traces** | "I have 50 traces and need to find the one that failed." | Out of scope per PROJECT.md — "bounded tree depth makes this low-priority." IndexedDB does support indexes, but building filter UI is a distinct milestone. | Covered by the visual sidebar tree already. Defer to v2+. |
+| **Selective import — choose which traces to import from a file** | "I only want trace 3 out of this 10-trace export file." | Adds UI complexity (a picker modal) for a rare use case. Full file import is the 95% case. | Import the whole file. Users can delete individual unwanted traces after import. |
+| **Streaming / chunked writes** — write traces to IDB incrementally as each bus.bus event arrives (event-level granularity) | "Write the partial trace so it persists even if the loop crashes mid-run." | Increases IDB schema complexity (separate stores for iterations and tool calls vs one store for complete traces). An in-flight trace with only half its iterations is useless for replay or analysis. The existing data model (loop = one top-level trace object) is the right persistence unit. | Persist the trace as a complete object whenever a `loop_end` event arrives. In the meantime keep it in memory only. This is the natural boundary. |
+| **Compression of stored traces** — gzip or similar before putting into IDB | "RAG traces could be large." | IDB quota is not a practical concern. Compression/decompression adds complexity and CPU overhead for reads. The `idb` library does not support it natively. | If payload sizes become a problem (empirical baseline needed per PROJECT.md tech debt), address at that point. Export compression (gzip) could make sense for large exports, but is not needed for storage. |
 
 ---
 
 ## Feature Dependencies
 
 ```
-[Dark bundle selection — server side]
-    └──requires──> [color_scheme cookie readable in controller]
-    └──requires──> [New dark asset bundle defined in __manifest__.py]
-    └──enables──> [Correct Bootstrap variables in dark mode]
+[IndexedDB persistence layer]
+    └──requires──> [idb library or raw IDB API]
+    └──writes-from──> [bus.bus event handler] (write-through on loop_end)
+    └──reads-into──> [reactive store hydration on page load]
 
-[SASS variable replacement in app.scss]
-    └──requires──> [Dark bundle selection] (variables only produce correct output if compiled with dark_mode_variables)
-    └──replaces──> [Hardcoded Catppuccin Mocha values]
-    └──uses──> [$o-gray-100 through $o-gray-900, $o-action, $o-danger, $o-success, $o-warning]
+[Delete individual trace]
+    └──requires──> [IndexedDB persistence layer] (to delete from IDB)
+    └──requires──> [Reactive store with trace IDs] (to remove from Map)
+    └──uses-same-ID-as──> [UUIDs already on bus.bus payloads]
 
-[web.dark_mode_variables in dark bundle]
-    └──requires──> [web_enterprise installed] (web.dark_mode_variables is defined by web_enterprise)
-    └──enables──> [$o-gray-* variables compile to dark values instead of light values]
+[Clear all traces]
+    └──requires──> [IndexedDB persistence layer] (IDB clear())
+    └──requires──> [Reactive store reset]
+    └──should-have──> [Confirmation prompt] (irreversible, unlike single delete)
 
-[color_scheme cookie set correctly]
-    └──provided-by──> [web_enterprise home controller] (already happens when user visits /web)
-    └──no-action-needed-in──> [ai_debug controller for internal users who have visited /web]
+[Export as JSON]
+    └──requires──> [Reactive store] (in-memory data is the source)
+    └──no-dependency-on──> [IndexedDB] (can export from memory alone)
+    └──enables──> [Import workflow] (export defines the import schema)
+
+[Import from JSON]
+    └──requires──> [Export schema definition] (import validates against the same structure)
+    └──writes-to──> [IndexedDB persistence layer] (imported traces should survive next refresh)
+    └──writes-to──> [Reactive store] (imported traces should appear in sidebar immediately)
+    └──merge-not-replace──> [Existing traces] (import adds to, not replaces, current traces)
+
+[Page load hydration]
+    └──requires──> [IndexedDB persistence layer]
+    └──must-complete-before──> [Sidebar renders] (or render empty then fill — stale-while-revalidate)
+    └──uses-existing-format-from──> [bus.bus payload structure] (same objects stored in IDB)
 ```
 
 ### Dependency Notes
 
-- **`web.dark_mode_variables` is defined by `web_enterprise`, not core `web`.** This means the dark bundle depends on `web_enterprise` being installed. Since ai_debug requires `ai_app` which is enterprise-only, `web_enterprise` is always present. This dependency is implicit but safe.
-- **The `color_scheme` cookie is set by the main backend, not the ai_debug route.** A user who opens `/ai-debug` directly without visiting `/web` first may not have the cookie set. In that case `request.cookies.get('color_scheme')` returns `None`, and the controller should default to `'light'`. The client-side `color_scheme_service.js` (included via `web.assets_backend`) then reconciles the cookie at startup on subsequent loads.
-- **SASS variable replacement is compile-time, not runtime.** Two separate bundles are compiled: one using light SASS variables, one using dark SASS variables. The same `app.scss` source produces different CSS depending on which bundle it's compiled into. This is the correct Odoo pattern.
-- **`$o-gray-*` scale is inverted in dark mode.** In light mode `$o-gray-100` is near-white, `$o-gray-900` is near-black. In dark mode (from `primary_variables.dark.scss`) these values are swapped: `$o-gray-100: #1B1D26` (dark), `$o-gray-900: #E4E4E4` (near-white). Code using `$o-gray-100` as a "light background" will correctly produce dark backgrounds in dark mode without any special casing.
+- **Write-through boundary is `loop_end`:** Traces should be written to IDB only when a loop finishes (the `loop_end` bus event arrives), not on every intermediate event. Partial in-flight traces are not useful. The in-memory store accumulates events during the loop; IDB gets the completed trace.
+- **UUIDs are already on all bus.bus payloads (v1.1).** The `traceId` (loop UUID) is the natural IDB record key. No new ID generation is needed.
+- **Import must validate structure before inserting.** Malformed JSON or traces from an incompatible version should fail gracefully with a user-visible error, not corrupt the store.
+- **Export does not depend on IDB.** The reactive in-memory Map is the authoritative source. If IDB is unavailable (private browsing, quota exceeded), export still works.
+- **IDB write failures must not block the UI.** Wrap all IDB writes in try/catch. If a write fails, the trace stays in memory and the developer is not interrupted. Log the error to the console.
 
 ---
 
 ## MVP Definition
 
-### Launch With (v1.2)
+### Launch With (v1.3)
 
-The minimum that makes the app theme-aware. A developer with dark mode enabled sees a dark app. A developer with light mode sees a light app.
+The minimum that delivers the stated milestone goal: traces survive refresh, can be deleted, can be exported, can be imported.
 
-- [ ] **Define `ai_debug.assets_dark` bundle** in `__manifest__.py` — includes `web.dark_mode_variables`, `('before', ...)` for bootstrap overrides, all `web_enterprise` dark SCSS, and `ai_debug/static/src/app/**/*.scss`
-- [ ] **Controller passes `color_scheme` to template** — read `request.httprequest.cookies.get('color_scheme', 'light')` and pass to Qweb render context
-- [ ] **Template conditionally loads dark bundle** — `t-if="color_scheme == 'dark'"` loads `ai_debug.assets_dark`, otherwise loads `ai_debug.assets`
-- [ ] **Replace 97 hardcoded values in `app.scss` with SASS variables** — `$o-gray-*` for surfaces/text/borders, `$o-action` for accent/selection, `$o-danger`/`$o-success`/`$o-warning` for status colors
+- [ ] **IndexedDB store initialization** — `openDB('ai-debug', 1)` with a `traces` object store, key = `traceId`. Runs on app startup.
+- [ ] **Page load hydration** — `getAll()` from IDB, populate reactive Map. Sidebar populates immediately.
+- [ ] **Write-through on loop_end** — when a `loop_end` bus event arrives and the in-memory trace is finalized, `put()` the complete trace object into IDB.
+- [ ] **Delete individual trace** — delete button per trace in sidebar, calls IDB `delete(traceId)`, removes from reactive Map.
+- [ ] **Clear all** — toolbar button, calls IDB `clear()`, resets reactive Map. Preceded by a confirmation step (inline confirm button or `window.confirm`).
+- [ ] **Export as JSON** — button to download all current traces as a `.json` file. Programmatic download via `<a download>` with `URL.createObjectURL(blob)`.
+- [ ] **Import from JSON** — file picker (`<input type="file">`), read and parse JSON, validate structure, merge into reactive Map and IDB.
 
-### Add After Validation (v1.2.x)
+### Add After Validation (v1.3.x)
 
-- [ ] **System preference support verification** — test that `color_scheme_service.js` correctly reconciles OS-level dark mode preference when user has set "System" in Odoo Preferences
+- [ ] **Export selected traces only** — if users accumulate many traces and want to share a subset. Trigger: user feedback that "export all" is too coarse.
+- [ ] **Storage usage indicator** — `navigator.storage.estimate()` to show how much IDB space is used. Trigger: user reports uncertainty about storage impact.
 
 ### Future Consideration (v2+)
 
-- [ ] **Real-time theme switch within tab** — only if user research shows developers switch themes frequently enough to warrant the complexity
+- [ ] **Search/filter within sidebar** — depends on trace volume making navigation painful. Explicitly deferred in PROJECT.md.
+- [ ] **OpenTelemetry export (OTLP)** — listed as v2+ candidate `EXPT-01` in PROJECT.md.
+- [ ] **Selective import picker** — low-priority edge case.
 
 ---
 
@@ -152,47 +126,97 @@ The minimum that makes the app theme-aware. A developer with dark mode enabled s
 
 | Feature | User Value | Implementation Cost | Priority |
 |---------|------------|---------------------|----------|
-| Bundle selection from `color_scheme` cookie | HIGH | LOW | P1 — the enabling mechanism |
-| Dark bundle definition in `__manifest__.py` | HIGH | LOW | P1 — required for dark CSS compilation |
-| SASS variable replacement in `app.scss` | HIGH | MEDIUM | P1 — the main implementation work |
-| `web.dark_mode_variables` in dark bundle | HIGH | LOW | P1 — required for correct dark SASS output |
-| System preference reconciliation | MEDIUM | LOW | P2 — works via existing `color_scheme_service.js` |
-| In-app theme toggle | LOW | MEDIUM | ANTI-FEATURE — do not build |
-| Runtime CSS variable switching | LOW | HIGH | ANTI-FEATURE — do not build |
+| Page load hydration (traces survive refresh) | HIGH | LOW | P1 — core milestone goal |
+| Write-through on loop_end | HIGH | LOW | P1 — required for hydration to have anything to read |
+| IDB initialization | HIGH | LOW | P1 — prerequisite for everything else |
+| Delete individual trace | HIGH | LOW | P1 — without delete, list is permanent and grows unbounded |
+| Clear all traces | HIGH | LOW | P1 — essential clean-slate mechanism |
+| Export as JSON | HIGH | LOW | P1 — enables sharing and cross-machine use |
+| Import from JSON | HIGH | LOW | P1 — completes the sharing loop |
+| Export selected traces only | MEDIUM | LOW | P2 — add when volume makes "all" too coarse |
+| Storage usage indicator | LOW | LOW | P2 — nice to have, not blocking |
+| Streaming/chunked IDB writes | LOW | HIGH | ANTI-FEATURE — wrong persistence unit |
+| Server-side sync | LOW | HIGH | ANTI-FEATURE — against module design decisions |
+| Auto-expiry/TTL | LOW | MEDIUM | ANTI-FEATURE — unexpected data loss |
 
 ---
 
-## Reference App Analysis
+## Implementation Guidance from Research
 
-How Odoo standalone apps handle theming (source-verified):
+### Library Choice: `idb` by Jake Archibald
 
-| App | Cookie | Bundle Strategy | User Toggle | Notes |
-|-----|--------|-----------------|-------------|-------|
-| Odoo Backend (`/web`) | `color_scheme` | Conditionally loads `web.assets_web_dark` (CSS-only) | Via Preferences → Theme field | `color_scheme_service.js` reconciles cookie with `prefers-color-scheme` at startup |
-| POS (`/pos/ui`) | `pos_color_scheme` | Conditionally loads `point_of_sale.assets_prod_dark` | Via navbar burger menu (pos_enterprise) | Separate cookie because POS users may not be internal Odoo users; toggle added by pos_enterprise |
-| Self-Order (`/pos-self/`) | None | No dark mode support | N/A | Public-facing kiosk; no theming |
-| **ai_debug** (v1.2 target) | `color_scheme` (existing, set by backend) | Conditionally loads `ai_debug.assets_dark` | Via Odoo Preferences (no in-app toggle) | Internal developer tool; reuses the same cookie as the main backend |
+Use the `idb` library (~1.19kB brotli'd) rather than raw IndexedDB callbacks. It is the de-facto standard wrapper: promise-based, async/await compatible, and has zero runtime dependencies. It mirrors the IDB API closely so the cognitive overhead is minimal.
 
-**Key insight:** ai_debug should use the same `color_scheme` cookie as the main backend — not a separate cookie like POS. This is correct because ai_debug users are always internal users who have already visited `/web` (where the cookie is set). Using the same cookie means the theme preference is automatically in sync with the user's Odoo preference with zero additional infrastructure.
+Key methods used:
+- `openDB(name, version, { upgrade })` — initialize with schema
+- `db.getAll(storeName)` — hydration on load
+- `db.put(storeName, value)` — write-through on loop_end
+- `db.delete(storeName, key)` — individual trace delete
+- `db.clear(storeName)` — clear all
+- `db.get(storeName, key)` — targeted reads if needed
+
+### Schema Design
+
+```
+Database: 'ai-debug'
+Version: 1
+Object store: 'traces'
+  keyPath: 'traceId'  (the UUID already on all bus.bus payloads)
+  indexes: none required for MVP (getAll() + client-side Map is sufficient)
+```
+
+Avoid large nested objects per web.dev best practices. Each trace record is one complete loop object. This is acceptable because: (a) traces are read as a batch on hydration anyway, (b) the structured clone of one trace object is bounded and fast, (c) individual put() calls only update the one changed record, not a global state blob.
+
+### Write-Through Pattern
+
+```
+bus.bus event (loop_end) arrives
+  → update reactive Map (synchronous, triggers OWL re-render)
+  → await idb.put('traces', completeTraceObject)  // async, non-blocking to UI
+  → if put() fails: log error, keep trace in memory only
+```
+
+This is the standard write-through pattern for developer tools: UI is always responsive, persistence is best-effort.
+
+### Export File Format
+
+```json
+{
+  "version": "1.3",
+  "exported": "2026-02-22T10:30:00Z",
+  "traces": [ ...array of trace objects identical to IDB records... ]
+}
+```
+
+The `version` field enables import validation — if an import file has an incompatible version, surface a clear error rather than silently corrupting the store. The trace objects in the array are identical to what is stored in IDB (same structure as bus.bus payloads), so no transformation is needed on import.
+
+### Import Merge Semantics
+
+Imported traces are added to the existing store, not replacing it. If an imported trace has the same `traceId` as an existing trace, the imported version wins (IDB `put()` semantics, which upsert by key). This handles the common case of re-importing the same export file idempotently.
+
+### Confirmation for "Clear All"
+
+A confirmation step is standard UX when an irreversible bulk action is taken. Options in order of preference:
+1. **Inline confirmation** — clicking "Clear all" changes button label to "Confirm?" for 3 seconds, a second click executes. No modal required.
+2. **`window.confirm()`** — simplest, native, acceptable for a developer tool.
+
+Single trace delete does NOT need confirmation — the action is low-stakes (the agent can be re-run), and adding a confirmation to every row item creates friction for the common case.
 
 ---
 
 ## Sources
 
-- `web_enterprise/controllers/home.py` — `color_scheme` cookie set on `/web` response (HIGH confidence — direct source)
-- `web_enterprise/models/ir_http.py` — `color_scheme()` method resolving user setting vs cookie (HIGH confidence — direct source)
-- `web_enterprise/models/res_users_settings.py` — `color_scheme` field definition: `['system', 'light', 'dark']` (HIGH confidence — direct source)
-- `web_enterprise/static/src/webclient/color_scheme/color_scheme_service.js` — client-side reconciliation of cookie vs OS preference (HIGH confidence — direct source)
-- `web_enterprise/__manifest__.py` — `web.dark_mode_variables` and `web.assets_web_dark` bundle definitions (HIGH confidence — direct source)
-- `web_enterprise/static/src/scss/primary_variables.dark.scss` — dark mode SASS variable values (`$o-gray-*` inverted scale) (HIGH confidence — direct source)
-- `web/__manifest__.py` — `web.assets_backend` removes `*.dark.scss`, `web.assets_web_dark` includes all `*.dark.scss` (HIGH confidence — direct source)
-- `web/views/webclient_templates.xml` — `color_scheme == 'dark'` conditional bundle loading pattern (HIGH confidence — direct source)
-- `point_of_sale/views/pos_assets_index.xml` — `pos_color_scheme` cookie pattern for standalone app (HIGH confidence — direct source)
-- `pos_enterprise/__manifest__.py` — `point_of_sale.assets_prod_dark` bundle definition with dark variables (HIGH confidence — direct source)
-- `pos_enterprise/static/src/override/point_of_sale/navbar/navbar.js` — in-app toggle writing `pos_color_scheme` cookie (HIGH confidence — direct source)
-- `ai_debug/__manifest__.py` and `ai_debug/static/src/app/app.scss` — current state of the module (HIGH confidence — direct source)
+- [MDN: Using IndexedDB](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB) — schema design, transactions, versioning (HIGH confidence)
+- [web.dev: IndexedDB Best Practices for App State](https://web.dev/articles/indexeddb-best-practices-app-state) — avoid large objects, granular writes, stale-while-revalidate pattern (HIGH confidence)
+- [web.dev: Work with IndexedDB](https://web.dev/articles/indexeddb) — `idb` library usage patterns (HIGH confidence)
+- [MDN: Storage Quotas and Eviction Criteria](https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria) — Chrome: 60% disk, Firefox: 10% disk or 10GB (HIGH confidence)
+- [GitHub: jakearchibald/idb](https://github.com/jakearchibald/idb) — API reference, size, method list (HIGH confidence)
+- [Microsoft Edge DevTools: Share Performance Traces](https://learn.microsoft.com/en-us/microsoft-edge/devtools/performance/share-performance-traces) — export/import UX patterns for developer tools (HIGH confidence — official docs, updated Nov 2025)
+- [LogRocket: Offline-first frontend apps 2025](https://blog.logrocket.com/offline-first-frontend-apps-2025-indexeddb-sqlite/) — write-through and sync queue patterns, pitfalls (MEDIUM confidence — editorial)
+- [Chrome DevTools: New in DevTools 101](https://developer.chrome.com/blog/new-in-devtools-101) — Recorder panel export/import JSON as established DevTools pattern (HIGH confidence)
+- PROJECT.md — existing module design decisions, explicit out-of-scope items, tech debt notes (HIGH confidence — source of truth for this codebase)
 
 ---
 
-*Feature research for: Native Odoo theming in standalone OWL app (ai_debug v1.2)*
+*Feature research for: Local persistence (IndexedDB), trace export/import, trace management in ai_debug v1.3*
 *Researched: 2026-02-22*
