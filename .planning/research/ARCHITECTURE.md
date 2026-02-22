@@ -1,8 +1,361 @@
 # Architecture Research
 
-**Domain:** Odoo standalone OWL app — AI agentic loop live tracer (v1.1)
-**Researched:** 2026-02-20
+**Domain:** Odoo standalone OWL app — AI agentic loop live tracer (v1.1 → v1.2 theming)
+**Researched:** 2026-02-22 (theming section added; v1.1 base retained)
 **Confidence:** HIGH (grounded in actual source at verified paths)
+
+---
+
+# v1.2 Theming Architecture
+
+> This section answers the research questions for v1.2 milestone: How does native theming integrate with a standalone OWL app? How is `color_scheme` detected? How does the template serve the correct CSS bundle? How should SCSS be restructured?
+
+## How Odoo's Theming System Works
+
+Odoo's theme system has three layers. Understanding all three is required to integrate correctly.
+
+### Layer 1: User preference storage (enterprise only)
+
+`web_enterprise/models/res_users_settings.py` adds a `color_scheme` field (`Selection: light/dark/system`). `res.users` exposes this as `color_scheme` (via `related`). The preference persists across sessions.
+
+### Layer 2: Server-side color_scheme resolution
+
+`web_enterprise/models/ir_http.py` overrides `color_scheme()`:
+
+```python
+def color_scheme(self):
+    cookie_scheme = request.httprequest.cookies.get('color_scheme')
+    scheme = cookie_scheme if cookie_scheme else super().color_scheme()
+    if user := request.env.user:
+        if user._is_public():
+            return super().color_scheme()           # light for public
+        if user_scheme := user.res_users_settings_id.color_scheme:
+            if user_scheme in ('light', 'dark'):    # not 'system'
+                return user_scheme                  # user explicit choice wins
+    return scheme                                   # cookie fallback
+```
+
+The base `web/models/ir_http.py` returns `"light"` as the hardcoded default. The enterprise override reads the cookie first, then the user's explicit setting if it's not `'system'`. **'system' is not passed through** — the server cannot know the OS preference, so `color_scheme()` never returns `'system'`, only `'light'` or `'dark'`.
+
+### Layer 3: Cookie synchronization
+
+`web_enterprise/controllers/home.py` sets the cookie on every webclient visit:
+
+```python
+@route()
+def web_client(self, s_action=None, **kw):
+    response = super().web_client(s_action, **kw)
+    if response.status_code == 200:
+        response.set_cookie('color_scheme', request.env['ir.http'].color_scheme())
+    return response
+```
+
+This means: every time the user visits `/odoo`, Odoo sets (or refreshes) the `color_scheme` cookie to `'light'` or `'dark'`. **The ai_debug controller can read this cookie directly** to determine which CSS bundle to serve.
+
+## Data Flow: Theme Detection to CSS Bundle
+
+```
+User sets theme in Odoo Settings
+    ↓
+res.users_settings.color_scheme = 'dark'
+    ↓
+User visits /odoo → web_enterprise.home.web_client()
+    → request.env['ir.http'].color_scheme()
+        → reads user.res_users_settings_id.color_scheme → 'dark'
+    → response.set_cookie('color_scheme', 'dark')
+    ↓
+Cookie 'color_scheme' = 'dark' persists in browser
+    ↓
+User navigates to /ai-debug
+    ↓
+AiDebugController.ai_debug()
+    → request.httprequest.cookies.get('color_scheme')  # 'dark'
+    → pass to QWeb template context: color_scheme='dark'
+    ↓
+ai_debug.index QWeb template
+    → <t t-if="color_scheme == 'dark'">
+    →     <t t-call-assets="ai_debug.assets_dark" .../>
+    → <t t-else="">
+    →     <t t-call-assets="ai_debug.assets" .../>
+    ↓
+Browser loads either ai_debug.assets (light) or ai_debug.assets_dark (dark)
+    ↓
+Bootstrap CSS variables resolve to light or dark values
+    ↓
+App renders with Odoo-native color palette
+```
+
+**Confidence: HIGH** — verified directly from `web_enterprise/models/ir_http.py`, `web_enterprise/controllers/home.py`, and `web/views/webclient_templates.xml` (`web.webclient_bootstrap` template shows the exact pattern).
+
+## The Exact Webclient Bootstrap Pattern (Reference)
+
+`web/views/webclient_templates.xml` (`web.webclient_bootstrap`) is the authoritative reference:
+
+```xml
+<t t-call-assets="web.assets_web_print" media="print" t-js="false"/>
+<t t-call-assets="web.assets_web" t-css="false"/>   <!-- always: JS only -->
+
+<t t-if="color_scheme == 'dark'">
+    <t t-call-assets="web.assets_web_dark" media="screen" t-js="false"/>
+</t>
+<t t-else="">
+    <t t-call-assets="web.assets_web" media="screen" t-js="false"/>
+</t>
+```
+
+Key observations:
+1. JS is loaded once from `web.assets_web` (CSS-free pass, `t-css="false"`).
+2. CSS is loaded separately from either the light bundle or the dark bundle.
+3. `web.assets_web_dark` includes everything in `web.assets_web` PLUS dark SCSS files.
+4. The `media="screen"` attribute is added to the CSS link tag to allow a print bundle to coexist.
+
+The ai_debug template should follow this same split: one JS-only bundle, one CSS-only conditional.
+
+## How `web.assets_web_dark` Works
+
+`web/__manifest__.py`:
+```python
+"web.assets_web_dark": [
+    ('include', 'web.assets_web'),        # everything in light mode
+    'web/static/src/**/*.dark.scss',      # plus all *.dark.scss files
+],
+```
+
+`web_enterprise/__manifest__.py` extends it:
+```python
+"web.assets_web_dark": [
+    ('include', 'web.dark_mode_variables'),     # dark SCSS variable overrides
+    # web._assets_backend_helpers overrides:
+    ('before', 'web_enterprise/static/src/scss/bootstrap_overridden.scss',
+               'web_enterprise/static/src/scss/bootstrap_overridden.dark.scss'),
+    ('after', 'web/static/lib/bootstrap/scss/_functions.scss',
+              'web_enterprise/static/src/scss/bs_functions_overridden.dark.scss'),
+    # assets_backend dark files:
+    'web_enterprise/static/src/**/*.dark.scss',
+],
+```
+
+The `web.dark_mode_variables` sub-bundle prepends dark SCSS variable overrides before the light-mode variable files. This means Sass compiles with dark values, so all compiled CSS already uses the dark palette. The `.dark.scss` files then add component-specific overrides that can't be handled by variables alone.
+
+**Critical insight:** The dark mode is NOT CSS `prefers-color-scheme` media query. It is a **server-selected separate CSS bundle**. The server decides which bundle to serve based on the user's stored preference. There is no runtime CSS switching.
+
+## How Bootstrap CSS Variables Are Emitted
+
+Bootstrap 5 emits CSS custom properties on `:root` from `_root.scss`:
+
+```css
+:root, [data-bs-theme="light"] {
+  --bs-body-color: #{$body-color};
+  --bs-body-bg: #{$body-bg};
+  --bs-border-color: #{$border-color};
+  --bs-secondary-bg: #{$body-secondary-bg};
+  --bs-tertiary-bg: #{$body-tertiary-bg};
+  /* ...many more... */
+}
+```
+
+The SCSS variables (`$body-color`, `$body-bg`, etc.) are resolved at Sass compile time. In the dark bundle, Odoo's dark variable overrides are prepended, so Bootstrap's `$body-bg` compiles to a dark value like `#1B1D26`. The resulting `--bs-body-bg` CSS custom property in the dark bundle's output is already the dark color — it was baked in at build time, not switched at runtime.
+
+**What this means for ai_debug:** By using `var(--bs-body-bg)` instead of hardcoded `#1e1e2e`, the SCSS will pick up whichever value the loaded bundle compiled in.
+
+## Available Bootstrap CSS Custom Properties
+
+These are available from the `web.assets_backend` (and `ai_debug.assets`) bundle and change value between light and dark bundles:
+
+| CSS Custom Property | Light value (approx) | Dark value (approx) | Use for |
+|---------------------|----------------------|----------------------|---------|
+| `--bs-body-bg` | `#ffffff` | `#1B1D26` (gray-100) | Page/panel backgrounds |
+| `--bs-body-color` | `#212529` | `#E4E4E4` (gray-900) | Primary text |
+| `--bs-secondary-bg` | `#f8f9fa` | `#262A36` (gray-200) | Sidebar, header backgrounds |
+| `--bs-tertiary-bg` | `#e9ecef` | `#3C3E4B` (gray-300) | Hover states |
+| `--bs-border-color` | `#dee2e6` | varies | Dividers, borders |
+| `--bs-secondary-color` | `#6c757d` | `#7E8392` (gray-600) | Muted text |
+| `--bs-emphasis-color` | `#000` | `#E4E4E4` | Strong emphasis text |
+| `--bs-primary` | `#017e84` | adjusted | Accent/action color |
+| `--bs-success` | `#198754` | `#1dc959` | Success indicators |
+| `--bs-danger` | `#dc3545` | `#ff5757` | Error indicators |
+| `--bs-warning` | `#ffc107` | `#FBB56A` | Warning indicators |
+
+**Confidence: HIGH** — verified from `_root.scss`, `primary_variables.dark.scss`, and `bootstrap_overridden.dark.scss`.
+
+Note: The grays (`$o-gray-100` through `$o-gray-900`) are inverted in dark mode: gray-100 is the darkest (background), gray-900 is the lightest (text). Bootstrap CSS custom properties like `--bs-secondary-bg` map to these.
+
+## Odoo-Specific CSS Custom Properties
+
+Odoo defines additional `--o-*` CSS custom properties. These are sparse and not comprehensively emitted. For theming, prefer Bootstrap's `--bs-*` properties which are well-defined and consistently emitted in both bundles.
+
+## How the POS Handles It (Comparison)
+
+POS (`point_of_sale/views/pos_assets_index.xml`) uses a POS-specific cookie:
+
+```xml
+<t t-if="request.cookies.get('pos_color_scheme') == 'dark'">
+    <t t-call-assets="point_of_sale.assets_prod_dark"/>
+</t>
+<t t-else="">
+    <t t-call-assets="point_of_sale.assets_prod"/>
+</t>
+```
+
+POS reads a `pos_color_scheme` cookie (separate from `color_scheme`). ai_debug should read the main `color_scheme` cookie directly since it serves internal Odoo users who have already set their preference via the standard Odoo settings.
+
+## Architecture for v1.2
+
+### Modified Files
+
+**`controllers/main.py`** (modified — add `color_scheme` to template context):
+
+```python
+from odoo import http
+from odoo.http import request
+from odoo.addons.web.controllers.utils import is_user_internal
+
+
+class AiDebugController(http.Controller):
+
+    @http.route('/ai-debug', type='http', auth='user', readonly=True)
+    def ai_debug(self, **kw):
+        if not is_user_internal(request.session.uid):
+            return request.redirect('/web/login', 303)
+        session_info = request.env['ir.http'].session_info()
+        color_scheme = request.httprequest.cookies.get('color_scheme', 'light')
+        return request.render('ai_debug.index', {
+            'session_info': session_info,
+            'color_scheme': color_scheme,
+        })
+```
+
+**`views/ai_debug_index.xml`** (modified — conditional CSS bundle, JS-only base):
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="index" name="AI Debug">&lt;!DOCTYPE html&gt;
+        <html>
+            <head>
+                <title>AI Debugger</title>
+                <meta charset="utf-8"/>
+                <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"/>
+                <script type="text/javascript">
+                    var odoo = {
+                        csrf_token: "<t t-out="request.csrf_token(None)"/>",
+                        debug: "<t t-out="debug"/>",
+                        __session_info__: <t t-out="json.dumps(session_info)"/>,
+                    };
+                </script>
+                <!-- JS only (no CSS) — same for both themes -->
+                <t t-call-assets="ai_debug.assets" t-css="false"/>
+                <!-- CSS only — conditional on color_scheme cookie -->
+                <t t-if="color_scheme == 'dark'">
+                    <t t-call-assets="ai_debug.assets_dark" t-js="false"/>
+                </t>
+                <t t-else="">
+                    <t t-call-assets="ai_debug.assets" t-js="false"/>
+                </t>
+            </head>
+            <body/>
+        </html>
+    </template>
+</odoo>
+```
+
+**`__manifest__.py`** (modified — add `ai_debug.assets_dark` bundle):
+
+```python
+'assets': {
+    'ai_debug.assets': [
+        ('include', 'web.assets_backend'),
+        'ai_debug/static/src/app/**/*.xml',
+        'ai_debug/static/src/app/**/*.js',
+        # SCSS that works in light mode (no hardcoded dark colors)
+        'ai_debug/static/src/app/**/*.scss',
+        # Exclude dark-mode-only files from the base bundle
+        ('remove', 'ai_debug/static/src/app/**/*.dark.scss'),
+    ],
+    'ai_debug.assets_dark': [
+        ('include', 'ai_debug.assets'),
+        # Dark mode variable overrides (reuse enterprise's dark variables)
+        ('include', 'web.dark_mode_variables'),
+        # Component-specific dark overrides
+        'ai_debug/static/src/app/**/*.dark.scss',
+    ],
+    'web.assets_backend': [
+        'ai_debug/static/src/debug_menu_button.js',
+    ],
+},
+```
+
+**`static/src/app/app.scss`** (modified — replace hardcoded colors with CSS vars):
+
+The existing `app.scss` has ~650 lines of hardcoded Catppuccin Mocha colors. These are replaced with Bootstrap CSS custom properties. The file stays as `app.scss` (light-mode baseline). A new `app.dark.scss` handles any colors that can't be expressed via `--bs-*` vars alone.
+
+**`static/src/app/app.dark.scss`** (new — dark-only overrides for remaining values):
+
+This file is only included in `ai_debug.assets_dark`. It handles the few cases where the dark theme needs values that differ from what `--bs-*` provides (e.g., custom Catppuccin accent colors for JSON syntax highlighting, status dots, badge colors).
+
+### SCSS Restructuring Strategy
+
+The restructuring maps each hardcoded Catppuccin Mocha color to the semantically closest Bootstrap CSS custom property:
+
+| Current hardcoded value | Semantic meaning | Replacement |
+|-------------------------|-----------------|-------------|
+| `#1e1e2e` (base) | Page background | `var(--bs-body-bg)` |
+| `#181825` (mantle) | Header/darker surface | `var(--bs-secondary-bg)` |
+| `#11111b` (crust) | Detail panel darkest | `var(--bs-body-bg)` or `color-mix(in srgb, var(--bs-body-bg) 80%, black)` |
+| `#313244` (surface1) | Borders, dividers | `var(--bs-border-color)` |
+| `#45475a` (surface2) | Subtle borders | `color-mix(in srgb, var(--bs-border-color) 70%, var(--bs-body-bg))` |
+| `#585b70` (overlay0) | Disabled/muted text | `var(--bs-secondary-color)` |
+| `#6c7086` (overlay1) | Section labels | `var(--bs-secondary-color)` |
+| `#a6adc8` (subtext1) | Secondary text | `var(--bs-secondary-color)` |
+| `#cdd6f4` (text) | Primary text | `var(--bs-body-color)` |
+| `#89b4fa` (blue) | Selected/accent | `var(--bs-primary)` |
+| `#a6e3a1` (green) | Success | `var(--bs-success)` |
+| `#f38ba8` (red) | Error/danger | `var(--bs-danger)` |
+| `#f9e2af` (yellow) | Warning | `var(--bs-warning)` |
+| `#fab387` (peach) | Numbers (JSON) | `var(--bs-warning)` |
+| `#cba6f7` (mauve) | Booleans (JSON) | `var(--bs-primary)` or keep in `app.dark.scss` |
+| `#2a2a3e` (hover) | Tree row hover | `var(--bs-tertiary-bg)` |
+| `#2d3748` (selected bg) | Tree row selected | `color-mix(in srgb, var(--bs-primary) 15%, var(--bs-body-bg))` |
+| `rgba(137,180,250,.05)` (ancestor) | Ancestor tint | `color-mix(in srgb, var(--bs-primary) 5%, transparent)` |
+
+Colors that cannot be expressed with a single CSS variable (syntax highlighting colors like JSON key blue, JSON string green) belong in `app.dark.scss` as dark-specific overrides.
+
+**Light mode baseline:** When `ai_debug.assets` (not dark) is loaded, the Bootstrap CSS variables resolve to light values. `app.scss` using `var(--bs-body-bg)` will naturally get a white/light background. The app will look like a standard Odoo light-mode page, which is the correct behavior.
+
+### New vs Modified Files Summary
+
+| File | Status | What changes |
+|------|--------|--------------|
+| `controllers/main.py` | **Modified** | Add `color_scheme` cookie read, pass to template context |
+| `views/ai_debug_index.xml` | **Modified** | Split `t-call-assets` into JS-only + CSS conditional |
+| `__manifest__.py` | **Modified** | Add `ai_debug.assets_dark` bundle definition; update `ai_debug.assets` to exclude `*.dark.scss` |
+| `static/src/app/app.scss` | **Modified** | Replace all hardcoded hex colors with `var(--bs-*)` properties |
+| `static/src/app/app.dark.scss` | **New** | Dark-only overrides for values not expressible via BS vars (JSON syntax colors, status dot colors) |
+
+No JS files change. No Python models change. No bus protocol changes.
+
+### Build Order for v1.2
+
+Dependencies determine this order:
+
+1. **`controllers/main.py`** — read the `color_scheme` cookie, add to render context. Verifiable immediately: hit `/ai-debug`, check QWeb rendering context in debug mode.
+
+2. **`views/ai_debug_index.xml`** — split `t-call-assets` into JS-only + conditional CSS. Verifiable: with dark cookie set, check browser DevTools network tab for which CSS file loads.
+
+3. **`__manifest__.py`** — add `ai_debug.assets_dark` bundle. Must be done before step 2 is useful, otherwise `ai_debug.assets_dark` is undefined and the template crashes. **Do steps 2 and 3 together.**
+
+4. **`static/src/app/app.scss`** — replace hardcoded colors with CSS custom properties. Do this color category by category: backgrounds first (body, header, sidebar), then borders, then text, then accent/status colors. Verify in both light and dark mode after each group.
+
+5. **`static/src/app/app.dark.scss`** — add overrides for any remaining values that the light-mode `var(--bs-*)` substitutions don't handle correctly in dark mode (e.g., JSON syntax highlighting colors, status dot colors that need Catppuccin-specific accents).
+
+**Step 3 must precede step 2** (bundle must exist before template references it). Steps 4 and 5 are independent of steps 1-3 and can be done iteratively after the infrastructure is in place.
+
+---
+
+# v1.1 Base Architecture (Unchanged)
+
+> The following is the v1.1 architecture document, retained for reference.
 
 ## What Changed in v1.1
 
@@ -87,66 +440,37 @@ This document focuses on the v1.1 target architecture. v1.0 patterns that carry 
 
 ---
 
-## Recommended Project Structure (v1.1)
+## Recommended Project Structure (v1.1 actual + v1.2 additions)
 
 ```
 ai_debug/
-├── __manifest__.py                   # updated: no models data, new assets bundle, new controller
+├── __manifest__.py                   # v1.2: add assets_dark bundle
 ├── __init__.py
 ├── controllers/
 │   ├── __init__.py
-│   └── main.py                       # NEW: AiDebugController — serves /ai-debug
+│   └── main.py                       # v1.2: add color_scheme cookie read
 ├── models/
 │   ├── __init__.py
 │   ├── ai_session.py                 # unchanged: generator instrumentation
 │   └── ir_websocket.py               # unchanged: channel access control
 ├── views/
-│   └── templates.xml                 # NEW: ai_debug.index QWeb template
-├── static/src/
-│   ├── app/
-│   │   ├── main.js                   # NEW: app boot — mountComponent(AiDebugApp)
-│   │   ├── ai_debug_app.js           # NEW: root component — state, bus, selection
-│   │   ├── ai_debug_app.xml          # NEW: root template
-│   │   ├── ai_debug_app.scss         # NEW: full-page layout styles
-│   │   ├── sidebar/
-│   │   │   ├── trace_list.js         # NEW: sidebar tree component
-│   │   │   ├── trace_list.xml
-│   │   │   ├── loop_item.js          # NEW: one loop row
-│   │   │   ├── loop_item.xml
-│   │   │   ├── iteration_item.js     # NEW: one iteration row (nested)
-│   │   │   ├── iteration_item.xml
-│   │   │   ├── tool_call_item.js     # NEW: one tool call row (nested)
-│   │   │   └── tool_call_item.xml
-│   │   └── detail/
-│   │       ├── detail_panel.js       # NEW: right pane switcher
-│   │       ├── detail_panel.xml
-│   │       ├── loop_detail.js        # NEW: system prompt + tools def
-│   │       ├── loop_detail.xml
-│   │       ├── iteration_detail.js   # NEW: messages sent + raw response
-│   │       ├── iteration_detail.xml
-│   │       ├── tool_call_detail.js   # NEW: args + result + state diff
-│   │       └── tool_call_detail.xml
-│   └── components/
-│       ├── json_tree/               # carried over from v1.0
-│       │   ├── json_tree.js
-│       │   └── json_tree.xml
-│       └── state_diff/              # carried over from v1.0
-│           ├── state_diff.js
-│           └── state_diff.xml
-└── security/
-    └── ir.model.access.csv          # REMOVED in v1.1 (no DB models)
+│   └── ai_debug_index.xml            # v1.2: conditional CSS bundle
+└── static/src/
+    ├── debug_menu_button.js
+    └── app/
+        ├── main.js
+        ├── app.js
+        ├── app.xml
+        ├── app.scss                   # v1.2: replace hex colors with var(--bs-*)
+        ├── app.dark.scss              # v1.2: NEW — dark-only overrides
+        └── detail/
+            ├── iter_detail.js/xml
+            ├── json_tree.js/xml
+            ├── loop_detail.js/xml
+            ├── state_diff.js/xml
+            ├── tc_detail.js/xml
+            └── text_popup.js/xml
 ```
-
-**Files to delete from v1.0:**
-- `models/ai_debug_trace.py`
-- `models/ai_debug_iteration.py`
-- `models/ai_debug_tool_call.py`
-- `security/ir.model.access.csv`
-- `views/ai_debug_trace_views.xml`
-- `views/ai_debug_iteration_views.xml`
-- `views/ai_debug_tool_call_views.xml`
-- `views/debug_panel_action.xml`
-- `views/menus.xml`
 
 ---
 
@@ -154,527 +478,174 @@ ai_debug/
 
 ### Pattern 1: Standalone OWL App — Controller + Template + Asset Bundle
 
-This is the POS Self Order pattern, which is simpler than full POS and has no session management complexity. The hr_attendance kiosk is even simpler (uses `web.layout`), but ai_debug should match `pos_self_order.index` since it needs `__session_info__` for the bus service.
+This is the POS Self Order pattern, which is simpler than full POS and has no session management complexity.
 
 **What:** A dedicated HTTP route renders a full HTML page (no Odoo chrome/navbar). The template inlines the CSRF token and `__session_info__` as a JS global, then loads a custom asset bundle. The bundle's `main.js` boots an OWL app via `mountComponent`.
 
 **When to use:** Any tool that should live in its own browser tab, free of the Odoo backend navbar.
 
-**Controller (HIGH confidence — from source):**
-
-```python
-# controllers/main.py
-from odoo import http
-from odoo.http import request
-
-
-class AiDebugController(http.Controller):
-
-    @http.route('/ai-debug', type='http', auth='user')
-    def ai_debug_index(self, **kwargs):
-        if not request.env.user._is_internal():
-            return request.not_found()
-        session_info = request.env['ir.http'].session_info()
-        return request.render('ai_debug.index', {
-            'session_info': session_info,
-        })
-```
-
-**Template — `views/templates.xml` (HIGH confidence — from source):**
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<odoo>
-    <template id="ai_debug.index" name="AI Debug">
-        &lt;!DOCTYPE html&gt;
-        <html>
-            <head>
-                <title>AI Debug</title>
-                <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
-                <meta http-equiv="content-type" content="text/html, charset=utf-8"/>
-                <meta name="viewport" content="width=device-width, initial-scale=1"/>
-                <script type="text/javascript">
-                    var odoo = <t t-out="json.dumps({
-                        'csrf_token': request.csrf_token(None),
-                        '__session_info__': session_info,
-                        'debug': request.session.debug,
-                    })"/>;
-                </script>
-                <t t-call-assets="ai_debug.assets"/>
-            </head>
-            <body>
-            </body>
-        </html>
-    </template>
-</odoo>
-```
-
-**Asset bundle in `__manifest__.py` (HIGH confidence — from source):**
-
-```python
-'assets': {
-    'ai_debug.assets': [
-        # OWL + web infrastructure (mirrors pos_self_order.assets pattern)
-        ('include', 'web._assets_helpers'),
-        ('include', 'web._assets_backend_helpers'),
-        'web/static/src/scss/pre_variables.scss',
-        'web/static/lib/bootstrap/scss/_variables.scss',
-        'web/static/lib/bootstrap/scss/_variables-dark.scss',
-        'web/static/lib/bootstrap/scss/_maps.scss',
-        ('include', 'web._assets_bootstrap_backend'),
-        ('include', 'web._assets_core'),
-        # Bus service (needed for WebSocket)
-        'bus/static/src/services/bus_service.js',
-        'bus/static/src/services/worker_service.js',
-        'bus/static/src/bus_parameters_service.js',
-        'bus/static/src/multi_tab_service.js',
-        'bus/static/src/multi_tab_shared_worker_service.js',
-        'bus/static/src/multi_tab_fallback_service.js',
-        'bus/static/src/workers/*',
-        # App files
-        'ai_debug/static/src/**/*.js',
-        'ai_debug/static/src/**/*.xml',
-        'ai_debug/static/src/**/*.scss',
-    ],
-},
-```
-
-**main.js (HIGH confidence — from pos_self_order and POS source):**
-
-```javascript
-// static/src/app/main.js
-import { mountComponent } from "@web/env";
-import { whenReady } from "@odoo/owl";
-import { AiDebugApp } from "./ai_debug_app";
-
-whenReady(async () => {
-    await mountComponent(AiDebugApp, document.body, {
-        name: "AI Debug",
-    });
-});
-```
-
-`mountComponent` from `@web/env` calls `makeEnv()` + `startServices(env)` internally, which initializes the Odoo service registry (including `bus_service`, `orm`, `rpc`, `notification`). All services registered in `web.assets_backend` service registry are available. This is the key benefit over raw `App` mounting.
+`mountComponent` from `@web/env` calls `makeEnv()` + `startServices(env)` internally, which initializes the Odoo service registry (including `bus_service`, `orm`, `rpc`, `notification`). All services registered in `web.assets_backend` service registry are available.
 
 ### Pattern 2: Full Bus Payloads — No Lazy ORM Reads
 
-**What:** The v1.0 bus payloads were summaries (IDs only). The OWL panel then made ORM read calls on expand. In v1.1 there are no DB models, so all data must travel in the bus payload at event time.
+**What:** The bus payloads carry complete data. There are no DB models, so all data must travel in the bus payload at event time.
 
 **When to use:** Always, when there is no DB to fall back to.
 
-**Trade-offs:** Payloads can be large. `messages_sent` for a multi-turn conversation can be tens of KB. The `bus_bus` table stores each payload as JSONB — this is fine. The pg_notify NOTIFY payload has a limit (default 8000 bytes) but this is for the notification *channel list*, not the message payload. The message itself is stored in `bus_bus` rows and fetched by the polling/WS client — no size constraint from pg_notify.
-
-**What each event type must carry (inferred from v1.0 DB schema):**
-
-```python
-# ai_debug/new_trace  — fires when _run_agentic_loop starts
-{
-    'trace_id': str,           # UUID, client-generated, never a DB id
-    'llm_model': str,
-    'state': 'running',
-    'instructions': str,       # system prompt (was lazy in v1.0)
-    'rag_context': str,        # RAG text (was lazy in v1.0)
-    'tools_definition': list,  # full tool schemas (was lazy in v1.0)
-    'started_at': float,       # time.time(), for display
-}
-
-# ai_debug/iteration  — fires after each LLM yield
-{
-    'trace_id': str,
-    'iteration_id': str,       # UUID, client-generated
-    'index': int,
-    'messages_sent': list,     # full message list (was lazy in v1.0)
-    'raw_response': dict,      # full provider response (was lazy in v1.0)
-    'final_message': dict,     # present if loop terminating
-    'duration_ms': int,
-}
-
-# ai_debug/tool_call  — fires for each tool result
-{
-    'trace_id': str,
-    'iteration_id': str,
-    'tool_call_id': str,       # UUID, client-generated
-    'tool_name': str,
-    'call_id': str,            # LLM-assigned call_id
-    'args': dict,              # full args (was lazy in v1.0)
-    'result': str,
-    'success': bool,
-    'state_before': dict,      # full state snapshot (was lazy in v1.0)
-    'state_after': dict,       # full state snapshot (was lazy in v1.0)
-    'triggered_confirmation': bool,
-    'confirmation_message': str,
-    'duration_ms': int,
-}
-
-# ai_debug/trace_update  — fires on state change (done/error/paused)
-{
-    'trace_id': str,
-    'state': str,              # 'done' | 'error' | 'paused'
-    'termination_reason': str,
-    'error_message': str,
-    'iteration_count': int,
-    'total_duration_ms': int,
-}
-```
-
-**ID strategy:** Since there are no DB records, IDs must be client-meaningful strings. Generate a `trace_id` UUID in Python at loop start. Generate `iteration_id` and `tool_call_id` UUIDs as each event fires. The client uses these as dict keys for O(1) lookup.
-
-**Binary stripping:** The existing `_debug_strip_binaries` helper in `ai_session.py` already handles large base64 content in `messages_sent`. Carry it forward unchanged.
+**Trade-offs:** Payloads can be large. `messages_sent` for a multi-turn conversation can be tens of KB. The `bus_bus` table stores each payload as JSONB — no size constraint from pg_notify (that limit applies to the channel list notification, not the message payload).
 
 ### Pattern 3: OWL App State Management — Reactive Store in Root Component
 
-**What:** The root component `AiDebugApp` owns the entire application state as a single `useState` object. Child components receive state slices as props. This avoids the complexity of a separate store service for an app this small.
+**What:** The root component `AiDebugApp` owns the entire application state as `useState` objects. Child components receive state slices as props. Uses `useState(new Map())` for the trace store (not `reactive()` without callback, which uses NO_CALLBACK sentinel and blocks OWL render).
 
-**When to use:** Apps with a single data entity type (traces) and simple selection state. For comparison: POS uses a complex service-based store because it has dozens of entity types. ai_debug has one.
+**When to use:** Apps with a bounded set of entity types and simple selection state.
 
-**Trade-offs:** All bus event handlers live in the root component. This is acceptable because there are only 4 event types. The sidebar and detail panel are purely presentational — they receive data and emit selection events upward via callbacks.
+### Pattern 4: Conditional CSS Bundle — Server-Side Theme Selection
 
-**Root component state shape:**
+**What:** The controller reads the `color_scheme` cookie set by the standard Odoo webclient. The QWeb template conditionally loads `ai_debug.assets_dark` vs `ai_debug.assets` for the CSS. JS is always loaded from `ai_debug.assets` (t-css="false").
 
-```javascript
-// static/src/app/ai_debug_app.js
-import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
-import { useService } from "@web/core/utils/hooks";
-import { TraceList } from "./sidebar/trace_list";
-import { DetailPanel } from "./detail/detail_panel";
+**When to use:** Any standalone Odoo app that should respect user theme preference.
 
-export class AiDebugApp extends Component {
-    static template = "ai_debug.AiDebugApp";
-    static components = { TraceList, DetailPanel };
-    static props = {};
-
-    setup() {
-        this.busService = useService("bus_service");
-
-        // All application state in one reactive object.
-        // traces: Map<traceId, TraceNode>
-        // TraceNode: { id, llm_model, state, instructions, tools_definition,
-        //              iterations: Map<iterationId, IterationNode> }
-        // IterationNode: { id, index, messages_sent, raw_response, final_message,
-        //                  duration_ms, toolCalls: Map<toolCallId, ToolCallNode> }
-        // ToolCallNode:  { id, tool_name, args, result, state_before, state_after,
-        //                  success, duration_ms }
-        this.state = useState({
-            traces: new Map(),
-            selection: null,   // { type: 'loop'|'iteration'|'tool_call', id: str }
-            connectionStatus: 'connecting',
-        });
-
-        // Bind handlers once.
-        this._onNewTrace = this._onNewTrace.bind(this);
-        this._onIteration = this._onIteration.bind(this);
-        this._onToolCall = this._onToolCall.bind(this);
-        this._onTraceUpdate = this._onTraceUpdate.bind(this);
-
-        onMounted(() => {
-            this.busService.addChannel("ai_debug:traces");
-            this.busService.subscribe("ai_debug/new_trace", this._onNewTrace);
-            this.busService.subscribe("ai_debug/iteration", this._onIteration);
-            this.busService.subscribe("ai_debug/tool_call", this._onToolCall);
-            this.busService.subscribe("ai_debug/trace_update", this._onTraceUpdate);
-        });
-
-        onWillUnmount(() => {
-            this.busService.deleteChannel("ai_debug:traces");
-            this.busService.unsubscribe("ai_debug/new_trace", this._onNewTrace);
-            this.busService.unsubscribe("ai_debug/iteration", this._onIteration);
-            this.busService.unsubscribe("ai_debug/tool_call", this._onToolCall);
-            this.busService.unsubscribe("ai_debug/trace_update", this._onTraceUpdate);
-        });
-    }
-
-    _onNewTrace(payload) {
-        this.state.traces.set(payload.trace_id, {
-            id: payload.trace_id,
-            llm_model: payload.llm_model,
-            state: payload.state,
-            instructions: payload.instructions,
-            rag_context: payload.rag_context,
-            tools_definition: payload.tools_definition,
-            started_at: payload.started_at,
-            iterations: new Map(),
-        });
-        // Auto-select the new trace's loop node.
-        this.state.selection = { type: 'loop', id: payload.trace_id };
-    }
-
-    _onIteration(payload) {
-        const trace = this.state.traces.get(payload.trace_id);
-        if (!trace) return;
-        trace.iterations.set(payload.iteration_id, {
-            id: payload.iteration_id,
-            index: payload.index,
-            messages_sent: payload.messages_sent,
-            raw_response: payload.raw_response,
-            final_message: payload.final_message,
-            duration_ms: payload.duration_ms,
-            toolCalls: new Map(),
-        });
-    }
-
-    _onToolCall(payload) {
-        const trace = this.state.traces.get(payload.trace_id);
-        if (!trace) return;
-        const iteration = trace.iterations.get(payload.iteration_id);
-        if (!iteration) return;
-        iteration.toolCalls.set(payload.tool_call_id, {
-            id: payload.tool_call_id,
-            tool_name: payload.tool_name,
-            args: payload.args,
-            result: payload.result,
-            success: payload.success,
-            state_before: payload.state_before,
-            state_after: payload.state_after,
-            duration_ms: payload.duration_ms,
-        });
-    }
-
-    _onTraceUpdate(payload) {
-        const trace = this.state.traces.get(payload.trace_id);
-        if (!trace) return;
-        trace.state = payload.state;
-        trace.termination_reason = payload.termination_reason;
-        trace.total_duration_ms = payload.total_duration_ms;
-        trace.iteration_count = payload.iteration_count;
-    }
-
-    setSelection(selection) {
-        this.state.selection = selection;
-    }
-
-    get selectedNode() {
-        if (!this.state.selection) return null;
-        const { type, id, traceId, iterationId } = this.state.selection;
-        if (type === 'loop') return { type, data: this.state.traces.get(id) };
-        if (type === 'iteration') {
-            const trace = this.state.traces.get(traceId);
-            return { type, data: trace?.iterations.get(id) };
-        }
-        if (type === 'tool_call') {
-            const trace = this.state.traces.get(traceId);
-            const iter = trace?.iterations.get(iterationId);
-            return { type, data: iter?.toolCalls.get(id) };
-        }
-        return null;
-    }
-}
-```
-
-**OWL Map reactivity note:** OWL's `useState` makes objects reactive by proxy. `Map` objects inside `useState` ARE reactive — mutations (`.set`, `.delete`) trigger re-renders. This is confirmed by OWL source. Use `Map` for O(1) lookup by ID; the sidebar renders by iterating `.values()`.
-
-### Pattern 4: Sidebar Tree — 3-Level Collapsible List
-
-**What:** The sidebar is a pure presentational component tree. It receives the `traces` Map and a `setSelection` callback as props. Each level (loop, iteration, tool call) is its own component that renders its children.
-
-**When to use:** Hierarchical data with 3 levels and selection state managed by a parent.
-
-**Template structure:**
-
-```xml
-<!-- sidebar/trace_list.xml -->
-<templates>
-    <t t-name="ai_debug.TraceList">
-        <div class="ai-debug-sidebar">
-            <t t-foreach="[...props.traces.values()]" t-as="trace" t-key="trace.id">
-                <LoopItem
-                    trace="trace"
-                    isSelected="props.selection?.id === trace.id"
-                    onSelect="props.setSelection"
-                />
-            </t>
-        </div>
-    </t>
-
-    <t t-name="ai_debug.LoopItem">
-        <!-- Clickable header — selects loop node -->
-        <div class="ai-debug-loop-item" t-on-click="onClickLoop">
-            <span class="badge" t-att-class="statusBadgeClass">
-                <t t-esc="props.trace.state"/>
-            </span>
-            <span t-esc="props.trace.llm_model"/>
-        </div>
-        <!-- Always expanded; iterations always visible under their loop -->
-        <t t-foreach="[...props.trace.iterations.values()]" t-as="iter" t-key="iter.id">
-            <IterationItem
-                trace="props.trace"
-                iteration="iter"
-                isSelected="props.selection?.id === iter.id"
-                onSelect="props.onSelect"
-            />
-        </t>
-    </t>
-</templates>
-```
-
-**Selection protocol:** The sidebar emits `setSelection({ type, id, traceId?, iterationId? })` upward. The root component updates `state.selection`. The `DetailPanel` receives the resolved `selectedNode` as a prop and switches between `LoopDetail`, `IterationDetail`, or `ToolCallDetail`.
+**Trade-offs:** Theme is determined at page load. If the user changes their Odoo theme in another tab, they must reload `/ai-debug` to pick it up. This matches the behavior of the main Odoo webclient.
 
 ---
 
 ## Data Flow
 
-### Capture Flow (Python — write path, v1.1)
+### Theme Selection Flow
+
+```
+User visits /odoo → Odoo sets color_scheme cookie ('light' or 'dark')
+    ↓
+User navigates to /ai-debug
+    ↓
+AiDebugController reads cookie → passes color_scheme to QWeb context
+    ↓
+QWeb template: t-if="color_scheme == 'dark'" → loads assets_dark CSS
+    ↓
+Bootstrap CSS vars resolve to dark values (compiled into bundle at build time)
+    ↓
+app.scss's var(--bs-body-bg) etc. get dark colors automatically
+```
+
+### Capture Flow (Python — write path)
 
 ```
 HTTP call triggers agentic loop
     ↓
 AiSessionDebug._run_agentic_loop()
-    │
     ├── Generate trace_id = uuid.uuid4()
-    ├── _debug_bus_send_full('ai_debug/new_trace', {full trace payload})
-    │     → separate registry.cursor() → bus.bus._sendone()
-    │
+    ├── _debug_bus_send_full('new_trace', {full trace payload})
     ├── for each LLM yield:
     │   ├── Generate iteration_id = uuid.uuid4()
-    │   ├── _debug_bus_send_full('ai_debug/iteration', {full iteration payload})
-    │   │
-    │   └── for each tool result (via _handle_tool_calls):
-    │       ├── Generate tool_call_id = uuid.uuid4()
-    │       └── _debug_bus_send_full('ai_debug/tool_call', {full tool payload})
-    │
-    └── _debug_bus_send_full('ai_debug/trace_update', {state: 'done', ...})
-
-No DB writes. All data exists only in the browser until page refresh.
+    │   ├── _debug_bus_send_full('iteration', {full iteration payload})
+    │   └── for each tool result:
+    │       └── _debug_bus_send_full('tool_call', {full tool payload})
+    └── _debug_bus_send_full('loop_end', {termination reason, duration})
 ```
 
-### Live App Flow (OWL — read path, v1.1)
+### Live App Flow (OWL — read path)
 
 ```
 User navigates to /ai-debug
     ↓
-AiDebugController.ai_debug_index()
-    → renders ai_debug.index template
-    → browser loads ai_debug.assets bundle
-    → main.js: mountComponent(AiDebugApp, document.body)
-    → makeEnv() + startServices(env) boot all registered services
-    → AiDebugApp.setup() runs
-    → busService.addChannel('ai_debug:traces')
-    → WebSocket connects
-    → ir.websocket._build_bus_channel_list() validates group_system
-
-Agentic loop fires on another tab/user
-    → bus.bus._sendone('ai_debug:traces', 'ai_debug/new_trace', {FULL_PAYLOAD})
-    → PostgreSQL NOTIFY → ImDispatch → WebSocket → browser
-    → busService dispatches to AiDebugApp._onNewTrace(payload)
-    → AiDebugApp updates state.traces Map
-    → OWL reactivity: TraceList re-renders sidebar, DetailPanel shows loop detail
-
-Subsequent iterations/tool calls arrive the same way.
-    → Map mutations trigger OWL re-renders
-    → Sidebar tree grows in real time
-    → Selection state preserved across updates
+Bundle loads (JS + appropriate CSS bundle)
+    ↓
+main.js: mountComponent(AiDebugApp, document.body)
+    → makeEnv() + startServices(env)
+    → AiDebugApp.setup() → busService.addChannel('ai_debug')
+    ↓
+Agentic loop fires on another tab
+    → bus.bus → WebSocket → browser
+    → AiDebugApp handlers update state
+    → OWL re-renders sidebar + detail panel
 ```
-
-### Key Data Flows
-
-1. **New trace auto-selection:** On `_onNewTrace`, the app immediately sets `state.selection` to the new loop node. The detail panel shows the system prompt and tools definition without any user action.
-
-2. **Session scope:** Refreshing the browser clears `state.traces` (empty Map). There is no persistence and no way to load historical traces. This is by design.
-
-3. **Subagent anticipation:** When a subagent loop fires, it emits its own `ai_debug/new_trace` event with a distinct `trace_id`. The sidebar shows it as a second top-level loop. The data model carries a `parent_trace_id` field (null for now) that the frontend can use later to indent subagent loops under their parent.
 
 ---
 
 ## Integration Points
 
-### Between Python Instrumentation and Bus
+### Theme Integration
 
-| Concern | v1.0 | v1.1 |
-|---------|------|------|
-| Payload size | Small summaries (IDs only) | Full payloads (messages, args, state snapshots) |
-| ID source | DB autoincrement | `uuid.uuid4()` — no DB |
-| Bus channel | `ai_debug:traces` (global) | `ai_debug:traces` (global, unchanged) |
-| DB writes | Separate cursor per event | None |
+| Component | Integration | Notes |
+|-----------|-------------|-------|
+| `color_scheme` cookie | Read in `controllers/main.py` | Set by Odoo enterprise webclient; fallback to `'light'` |
+| `ai_debug.assets_dark` bundle | Includes `ai_debug.assets` + dark SCSS | JS not duplicated — loaded from base bundle with `t-css="false"` |
+| Bootstrap CSS vars | Used in `app.scss` | Values baked in at Sass compile time; differ between light and dark bundles |
 
-### Between OWL App and Odoo Backend Services
-
-The standalone app gets Odoo services (bus_service, rpc, orm, notification) for free via `mountComponent` + `startServices`. No special wiring needed. The `session` object is injected via `odoo.__session_info__` in the template (same pattern as POS self-order and POS).
+### Bus / Services Integration
 
 | Service | Used by | Notes |
 |---------|---------|-------|
 | `bus_service` | `AiDebugApp` | WebSocket connection, channel subscription |
-| `rpc` | Not used in v1.1 | No backend data fetching |
-| `orm` | Not used in v1.1 | No DB models |
+| `rpc` | Not used | No backend data fetching |
+| `orm` | Not used | No DB models |
 
 ### Auth and Access
 
-- Route: `auth='user'` — Odoo session required. Not public.
-- Channel access: `ir.websocket` override restricts `ai_debug:*` channels to `group_system` (carried from v1.0). Any internal user can open the page, but only system users receive bus events.
-- If the target access should be relaxed to `base.group_user`, change the channel guard in `ir_websocket.py` to `has_group('base.group_user')`.
+- Route: `auth='user'` — Odoo session required.
+- Channel access: `ir.websocket` override restricts `ai_debug:*` channels to `group_system` (carried from v1.0).
+- Any internal user can view the page; only system users receive bus events.
 
 ---
 
 ## Anti-Patterns
 
-### Anti-Pattern 1: Storing Full Payload in pg_notify NOTIFY Call
+### Anti-Pattern 1: Using `prefers-color-scheme` CSS Media Query
 
-**What people do:** Assume the bus payload (the full messages_sent, state_before, etc.) flows through pg_notify directly.
-**Why it's wrong:** pg_notify has an 8000-byte default limit for the NOTIFY payload — but this limit applies to the *channel list* notification, not the bus message content. The actual bus event data is written to the `bus_bus` table as JSONB and fetched separately. Full payloads are safe in `bus.bus._sendone()` messages.
-**Do this instead:** Send full payloads via `bus.bus._sendone()` without concern for pg_notify size limits. The bus infrastructure handles chunking of the NOTIFY channel list if needed.
+**What people do:** Add `@media (prefers-color-scheme: dark) { ... }` in `app.scss` instead of a dark bundle.
+**Why it's wrong:** Odoo's theme system is server-side bundle selection, not CSS media query. The user may have set Odoo to dark mode regardless of their OS preference. Using `prefers-color-scheme` would conflict with the user's Odoo preference.
+**Do this instead:** Read the `color_scheme` cookie in the controller. Serve `assets_dark` when the cookie is `'dark'`. Use `var(--bs-*)` properties in SCSS — they resolve to the correct values for whichever bundle was loaded.
 
-### Anti-Pattern 2: Using DB Integer IDs in Bus Payloads
+### Anti-Pattern 2: Storing Full Payload in pg_notify
 
-**What people do:** Generate IDs server-side as sequential integers (mimicking DB autoincrement) since there are no DB records.
-**Why it's wrong:** Sequential integers create ordering dependencies — if two tool calls fire concurrently, the client can't distinguish them by arrival order. UUIDs are collision-free and make payloads self-describing.
-**Do this instead:** `trace_id = str(uuid.uuid4())` at loop start. Same for `iteration_id` and `tool_call_id`.
+**What people do:** Assume the bus payload flows through pg_notify directly and is size-limited.
+**Why it's wrong:** The pg_notify size limit applies to the channel list, not the message content. Bus message data is stored in `bus_bus` rows as JSONB and fetched separately.
+**Do this instead:** Send full payloads via `bus.bus._sendone()` without concern for pg_notify limits.
 
-### Anti-Pattern 3: Including the Odoo Backend Navbar in the Standalone App
+### Anti-Pattern 3: Including `web.assets_web` Instead of `web.assets_backend`
 
-**What people do:** Use `ir.actions.client` in the backend for "standalone" feel.
-**Why it's wrong:** The backend navbar, debug toolbar, and chat widget are always rendered. CSS hacks (like v1.0's `o_ai_debug_standalone` class) to hide them are fragile — every Odoo update can break them.
-**Do this instead:** Serve a full HTML page from a dedicated controller. The page has no `<t t-call="web.layout"/>` — it is its own document root.
+**What people do:** Build the dark bundle as `('include', 'web.assets_web')` to match the webclient pattern.
+**Why it's wrong:** `web.assets_web` includes `web.assets_backend` plus `main.js` and `start.js` — those boot the full Odoo webclient and conflict with `mountComponent`.
+**Do this instead:** Build `ai_debug.assets` with `('include', 'web.assets_backend')` as the base, then add the app-specific files. Match what `pos_self_order` does.
 
-### Anti-Pattern 4: Fetching Data On Selection (ORM Read on Click)
+### Anti-Pattern 4: Duplicating JS in the Dark Bundle
+
+**What people do:** Define `ai_debug.assets_dark` as a completely standalone bundle with all JS files repeated.
+**Why it's wrong:** JS loads twice, bloating the page and causing `@odoo-module` double-registration errors.
+**Do this instead:** Follow the webclient pattern exactly: load JS from the base bundle with `t-css="false"`, load CSS from the conditional bundle with `t-js="false"`.
+
+### Anti-Pattern 5: Fetching Data On Selection
 
 **What people do:** Store only IDs in state and fetch full data when the user clicks a node.
-**Why it's wrong:** In v1.1 there is no DB to fetch from. All data must be in the bus payload, in memory, at selection time.
-**Do this instead:** Store complete data in the state Map at event receipt time. Selection is purely a pointer into already-held state — zero network requests on click.
-
-### Anti-Pattern 5: One Asset Bundle Per Page That Includes All of `web.assets_backend`
-
-**What people do:** Set `'assets': {'web.assets_backend': ['ai_debug/static/src/**/*']}` for the standalone app files.
-**Why it's wrong:** `web.assets_backend` loads only in the Odoo backend webclient. The standalone app at `/ai-debug` renders its own HTML page with its own `<t t-call-assets="ai_debug.assets"/>`. Files added to `web.assets_backend` are invisible there.
-**Do this instead:** Declare a dedicated bundle `ai_debug.assets` in `__manifest__.py`. Include it in the `ai_debug.index` template. Keep backend-only files (menu XML, action XML) in `web.assets_backend` if they still exist, but the app files go in `ai_debug.assets`.
-
----
-
-## Build Order for v1.1
-
-Dependencies determine this order:
-
-1. **Controller + template** (`controllers/main.py`, `views/templates.xml`) — the URL must resolve before any frontend can load. Can be verified by hitting `/ai-debug` in a browser (should render a blank page with asset errors, not a 404).
-
-2. **Asset bundle + `main.js` + root `AiDebugApp`** — stub component that mounts and logs "AI Debug loaded". Verifies the entire bootstrap chain (route → template → bundle → OWL env → services). Confirms `bus_service` is available.
-
-3. **Python instrumentation update** (`ai_session.py`) — strip DB model writes, generate UUIDs, emit full payloads. Verifiable by triggering an agentic loop and watching browser console for bus events (add `console.log` in handlers temporarily).
-
-4. **Sidebar `TraceList` and `LoopItem`** — receive bus events, render trace rows. First visible output.
-
-5. **`IterationItem` and `ToolCallItem`** — complete the 3-level tree. Nesting requires iteration and tool_call payloads proven in step 3.
-
-6. **`DetailPanel` with sub-components** — `LoopDetail`, `IterationDetail`, `ToolCallDetail`. Depends on sidebar selection being wired (step 4-5).
-
-7. **`JsonTree` and `StateDiff` integration** — port from v1.0, plug into detail components. These are self-contained presentational components.
-
-8. **Cleanup** — delete all v1.0-only files (`models/ai_debug_*.py`, `security/`, `views/ai_debug_*_views.xml`, `views/menus.xml`). Update `__manifest__.py` to remove their data declarations and the old `web.assets_backend` assets entry.
+**Why it's wrong:** There is no DB to fetch from. All data must be in the bus payload, in memory, at selection time.
+**Do this instead:** Store complete data in the state Map at event receipt time. Selection is purely a pointer into already-held state.
 
 ---
 
 ## Sources
 
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/controllers/main.py` — `pos_web` controller, `request.render('point_of_sale.index', context)`, `session_info` injection (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/views/pos_assets_index.xml` — `point_of_sale.index` template structure, `odoo` JS global with `__session_info__`, `t-call-assets` (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/__manifest__.py` — `point_of_sale.assets_prod`, `base_app` bundle structure including bus service files (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/static/src/app/main.js` — `mountComponent(Chrome, document.body)` boot pattern (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/pos_self_order/views/pos_self_order.index.xml` — simpler template: inlines `__session_info__`, single `t-call-assets` (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/pos_self_order/static/src/app/root.js` — `mountComponent(Index, document.body)` — cleanest boot example (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/hr_attendance/views/hr_attendance_kiosk_templates.xml` — `web.layout` alternative, inline script calling `createPublicKioskAttendance` (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/hr_attendance/static/src/public_kiosk/public_kiosk_app.js` — `makeEnv()` + `startServices()` + `new App(...)` explicit boot (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/static/src/env.js` — `mountComponent`, `makeEnv`, `startServices` implementations (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/bus/models/bus.py` — `NOTIFY_PAYLOAD_MAX_LENGTH` applies to channel list, not bus message content; `_sendone` stores payload in JSONB `bus_bus` table (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/custom/ai_debug/models/ai_session.py` — existing v1.0 instrumentation, `_debug_strip_binaries`, `_debug_bus_send`, separate cursor pattern (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/custom/ai_debug/models/ir_websocket.py` — channel access control for `ai_debug:*` channels (HIGH confidence — direct source read)
-- Source: `/Users/joseph/clones/odoo/custom/ai_debug/static/src/debug_panel/debug_panel.js` — v1.0 OWL bus subscription patterns, state shape, event handler structure (HIGH confidence — direct source read)
+**v1.2 theming sources (HIGH confidence — direct source reads):**
+
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/models/ir_http.py` — `color_scheme()` method: reads cookie, then user setting; never returns `'system'`
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/controllers/home.py` — sets `color_scheme` cookie on every webclient response
+- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/models/ir_http.py` — base `color_scheme()` returns `"light"` hardcoded; `webclient_rendering_context()` adds it to QWeb context
+- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/views/webclient_templates.xml` — `web.webclient_bootstrap`: exact pattern of JS-only bundle + conditional CSS-only dark/light bundle
+- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/views/pos_assets_index.xml` — POS uses `pos_color_scheme` cookie with same conditional `t-call-assets` pattern
+- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/__manifest__.py` — `web.assets_web_dark`: `('include', 'web.assets_web')` + `'web/static/src/**/*.dark.scss'`
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/__manifest__.py` — enterprise extends `web.assets_web_dark` with `web.dark_mode_variables`, dark SCSS helpers, and `**/*.dark.scss` files
+- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/static/lib/bootstrap/scss/_root.scss` — Bootstrap emits `--bs-body-bg`, `--bs-body-color`, `--bs-border-color` etc. on `:root` from Sass variables compiled at build time
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/static/src/scss/primary_variables.dark.scss` — inverted gray scale: gray-100 is darkest (`#1B1D26`), gray-900 is lightest (`#E4E4E4`)
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/static/src/webclient/navbar/navbar.dark.scss` — pattern for component dark overrides: override local CSS custom properties, not global Bootstrap vars
+- `/Users/joseph/clones/odoo/custom/ai_debug/static/src/app/app.scss` — existing 650-line SCSS with hardcoded Catppuccin Mocha colors (all to be replaced)
+
+**v1.1 base sources (HIGH confidence — direct source reads):**
+
+- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/pos_self_order/views/pos_self_order.index.xml` — template structure
+- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/pos_self_order/controllers/self_entry.py` — controller pattern
+- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/static/src/env.js` — `mountComponent`, `makeEnv`, `startServices`
+- `/Users/joseph/clones/odoo/custom/ai_debug/` — actual v1.1 module source (all files)
 
 ---
-*Architecture research for: Odoo AI debugger v1.1 — standalone OWL app conversion*
-*Researched: 2026-02-20*
+*Architecture research for: Odoo AI debugger v1.2 — native theming via Bootstrap CSS variables and conditional dark bundle*
+*Researched: 2026-02-22*

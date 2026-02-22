@@ -1,398 +1,400 @@
 # Pitfalls Research
 
-**Domain:** Odoo standalone OWL app + bus.bus streaming — migration from DB-backed to ephemeral architecture
-**Researched:** 2026-02-20
-**Confidence:** HIGH (based on direct source inspection at referenced paths)
+**Domain:** Native Odoo theming migration — hardcoded dark standalone OWL app to Bootstrap CSS variables
+**Researched:** 2026-02-22
+**Confidence:** HIGH (direct source inspection at all referenced paths)
 
-This document is scoped to the v1.1 migration: removing DB models, adding a standalone OWL app at `/ai-debug`, and streaming full payloads over bus.bus. The v1.0 generator-wrapping pitfalls are preserved because they remain relevant, but the emphasis shifts to migration-specific failure modes.
+This document is scoped to v1.2: replacing hardcoded Catppuccin Mocha colors with Odoo's Bootstrap CSS variables so the app respects the user's light/dark theme preference. The v1.1 pitfalls (bus architecture, DB migration) are superseded. This document focuses on CSS specificity conflicts, incomplete variable replacement, component-level color assumptions, asset bundle loading order, and theme-switching edge cases.
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Standalone App Asset Bundle Uses Wrong Bundle — Services Unavailable
+### Pitfall 1: Controller Missing `color_scheme` — Template Renders Wrong Bundle Every Time
 
 **What goes wrong:**
 
-The standalone app at `/ai-debug` renders a custom HTML template that calls `t-call-assets` with a bundle name. If that bundle is `web.assets_backend`, it loads the full Odoo backend (menus, actions, webclient chrome). If it's a custom bundle that omits required service registrations, the OWL app fails to start because `bus_service`, `orm`, or `notification` dependencies are missing. The error is a cryptic `Error: Cannot find service 'bus_service'` thrown during `startServices(env)`.
+The current controller calls `request.env['ir.http'].session_info()` but does NOT call `webclient_rendering_context()`. The `color_scheme` variable is never passed to the template. When the template checks `t-if="color_scheme == 'dark'"`, the variable is undefined and evaluates falsy — the dark bundle is never loaded regardless of the user's preference. The app always loads the light bundle, making the theming feature appear to work only for one theme.
 
 **Why it happens:**
 
-Copying the POS pattern without understanding that `point_of_sale._assets_pos` explicitly includes `bus/static/src/services/bus_service.js`, `worker_service.js`, `bus_parameters_service.js`, and related workers. The standalone app can't just load `web.assets_backend` and strip things out — the backend bundle assumes menus are loaded (`odoo.loadMenusPromise`), which fails without the `/web/webclient/load_menus` call.
+`session_info()` and `color_scheme()` are separate methods on `ir.http`. The webclient template calls `webclient_rendering_context()` which bundles both. The existing `ai_debug` controller was written to get only `session_info` (which was all it needed for v1.1 bus authentication). Adding theming requires the second piece, but developers only remember to add the dark bundle conditional in the template, not the corresponding Python-side variable.
+
+The enterprise `web_enterprise` module overrides `color_scheme()` to read from the `color_scheme` cookie AND `res.users.settings_id.color_scheme`. Without calling this method and passing its result to the template, the conditonal is always false.
 
 **How to avoid:**
 
-Use one of two approaches. Simple: Load `web.assets_backend` in the template but short-circuit menu loading in the template script block before the bundle loads:
-
-```javascript
-// In the QWeb template, before t-call-assets
-odoo.loadMenusPromise = Promise.resolve({});
-```
-
-Advanced: Create a dedicated `ai_debug.assets_app` bundle that explicitly includes only what is needed, following the `point_of_sale.base_app` pattern (includes `web._assets_core`, `bus/static/src/services/bus_service.js`, workers, ORM service). Do not use `web.assets_backend` in a standalone app — it triggers menu loading and expects the full webclient bootstrap context.
-
-The POS does this correctly in `/addons/point_of_sale/views/pos_assets_index.xml` line 32: `odoo.loadMenusPromise = Promise.resolve();`
-
-**Warning signs:**
-
-- `Cannot find service 'menu'` or `Cannot read properties of undefined (reading 'id')` in the browser console when the standalone app loads
-- The top Odoo navbar and debug bar appear in the standalone page (wrong bundle)
-- The app loads but `useService('bus_service')` throws because bus_service depends on `worker_service` which was not started
-
-**Phase to address:** Phase 1 (Standalone App Scaffold)
-
----
-
-### Pitfall 2: HTTP Controller Missing `session_info` in Template Context — Bus Auth Fails
-
-**What goes wrong:**
-
-The Odoo bus WebSocket authenticates via the user's session. When the standalone page loads, the JS needs `__session_info__` embedded in the HTML (containing `db`, `uid`, `csrf_token`) to initialize the bus connection. If the HTTP controller renders the template without passing `session_info`, the bus worker starts with an anonymous session, the WebSocket handshake fails, and `bus_service` never reaches `CONNECTED` state.
-
-**Why it happens:**
-
-Developers write a minimal controller like:
-```python
-@http.route('/ai-debug', type='http', auth='user')
-def ai_debug(self):
-    return request.render('ai_debug.index', {})
-```
-
-Without `session_info`, the `odoo.__session_info__` JS global is either undefined or contains stale data from a previous page load.
-
-**How to avoid:**
-
-Follow the POS pattern exactly:
+Change the controller to call `webclient_rendering_context()` instead of `session_info()` directly:
 
 ```python
-@http.route('/ai-debug', type='http', auth='user')
-def ai_debug(self):
-    session_info = request.env['ir.http'].session_info()
-    return request.render('ai_debug.index', {
-        'session_info': session_info,
-    })
+# controllers/main.py — correct pattern
+@http.route('/ai-debug', type='http', auth='user', readonly=True)
+def ai_debug(self, **kw):
+    if not is_user_internal(request.session.uid):
+        return request.redirect('/web/login', 303)
+    context = request.env['ir.http'].webclient_rendering_context()
+    return request.render('ai_debug.index', context)
 ```
 
-In the QWeb template:
-```xml
-<script type="text/javascript">
-    var odoo = <t t-out="json.dumps({'csrf_token': request.csrf_token(None), '__session_info__': session_info})"/>;
-    odoo.loadMenusPromise = Promise.resolve({});
-</script>
+`webclient_rendering_context()` returns `{'color_scheme': ..., 'session_info': ...}`, so the template receives both variables in one call.
+
+**Warning signs:**
+
+- The dark bundle conditional in the template renders correctly in dev tools inspection but the app always shows light styles
+- Logging `request.cookies.get('color_scheme')` in the controller shows `'dark'` but the dark bundle is not loaded
+- Switching to dark in Odoo preferences has no effect on the debug app even after a hard reload
+
+**Phase to address:** Phase 1 (Color scheme detection) — the first thing to fix before any CSS work
+
+---
+
+### Pitfall 2: Hardcoded Colors Override Bootstrap Variables via Specificity
+
+**What goes wrong:**
+
+The existing `app.scss` uses class selectors like `.ai-debug-app`, `.ai-debug-header`, `.ai-json-key`, etc. Bootstrap CSS custom properties (`--bs-body-bg`, `--bs-body-color`, `$body-bg`) are set on `body` or `:root`. When the hardcoded color declarations are simply left in place alongside the new Bootstrap variable declarations, the hardcoded values win because they are declared later in the cascade and are not less specific — they are on the same specificity level but come after the variables in the compiled CSS output order.
+
+More critically: when the dark bundle (`web.assets_web_dark`) loads, it sets SCSS variables that compile to different hex values in its CSS output. But the hardcoded Catppuccin values in `app.scss` are not Bootstrap variables — they are literal hex strings. The dark bundle cannot override literal hex values. The app's custom classes remain Catppuccin-dark regardless of theme.
+
+**Why it happens:**
+
+Developers think "I'll use `var(--bs-body-bg)` for the main background and leave the rest for later." They replace a few properties but leave dozens of hardcoded hex values in the same file. When testing in dark mode (which matches the existing Catppuccin dark palette roughly), everything looks fine — the hardcoded dark values accidentally approximate the dark theme variables. The bug only manifests clearly in light mode, where `background-color: #1e1e2e` renders over a light Bootstrap background.
+
+The current `app.scss` has approximately 40 distinct hardcoded color values spread across 650 lines. A partial replacement leaves an inconsistent mix that appears correct in dark mode but breaks in light mode.
+
+**How to avoid:**
+
+Replace ALL hardcoded color values in `app.scss` in a single pass before doing anything else. Use Odoo's SCSS variables (not CSS custom properties) because `app.scss` compiles in the same bundle as the rest of Odoo's SCSS:
+
+```scss
+// Replace this pattern:
+background-color: #1e1e2e;    // Catppuccin Mantle
+color: #cdd6f4;               // Catppuccin Text
+
+// With Odoo SCSS variables:
+background-color: $o-view-background-color;
+color: $o-main-text-color;
 ```
 
-`Cache-Control: no-store` on the response is also required — the session info changes between logins.
+Key Odoo SCSS variables available in both light and dark bundles (defined in `primary_variables.scss` and overridden in `primary_variables.dark.scss`):
+
+| Catppuccin Color | Role | Odoo Variable |
+|------------------|------|---------------|
+| `#1e1e2e` (Base) | App background | `$o-view-background-color` |
+| `#181825` (Mantle) | Header/darker bg | `$o-webclient-background-color` |
+| `#313244` (Surface1) | Borders | `$border-color` |
+| `#cdd6f4` (Text) | Primary text | `$o-main-text-color` |
+| `#6c7086` (Overlay1) | Muted/dim text | `$o-gray-500` |
+| `#585b70` (Overlay0) | Very muted text | `$o-gray-400` |
+| `#89b4fa` (Blue) | Accent/selection | `$o-action` |
+| `#a6e3a1` (Green) | Success | `$o-success` |
+| `#f38ba8` (Red) | Error/danger | `$o-danger` |
+| `#f9e2af` (Yellow) | Warning | `$o-warning` |
+| `#fab387` (Peach) | Numbers | `$o-warning` |
+| `#cba6f7` (Mauve) | Booleans | (no direct match — use `$o-info`) |
+
+Do not mix SCSS variables and hardcoded hex in the same file. Complete the replacement before testing.
 
 **Warning signs:**
 
-- `BUS:WORKER_STATE_UPDATED` event fires with state `DISCONNECTED` immediately after `CONNECTING`
-- WebSocket closes with code 4001 (`SESSION_EXPIRED`) in the browser devtools Network tab
-- `session.uid` is undefined in the browser console when `import { session } from '@web/session'` is used
+- Running in light mode shows dark backgrounds on the app's own elements while Odoo chrome is light
+- `grep -n "#[0-9a-f]\{3,6\}" app.scss` returns more than 0 results after the migration
+- The sidebar tree rows show Catppuccin hover colors (`#2a2a3e`) over a white detail panel background
 
-**Phase to address:** Phase 1 (Standalone App Scaffold)
-
----
-
-### Pitfall 3: Removing DB Models Without a Migration Script — Orphaned Tables and `ir.model` Records
-
-**What goes wrong:**
-
-Deleting `ai_debug_trace.py`, `ai_debug_iteration.py`, and `ai_debug_tool_call.py` from the module and bumping the version causes Odoo module upgrade to remove the `ir.model`, `ir.model.fields`, and `ir.model.access` data records (via `ir_model_data._module_data_uninstall`). However, the underlying PostgreSQL tables (`ai_debug_trace`, `ai_debug_iteration`, `ai_debug_tool_call`) are **not automatically dropped**. This leaves orphaned tables in the database that accumulate data forever, silently consuming disk space. Worse, if the module is ever reinstalled with a different schema for the same model name, Odoo tries to `ALTER TABLE` the existing orphaned table and may fail on column conflicts.
-
-**Why it happens:**
-
-Developers assume Odoo's ORM manages table lifecycle symmetrically — it creates tables on `_auto_init` but does not drop them on uninstall. This is intentional (data safety), but requires explicit cleanup when dropping a model from a module.
-
-**How to avoid:**
-
-Write a `pre-migrate` script in `migrations/<version>/pre-migrate.py`:
-
-```python
-from odoo import api, SUPERUSER_ID
-
-def migrate(cr, version):
-    # Drop orphaned debug tables — data is intentionally discarded (ephemeral by design)
-    cr.execute("DROP TABLE IF EXISTS ai_debug_tool_call CASCADE")
-    cr.execute("DROP TABLE IF EXISTS ai_debug_iteration CASCADE")
-    cr.execute("DROP TABLE IF EXISTS ai_debug_trace CASCADE")
-```
-
-Run `DROP TABLE IF EXISTS ... CASCADE` to also clean up any foreign key constraints. The `CASCADE` is safe here because these tables only reference each other.
-
-Additionally, remove the `security/ir.model.access.csv` file and its reference in `__manifest__.py['data']` — leave it in place until after the migration script runs if the upgrade order matters.
-
-**Warning signs:**
-
-- `pg_class` shows `ai_debug_trace`, `ai_debug_iteration`, `ai_debug_tool_call` tables after the module upgrade
-- The module upgrade completes without error, but `\dt ai_debug*` in psql still lists the old tables
-- A later reinstall attempt fails with `column "X" of relation "ai_debug_trace" already exists`
-
-**Phase to address:** Phase 1 (DB Model Removal Migration)
+**Phase to address:** Phase 1 (Variable audit and replacement) — do this before the dark bundle conditional
 
 ---
 
-### Pitfall 4: Full LLM Payload Sent Over bus.bus — Message Is Too Large for Reliable Delivery
+### Pitfall 3: Notebook Component Dark Tab Overrides Conflict With App's Tab Overrides
 
 **What goes wrong:**
 
-A full agentic loop iteration payload (system prompt + conversation history + raw LLM response) can be 50–500 KB. The `bus_bus.message` field is `fields.Char` (PostgreSQL VARCHAR with no length constraint), so the message is stored without error. However, delivering it via WebSocket to the browser causes two problems:
+The app's current `app.scss` (lines 357–392) manually overrides Notebook's `.nav-tabs` and `.nav-link` inside `.ai-debug-detail .o_notebook` with hardcoded Catppuccin colors. The enterprise `notebook.dark.scss` sets CSS custom properties on `.o_notebook` (e.g., `--Notebook__link-background-color: #{$o-gray-300}`). The enterprise notebook SCSS uses these custom properties via `var()` inside `notebook.scss`.
 
-1. The browser's WebSocket receives a single large frame and passes it to the SharedWorker. The worker calls `postMessage()` to the main thread with the full payload. The structured clone of a 200 KB object blocks the main thread for 20–100 ms — visible as jank on every iteration during an active session.
+When both files are loaded:
+1. `notebook.scss` sets the variables via CSS custom properties on `.o_notebook`
+2. `notebook.dark.scss` overrides those custom properties for dark mode
+3. `app.scss` then applies hardcoded hex values directly to `.nav-link`, bypassing the custom property mechanism entirely
 
-2. The Odoo WebSocket server (Python) sends notifications by fetching from `bus_bus` and calling `websocket._send_frame()`. There is no per-message size check before sending outbound frames — the 1 MB `MESSAGE_MAX_SIZE` limit applies only to **inbound** frames (client to server). Outbound large messages do succeed, but they may trigger browser-side WebSocket close code 1009 if the browser enforces its own receive limit.
-
-Note: The 8 KB `NOTIFY_PAYLOAD_MAX_LENGTH` is for the PostgreSQL pg_notify channel list (the list of channel names to wake up), **not** for the message content stored in `bus_bus`. This is a common misreading of the source.
-
-**Why it happens:**
-
-The v1.0 pattern sends only a tiny summary in the bus notification and lazily fetches full data via ORM. The v1.1 mandate of "full payloads over bus.bus" is taken literally, but the intention is "no lazy ORM reads for the UI" — not "stuff the entire LLM conversation into the WebSocket frame." Developers assume "no size limit" from reading the source and skip the performance analysis.
-
-**How to avoid:**
-
-Cap individual bus payloads at a practical limit of ~32 KB. For iteration payloads that exceed this:
-
-1. Split into multiple bus events: one `ai_debug/iteration_meta` (index, duration, tool_count — tiny) followed by one `ai_debug/iteration_detail` (messages_sent, raw_response — potentially large, sent separately only when detail panel is open).
-2. Or: send `ai_debug/iteration_meta` via bus and provide a JSON RPC endpoint (`/ai-debug/iteration/<id>`) that returns the full payload on demand when the user clicks into the detail panel.
-
-The second approach is preferred for the sidebar layout: the sidebar tree only needs the meta (iteration number, duration, tool count), and the detail panel fetches on selection.
-
-**Warning signs:**
-
-- Noticeable browser jank (dropped frames) during active agentic loop sessions with RAG context enabled
-- WebSocket close code 1009 in browser devtools during sessions with long conversation history
-- `bus_bus` table row size exceeds 8 KB (check with `pg_column_size(message)`) for iteration events
-
-**Phase to address:** Phase 2 (Bus Payload Design) — must be decided before writing the instrumentation send logic
-
----
-
-### Pitfall 5: `_sendone` Inside a Separate Cursor — Notification Lost If Outer Transaction Is Already Committed
-
-**What goes wrong:**
-
-The v1.0 instrumentation uses `with self.env.registry.cursor() as cr:` to write trace data in a cursor separate from the main agentic loop transaction. The v1.1 approach removes the DB models but still sends bus notifications. If the bus `_sendone` call is made on the main cursor (`self.env.cr`) during the generator's execution, the notification sits in `precommit.data` and only fires when the main cursor commits — which may be long after the iteration completes (the main transaction may not commit until the entire HTTP request finishes). The debug panel sees a burst of events at the end of the loop, not a real-time stream.
+The result: the Notebook tabs ignore the dark/light theme switch and remain hardcoded. In light mode, the dark Catppuccin tab colors look wrong against the now-themed page background.
 
 **Why it happens:**
 
-`_sendone` hooks into `precommit` and `postcommit` on the cursor it is called on. Calling it on the main cursor means notifications batch-fire at the end of the HTTP response, not at each iteration. This worked in v1.0 because separate cursors commit immediately on `__exit__`, triggering pg_notify promptly.
+When the app was built (v1.1), the Notebook component didn't have native dark theme support that the app needed, so the developer wrote custom overrides. Now that the enterprise `notebook.dark.scss` properly handles dark theming via CSS custom properties, those overrides are redundant and conflicting. The developer migrating to native theming doesn't realize the conflict because testing in dark mode makes both approaches produce similar results.
 
 **How to avoid:**
 
-Continue using a separate short-lived cursor for each bus notification, even after the DB models are removed:
+Remove the entire Notebook dark theme override block from `app.scss` (lines 357–392):
 
-```python
-def _debug_send_event(self, event_type, payload):
-    try:
-        with self.env.registry.cursor() as cr:
-            env = api.Environment(cr, self.env.uid, {})
-            env['bus.bus']._sendone('ai_debug:traces', event_type, payload)
-            # cursor commits here, triggering pg_notify immediately
-    except Exception:
-        _logger.warning('ai_debug: failed to send bus event', exc_info=True)
-```
-
-Each separate cursor commits independently, so pg_notify fires at each iteration boundary, giving the frontend true real-time updates.
-
-**Warning signs:**
-
-- Debug panel receives all iteration events simultaneously at the end of the agentic loop, not one by one during execution
-- All bus events share the same `id` sequence in `bus_bus` (they were all inserted in the same precommit batch)
-- Timing information shows all events with the same `create_date` in `bus_bus`
-
-**Phase to address:** Phase 2 (Bus Notification Architecture)
-
----
-
-### Pitfall 6: OWL Standalone App Mounted on `document.body` With Odoo Backend Also Present
-
-**What goes wrong:**
-
-If the standalone app template is rendered by navigating to `/ai-debug` from within the Odoo backend (e.g., via a redirect from the menus), the backend's OWL app may already be mounted on `document.body`. Mounting a second OWL app on the same target node causes undefined behavior: the existing backend app's event listeners fire on DOM events in the debug app, global service singletons conflict, and `__WOWL_DEBUG__` is overwritten. The result ranges from "the debug panel doesn't render" to "the backend app crashes silently."
-
-**Why it happens:**
-
-Developers test the standalone URL by navigating from the backend during development. The `ir.actions.act_url` with `target: 'new'` opens a new window/tab, but the `target: 'self'` redirect from a menu item would navigate the current window, potentially causing this conflict.
-
-**How to avoid:**
-
-- Always open `/ai-debug` in a new tab. The HTTP controller must respond with a full standalone HTML page (its own `<!DOCTYPE html>`), not an OWL action injected into the existing backend. The template must be a complete HTML document, not a partial.
-- The menu item that opens the debug app should use `type: 'ir.actions.act_url'` with `target: 'new'` (opens new tab), not `target: 'self'`.
-- In the standalone template, do not include `web.webclient_bootstrap` — use a minimal custom template that boots a fresh OWL environment.
-
-**Warning signs:**
-
-- The debug panel renders inside the Odoo webclient's `<div class="o_web_client">` instead of a blank page
-- OWL console errors referencing `Component already mounted` or service conflicts immediately on load
-- The Odoo navbar appears at the top of the "standalone" app
-
-**Phase to address:** Phase 1 (Standalone App Scaffold)
-
----
-
-### Pitfall 7: Sidebar Tree Loses Selection State on Every Bus Event
-
-**What goes wrong:**
-
-The sidebar tree holds Loop > Iteration > Tool Call as a hierarchy. Each bus event (new iteration, new tool call) updates the state array. If the sidebar component re-renders by replacing the entire array (e.g., `this.state.loops = newLoops`), OWL diffs the new vdom against the old. Without stable `t-key` on each tree node, OWL unmounts and remounts all child nodes on every bus event, resetting any expanded/selected state to the component defaults. The user's selected iteration collapses every time a new tool call arrives.
-
-**Why it happens:**
-
-OWL's virtual DOM diffing requires `t-key` on repeated nodes to identify stable elements. The default diffing by position is fine for static lists but wrong for append-only lists where new items arrive at the end while the user is interacting with earlier items.
-
-**How to avoid:**
-
-Use stable unique keys on all tree nodes:
-
-```xml
-<t t-foreach="state.loops" t-as="loop" t-key="loop.id">
-    <t t-foreach="loop.iterations" t-as="iter" t-key="iter.id">
-        <t t-foreach="iter.toolCalls" t-as="tc" t-key="tc.id">
-```
-
-Use `reactive()` objects for mutation instead of array replacement — `state.loops.push(newLoop)` is safer than `state.loops = [...state.loops, newLoop]`. The existing v1.0 code correctly uses `this.state.iterations.push(...)` instead of assignment, which is the right pattern.
-
-For nested subagent loops, ensure the loop ID is globally unique across parent and child loops — a flat integer counter is sufficient, but must be monotonically increasing across all loops in the session.
-
-**Warning signs:**
-
-- Clicking on an iteration in the sidebar causes it to expand, then it collapses immediately when the next bus event arrives
-- The detail panel goes blank (selection is cleared) during active tool execution
-- Browser console shows OWL warnings about duplicate keys if two loops share the same root ID
-
-**Phase to address:** Phase 3 (Sidebar Tree Component)
-
----
-
-### Pitfall 8: Subagent Loop Events Arrive Out of Order — Frontend State Corrupted
-
-**What goes wrong:**
-
-When the `ai` module eventually supports subagents, the parent loop spawns a child loop that runs to completion before the parent continues. Bus events from both loops arrive on the same `ai_debug:traces` channel. If the frontend identifies events only by `loop_id` without a parent/child relationship, a child loop event with an unknown `loop_id` is either silently dropped or creates a new top-level loop in the sidebar — both are wrong.
-
-Even without subagent support in the upstream module, the data design must anticipate this. An event arrives with `{loop_id: 42, parent_loop_id: 41, iteration_index: 0}`. If the frontend only tracks a flat list of loops, it has no slot for `loop_id: 42` under `loop_id: 41`.
-
-**Why it happens:**
-
-Designing the data model and state shape for "what exists today" (flat loops) rather than "what the architecture anticipates." The PROJECT.md explicitly states subagent-ready data design is required even though the feature is deferred.
-
-**How to avoid:**
-
-Model the state as a tree from the start:
-
-```javascript
-// Each loop node can have child_loops
-this.state = useState({
-    loops: [],  // top-level only
-    loopsById: {},  // flat index for O(1) lookup
-});
-
-// When a loop_start event arrives:
-function addLoop(payload) {
-    const loop = { id: payload.loop_id, parentId: payload.parent_loop_id, iterations: [], childLoops: [] };
-    this.state.loopsById[loop.id] = loop;
-    if (loop.parentId && this.state.loopsById[loop.parentId]) {
-        this.state.loopsById[loop.parentId].childLoops.push(loop);
-    } else {
-        this.state.loops.push(loop);  // top-level
-    }
+```scss
+// DELETE this entire block — notebook.scss + notebook.dark.scss handle it natively:
+.ai-debug-detail .o_notebook {
+    .nav-tabs { ... }  // REMOVE
+    .o_notebook_content { ... }  // REMOVE (or keep only layout rules, not color rules)
 }
 ```
 
-The sidebar tree component renders recursively from `state.loops`, naturally handling nested loops.
+Keep only structural/layout rules (flex, overflow) and remove all color properties. Test both light and dark modes after removal to confirm the Notebook's native theming is adequate. If the native Notebook styles are insufficient (e.g., the tab indicator color is wrong in dark mode), create a dedicated `app.dark.scss` file following the Odoo pattern and set the CSS custom property variables there:
 
-On the Python side, the bus event for `ai_debug/loop_start` must include `parent_loop_id` (null for top-level loops). This field must be in the schema from the first version, even if it is always null in v1.1.
+```scss
+// app.dark.scss — only if needed
+.ai-debug-detail .o_notebook {
+    --Notebook__link-border-top-color--active: #{$o-action};
+}
+```
 
 **Warning signs:**
 
-- Flat `state.loops = [{loop_id, iterations: [...]}, ...]` without a `parent_loop_id` field
-- The bus event schema does not include `parent_loop_id` in the payload dict
-- Sidebar tree uses a simple `<ul><li>` with no recursive component structure
+- Notebook tabs render correctly in one theme but not the other after SCSS variable migration
+- Browser devtools shows the `.nav-link` getting a background from `app.scss` that conflicts with `--Notebook__link-background-color`
+- The active tab indicator (the colored top border) is the wrong color in one of the two modes
 
-**Phase to address:** Phase 2 (Bus Event Schema) and Phase 3 (Sidebar Tree)
+**Phase to address:** Phase 2 (Component-specific overrides) — after the main variable replacement
 
 ---
 
-### Pitfall 9: `_build_bus_channel_list` Override Access Check Missing After DB Models Removed
+### Pitfall 4: `.o_dialog` Dark Overrides Conflict With Bootstrap Modal Variables
 
 **What goes wrong:**
 
-In v1.0, the `ir.websocket` override checks `self.env.user.has_group('base.group_system')` and strips `ai_debug:` channels for non-system users. In v1.1, after removing the DB models, the channel names change (no more per-trace UUID channels — the schema may change). If the override is not updated to match the new channel naming scheme, either:
+The current `app.scss` (lines 618–638) overrides `.o_dialog .modal-content` and `.o_dialog .modal-header` with hardcoded Catppuccin colors. Bootstrap 5 in Odoo uses CSS custom properties on `.modal-content` (`--bs-modal-bg`, `--bs-modal-color`, `--bs-modal-border-color`). The dark bundle (`bootstrap_overridden.dark.scss`) overrides these CSS custom properties for dark mode.
 
-(a) The security check uses the old channel prefix pattern and passes all events through for non-system users because the new channels use a different prefix, or
+The hardcoded app override in `app.scss` sets `background-color: #1e1e2e` directly on `.modal-content`, which overrides the Bootstrap CSS custom property. This means:
+- In dark mode: the hardcoded Catppuccin color and the Bootstrap dark color are similar, so no visible problem
+- In light mode: the modal has a dark Catppuccin background on a light-themed page, making it look completely wrong
 
-(b) The check is too broad and strips channels from users who should have access (e.g., any internal user).
+Additionally, the `.btn-close { filter: invert(1) }` hack (which was needed to make the close button visible on a dark background) will make the close button look wrong in light mode, where the button is already dark-colored.
 
 **Why it happens:**
 
-The `ir_websocket.py` override is written once and forgotten. During the migration from DB-backed (per-trace UUID channels like `ai_debug:trace:{uuid}`) to pure streaming (e.g., `ai_debug:session:{session_key}`), the channel prefix changes. The security filter does a prefix match. If the new prefix doesn't match, the filter silently passes all events.
+The `.o_dialog` override was added in a quick-fix (quick-11: "fix dialog title not legible dark text on dark background") and solved an immediate problem. The fix was correct for a hardcoded dark theme. It becomes a problem when the theme is now dynamic.
 
 **How to avoid:**
 
-After changing the channel naming scheme, immediately update the `_build_bus_channel_list` override to match. Use a single canonical prefix (e.g., `ai_debug:`) that covers all debug channels regardless of schema changes within that namespace. The current override already does this correctly with `ch.startswith('ai_debug:')` — preserve this pattern and do not narrow it to specific sub-prefixes.
+Remove the color properties from the `.o_dialog` override block. Bootstrap 5's modal already has proper theming support via CSS custom properties. The dark bundle handles this automatically. Only keep structural overrides if needed:
 
-Decision: The access control should be `base.group_user` (any internal user) rather than `base.group_system` (only admin), since the project requires "any internal user (`base.group_user`)". The current override incorrectly restricts to system users only.
+```scss
+// Keep only if structural layout is needed:
+.o_dialog {
+    // No color overrides needed — Bootstrap's --bs-modal-* variables handle theming
+}
+```
+
+Remove `filter: invert(1)` from `.btn-close` — Bootstrap handles this in dark mode automatically via `$btn-close-color` and `$btn-close-filter` variables.
 
 **Warning signs:**
 
-- Non-admin internal users can't see the debug panel because the bus channel is stripped before delivery
-- A changed channel prefix (e.g., `ai_debug_session:` instead of `ai_debug:session:`) bypasses the security filter entirely
-- `ir.websocket` override is not updated alongside a channel naming change
+- TextPopupDialog appears dark-on-dark or light-on-dark depending on mode
+- The `X` close button in the dialog is invisible (too light) or inverted (too dark) in one of the two modes
+- Browser devtools shows `background-color: #1e1e2e` from `app.scss` overriding `--bs-modal-bg` set by Bootstrap
 
-**Phase to address:** Phase 1 (Migration) — must be updated atomically with channel naming changes
+**Phase to address:** Phase 2 (Component-specific overrides)
 
 ---
 
-### Pitfall 10: Generator Still Writing to Removed DB Models — RuntimeError on `env['ai.debug.trace']`
+### Pitfall 5: Dark-Only Asset Bundle Approach — Light Mode Gets No Bundle, App Breaks
 
 **What goes wrong:**
 
-After removing the model files, if the instrumentation code in `ai_session.py` still calls `env['ai.debug.trace'].create(vals)`, Odoo raises `KeyError: 'ai.debug.trace'` (model not in registry) at runtime. The agentic loop then raises, and the exception propagates to the user as a 500 error. Worse: if the exception happens inside the generator, the `yield` never completes, and any caller doing `yield from` also fails silently.
+When implementing the conditional bundle loading in the template, developers copy the webclient pattern:
 
-**Why it happens:**
+```xml
+<t t-if="color_scheme == 'dark'">
+    <t t-call-assets="ai_debug.assets_dark"/>  <!-- CSS only -->
+</t>
+<t t-else="">
+    <t t-call-assets="ai_debug.assets"/>       <!-- Always loads -->
+</t>
+```
 
-The migration removes the model Python files and bumps the module version, but the `ai_session.py` instrumentation code is not updated simultaneously. If the developer upgrades the module without doing a full Odoo restart, the old Python modules may still be in the import cache, masking the problem during development. It surfaces when the container restarts or in CI.
+The mistake is structuring the bundle so that `ai_debug.assets` is the "base" bundle (no dark files) and `ai_debug.assets_dark` is a separate bundle that includes the dark overrides. But the current `ai_debug.assets` bundle uses `('include', 'web.assets_backend')` which already includes ALL Odoo CSS (light mode, with `('remove', 'web/static/src/**/*.dark.scss')` applied). Adding a separate dark bundle that includes `web.assets_web_dark` alongside `ai_debug.assets` causes the entire backend CSS to be compiled twice into two separate bundles — expensive and slow.
+
+The correct approach (used by POS and the webclient) is:
+- The main bundle (`ai_debug.assets`) loads JS and light CSS
+- The dark bundle (`ai_debug.assets_dark`) uses `('include', 'ai_debug.assets')` PLUS dark overrides — it replaces the main bundle entirely in dark mode (not loads alongside it)
+
+Looking at the webclient template (lines 311-319): it loads JS once via `t-js="true"` (implicitly) from `web.assets_web`, then loads CSS-only from either `web.assets_web_dark` or `web.assets_web` based on the scheme. The JS is only loaded once.
 
 **How to avoid:**
 
-Make the model removal and the instrumentation update a single atomic commit. The `_debug_write_trace`, `_debug_write_iteration`, and `_debug_write_tool_call` methods in `ai_session.py` must be rewritten to call the new bus-only path **before** removing the model classes. Sequence:
+Follow the exact webclient and POS pattern:
 
-1. Add the new `_debug_send_event()` method (bus-only)
-2. Update all callers to use `_debug_send_event()`
-3. Remove DB write helper methods
-4. Remove model classes
-5. Bump version
+```xml
+<!-- Template: always load JS from the base bundle (t-css="false") -->
+<t t-call-assets="ai_debug.assets" t-css="false"/>
+
+<!-- Conditionally load the right CSS bundle (t-js="false") -->
+<t t-if="color_scheme == 'dark'">
+    <t t-call-assets="ai_debug.assets_dark" media="screen" t-js="false"/>
+</t>
+<t t-else="">
+    <t t-call-assets="ai_debug.assets" media="screen" t-js="false"/>
+</t>
+```
+
+In `__manifest__.py`:
+
+```python
+'assets': {
+    'ai_debug.assets': [
+        ('include', 'web.assets_backend'),
+        # Remove dark scss from the base bundle (light mode)
+        ('remove', 'ai_debug/static/src/**/*.dark.scss'),
+        'ai_debug/static/src/app/**/*.scss',
+        'ai_debug/static/src/app/**/*.xml',
+        'ai_debug/static/src/app/**/*.js',
+    ],
+    'ai_debug.assets_dark': [
+        ('include', 'web.dark_mode_variables'),
+        ('before', 'web_enterprise/static/src/scss/bootstrap_overridden.scss',
+                   'web_enterprise/static/src/scss/bootstrap_overridden.dark.scss'),
+        ('after', 'web/static/lib/bootstrap/scss/_functions.scss',
+                  'web_enterprise/static/src/scss/bs_functions_overridden.dark.scss'),
+        ('include', 'ai_debug.assets'),
+        'web_enterprise/static/src/**/*.dark.scss',
+        'ai_debug/static/src/**/*.dark.scss',  # your own dark overrides if any
+    ],
+    ...
+}
+```
 
 **Warning signs:**
 
-- `KeyError: 'ai.debug.trace'` in server logs after upgrade
-- The agentic loop raises a 500 during the first run after the module upgrade
-- `env.registry.models` does not contain `ai.debug.trace` but the code references it
+- Two full copies of Bootstrap CSS in the page (browser devtools shows duplicate `html, body { ... }` blocks)
+- Asset bundle compilation takes noticeably longer after adding the dark bundle
+- In dark mode, some Bootstrap elements have correct dark styling while others show double-applied styles causing visual glitches
 
-**Phase to address:** Phase 1 (Migration) — the removal and the rewrite are the same task
+**Phase to address:** Phase 1 (Asset bundle structure) — must be correct before any CSS work
 
 ---
 
-### Pitfall 11: Bus Events Accumulate in `bus_bus` Table Without GC — Disk Fills
+### Pitfall 6: RGBA Hardcoded Colors Are Invisible to Simple `grep` Audit
 
 **What goes wrong:**
 
-In v1.0, the debug data lived in `ai_debug_trace` with a configurable retention `@api.autovacuum` cron. In v1.1, all data is ephemeral — it lives only in the browser until page refresh. However, the bus messages sent to broadcast that data are still persisted in the `bus_bus` table. The default GC for `bus_bus` is 24 hours (`DEFAULT_GC_RETENTION_SECONDS = 86400`). During an active development session with many agentic loop runs (each with 10 iterations and 5 tool calls), this generates ~150 bus records per loop run. Over a day of development with 50 runs, that's 7,500 rows — small, but if each row contains a 32 KB payload (the "full payloads" design), that's 240 MB in `bus_bus` in one day.
+The `app.scss` contains several hardcoded colors expressed as `rgba()` rather than hex, for example:
+
+```scss
+&.ai-diff-added { background-color: rgba(166, 227, 161, 0.1); }    // Catppuccin Green
+&.ai-diff-removed { background-color: rgba(243, 139, 168, 0.1); }  // Catppuccin Red
+&.ai-diff-changed { background-color: rgba(249, 226, 175, 0.1); }  // Catppuccin Yellow
+.o_dialog .modal-backdrop { background: rgba(...); }
+.ai-tree-row.ancestor { background-color: rgba(137, 180, 250, 0.05); } // Catppuccin Blue
+```
+
+An audit searching for `#[0-9a-f]{3,6}` will find the hex values but miss all the `rgba()` values. The developer declares "all hardcoded colors replaced" after fixing the hex values, ships the PR, and then discovers in light mode that the diff cells have barely-visible Catppuccin-green tint on a white background (since the RGB values map to Catppuccin colors, not Odoo colors).
 
 **Why it happens:**
 
-Developers move trace storage out of custom tables (they notice the DB disk usage) but forget that `bus_bus` also stores all messages. The GC exists and runs automatically, but a 24-hour retention with large payloads is still a lot of disk.
+Semi-transparent colors (transparency composited over the background) were used intentionally because they let the background color show through. When using Catppuccin, this worked because the background was always dark. When the background becomes light, the same RGBA values produce a different visual result — the tint is more saturated and visible against white.
 
 **How to avoid:**
 
-Keep bus payloads small (see Pitfall 4). The `bus_bus` GC (`bus.gc_retention_seconds` ir.config_parameter) is already configurable — document this for deployers. For development, keep payloads at a few KB each; disk usage is then negligible. Do not try to manage `bus_bus` GC from within the module — the existing autovacuum handles it.
+Replace `rgba()` values using Odoo SCSS variable equivalents with opacity functions:
+
+```scss
+// Before:
+background-color: rgba(166, 227, 161, 0.1);  // success tint on Catppuccin
+
+// After:
+background-color: rgba($o-success, 0.1);     // success tint using Odoo variable
+// Or use Bootstrap's alpha utilities:
+background-color: rgba(var(--bs-success-rgb), 0.1);
+```
+
+For the ancestor row highlight:
+```scss
+// Before:
+background-color: rgba(137, 180, 250, 0.05);  // Catppuccin Blue
+
+// After:
+background-color: rgba($o-action, 0.05);       // Odoo action color
+```
+
+Run two grep passes during audit:
+1. `grep -n "#[0-9a-fA-F]\{3,6\}"` for hex values
+2. `grep -n "rgba\|rgb(" ` for RGB function calls
 
 **Warning signs:**
 
-- `SELECT pg_size_pretty(pg_total_relation_size('bus_bus'))` returns more than 100 MB after a day of development
-- `SELECT count(*), avg(length(message)) FROM bus_bus WHERE channel LIKE '%ai_debug%'` shows large average message sizes
-- Disk alert on the development machine after a week of AI debugging sessions
+- After variable migration, `grep -c "rgba\|rgb(" app.scss` returns more than 0
+- In light mode, the state diff grid has colored cell backgrounds that look oversaturated
+- The flash animation (`ai-tree-flash`) uses a hardcoded RGBA blue that doesn't match the new accent color
 
-**Phase to address:** Phase 2 (Bus Payload Design) — keeping payloads small prevents this entirely
+**Phase to address:** Phase 1 (Variable audit) — include rgba scan in the audit checklist
+
+---
+
+### Pitfall 7: `JsonTree` and `StateDiff` Rely on SCSS Classes With Hardcoded Colors — No Theme Awareness
+
+**What goes wrong:**
+
+`JsonTree` renders with classes like `.ai-json-key`, `.ai-json-string`, `.ai-json-number`, `.ai-json-boolean`, `.ai-json-null` that are styled in `app.scss` with hardcoded Catppuccin syntax colors. `StateDiff` uses `.ai-diff-cell.ai-diff-added` etc. with hardcoded RGBA background tints.
+
+These components have no internal color logic — they just apply CSS classes. The colors are entirely controlled by SCSS. So if `app.scss` is fully migrated to Odoo variables, these components automatically get theme-aware colors. There is no JS-level change needed in `json_tree.js` or `state_diff.js`.
+
+The pitfall is the inverse: developers assume the components have built-in theme awareness and skip migrating their SCSS rules. The classes are there; they work; the colors just happen to be wrong in light mode.
+
+**Why it happens:**
+
+Developers look at `json_tree.js` and `state_diff.js` and see no hardcoded colors — it's pure JS logic. They conclude "these components are theme-agnostic." They are, but only because their SCSS still has the hardcoded colors that need to be replaced.
+
+**How to avoid:**
+
+The components themselves do NOT need changes. Only `app.scss` does. Ensure the SCSS audit covers every rule that targets component-specific classes:
+
+```scss
+// These classes are entirely SCSS-driven — audit all of them:
+.ai-json-key      → replace #89b4fa with $o-action
+.ai-json-string   → replace #a6e3a1 with $o-success
+.ai-json-number   → replace #fab387 with $o-warning
+.ai-json-boolean  → replace #cba6f7 with $o-info
+.ai-json-null     → replace #585b70 with $o-gray-400
+.ai-json-preview  → replace #585b70 with $o-gray-400
+.ai-diff-key      → replace #89b4fa with $o-action
+.ai-diff-cell     → replace rgba() tints with rgba($o-success/danger/warning, 0.1)
+```
+
+For syntax highlighting in particular, Odoo has no dedicated syntax color tokens. Use the closest semantic color (success for strings, warning for numbers, info for booleans) — the result won't be identical to Catppuccin but will be coherent with the Odoo theme palette.
+
+**Warning signs:**
+
+- `json_tree.xml` or `state_diff.xml` are modified — they should not need any changes for theming
+- JSON string values appear green in dark mode but the same green is barely visible in light mode
+- The diff grid cells look correct in dark mode but wrong in light mode (hardcoded RGBA not adapted)
+
+**Phase to address:** Phase 1 (Variable audit and replacement) — part of the SCSS pass
+
+---
+
+### Pitfall 8: The `color_scheme` Cookie Is Read-Only at Request Time — Real-Time Switching Requires Reload
+
+**What goes wrong:**
+
+The `color_scheme` cookie is set by Odoo when the user changes their theme preference in the user menu. The standalone app reads the cookie server-side at request time (in the Python controller) and bakes the choice into the HTML (which asset bundle to load). This means: if the user changes their Odoo theme while the debug app is open in another tab, the debug app does NOT update automatically — it continues showing whichever bundle was loaded at page load time. The user must reload the debug app tab manually.
+
+This is expected and correct behavior (POS does the same thing). The pitfall is developers trying to implement real-time theme switching in the standalone app by reading `cookie.get("color_scheme")` in JavaScript and applying CSS classes dynamically — which does NOT work because the CSS bundles are already compiled and loaded as separate stylesheets. Dynamic class application cannot switch between entire compiled CSS bundles.
+
+**Why it happens:**
+
+The Odoo backend handles real-time theme switching via the `color_scheme_service` (enterprise only), which reloads the page when the color scheme changes. Developers see this behavior and try to replicate it in the standalone app without understanding the mechanism.
+
+**How to avoid:**
+
+Accept reload-on-switch as the correct behavior for the standalone app. Document this explicitly:
+- The debug app inherits the theme from the user's Odoo preference at the time the page loads
+- Changing the theme in Odoo requires reloading the debug app tab
+- Do NOT attempt real-time in-app theme switching via JavaScript class manipulation
+
+If real-time switching is wanted: reload the page when the `color_scheme` cookie changes. Listen for cookie changes via a polling interval or use the BroadcastChannel API (Odoo's color_scheme_service uses `localStorage` events for cross-tab coordination in the backend). For a developer tool, the reload approach is adequate.
+
+**Warning signs:**
+
+- JavaScript code reads `cookie.get("color_scheme")` and applies `document.body.classList.add('dark')` or similar — this will not swap CSS bundles
+- A `color_scheme_service` import appears in the standalone app's JS — this service is part of `web_enterprise.webclient` and may not initialize correctly in a standalone app context
+- Developer reports "I changed the theme but the debug app didn't update" — this is expected, not a bug, but must be documented
+
+**Phase to address:** Phase 1 (Theme detection) — decide the UX (reload-required) before building anything
 
 ---
 
@@ -400,12 +402,12 @@ Keep bus payloads small (see Pitfall 4). The `bus_bus` GC (`bus.gc_retention_sec
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Send full LLM payload in bus message | Simplest code path | Jank on each iteration; large `bus_bus` rows; possible browser WebSocket close 1009 | Never — split meta/detail |
-| Use `web.assets_backend` for standalone app without short-circuiting menu load | No new bundle to maintain | `loadMenusPromise` fails or causes unnecessary `/web/webclient/load_menus` RPC; navbar chrome leaks into standalone | Only if `loadMenusPromise = Promise.resolve({})` is added to the template |
-| Skip migration script for dropped models | Faster PR | Orphaned tables with no FK references accumulate silently; future reinstall may conflict on schema | Never — always write the DROP TABLE migration |
-| Keep `ir.model.access.csv` entries for removed models | Avoids merge conflicts | Odoo upgrade warns about unknown models; CSV entries are silently ignored but add confusion | Never — remove atomically with the model |
-| Use flat loops array instead of tree structure | Simpler state | Must rewrite when subagent events arrive; sidebar tree can't be extended without breaking existing event handling | Acceptable only if subagent support is explicitly deferred to v2 AND the event schema already includes `parent_loop_id: null` |
-| Reuse the v1.0 `_build_bus_channel_list` override unchanged | No code change needed | Access group may still be `group_system` when spec says `group_user`; channel prefix pattern may not match new names | Never — update atomically with channel renaming |
+| Replace only hex colors and leave `rgba()` | Faster audit | RGBA tints use Catppuccin RGB values; appear wrong in light mode | Never — must audit rgba() too |
+| Keep Notebook dark override block "just in case" | Avoids risk of visual regression | Conflicts with enterprise notebook.dark.scss; wrong colors in light mode | Never — test removal, use app.dark.scss if needed |
+| Leave `.o_dialog` color overrides in place | Nothing breaks in dark mode | Light mode shows dark modal on light page | Never — Bootstrap handles modal theming |
+| Replace main background but leave sub-component colors | Fast partial progress | Inconsistent theming — main bg is light but sidebars/panels are Catppuccin dark | Only if followed immediately by complete replacement |
+| Read `color_scheme` cookie in JS and apply class | No page reload needed on switch | CSS bundle swap via class is impossible; compiled bundles are static | Never — accept reload-on-switch |
+| Hardcode `ai_debug.assets_dark` to always include full `web.assets_backend_dark` | Simpler bundle definition | Double-compiles all Odoo CSS; asset compilation is significantly slower | Never — follow the `include ai_debug.assets` pattern |
 
 ---
 
@@ -413,13 +415,12 @@ Keep bus payloads small (see Pitfall 4). The `bus_bus` GC (`bus.gc_retention_sec
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| Standalone app template | Rendering a partial template fragment | Render a full `<!DOCTYPE html>` document with its own `<head>` and JS boot block |
-| `bus.bus._sendone` timing | Calling on main cursor and expecting real-time delivery | Use a separate short-lived cursor; commit immediately to trigger pg_notify at each iteration |
-| OWL `mountComponent` | Calling without `loadMenusPromise` set | Set `odoo.loadMenusPromise = Promise.resolve({})` before the asset bundle loads |
-| `ir.websocket._build_bus_channel_list` | Updating the prefix string without updating the override | Change the prefix and the filter in the same commit |
-| DB model removal | Removing `.py` files and assuming tables are cleaned up | Write a `pre-migrate.py` with explicit `DROP TABLE IF EXISTS ... CASCADE` |
-| Migration version bump | Bumping version in `__manifest__.py` without creating the migrations directory | Create `migrations/<new_version>/pre-migrate.py`; Odoo only runs migration scripts if the version string changes AND the file exists |
-| `fields.Json` in bus payload | Serializing datetime objects with `json.dumps` directly | Use `json.dumps(payload, default=json_default)` from `odoo.tools` |
+| Controller + `color_scheme` | Call `session_info()` only | Call `webclient_rendering_context()` which returns both `session_info` and `color_scheme` |
+| Dark bundle structure | Make `ai_debug.assets_dark` a self-contained bundle | Make it use `('include', 'ai_debug.assets')` plus dark-only overrides, following POS pattern |
+| Notebook theming | Write custom `.o_notebook .nav-tabs` overrides in `app.scss` | Remove color overrides entirely; enterprise `notebook.dark.scss` handles this via CSS custom properties |
+| Bootstrap modal theming | Set `background-color` on `.modal-content` | Let Bootstrap's `--bs-modal-bg` CSS custom property do it; dark bundle overrides it automatically |
+| SCSS variable scope | Use Bootstrap CSS custom properties (`var(--bs-body-bg)`) in SCSS | Use SCSS variables (`$o-view-background-color`) — they compile to the correct value per bundle |
+| `app.dark.scss` location | Put dark overrides in `app.scss` behind a media query | Create a separate `app.dark.scss` file following the `.dark.scss` naming convention; the dark bundle includes it automatically via glob |
 
 ---
 
@@ -427,21 +428,9 @@ Keep bus payloads small (see Pitfall 4). The `bus_bus` GC (`bus.gc_retention_sec
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Large bus payload in SharedWorker `postMessage` | Main thread jank (jank monitor shows >50ms frames) during active session | Cap bus payloads at ~32 KB; send meta + fetch-on-demand for detail | First session with RAG context (typically >50 KB) |
-| Separate cursor per bus send | N separate DB connections per loop iteration (one per iteration + one per tool call) | Batch multiple bus sends into a single cursor; or use the main cursor for non-real-time events | Under heavy concurrent use (>5 users debugging simultaneously) |
-| Recursive OWL component for deep subagent trees | Stack overflow rendering deeply nested loops | Set a max render depth (3–4 levels); use virtual scrolling for large trees | When subagents are introduced with >3 nesting levels |
-| `useState` with large array of objects | OWL reactive tracking overhead on every push | Keep state objects flat; use `loopsById` index map for O(1) lookup; avoid deeply nested reactive objects | After >100 iterations in a single session |
-
----
-
-## Security Mistakes
-
-| Mistake | Risk | Prevention |
-|---------|------|------------|
-| Debug channel accessible to any authenticated user | Any internal user can subscribe to another's debug session | `_build_bus_channel_list` override must verify user identity before adding channel; `base.group_user` is the minimum, not the absence of a check |
-| Full LLM prompt (including system instructions with PII) in bus payload | LLM prompts often contain customer record data; sending full payload to all internal users exposes it | Restrict bus delivery to the session owner; or send only summaries publicly and full detail only to the session owner's channel |
-| `auth='user'` on the debug route not enforcing internal user check | External portal users accessing the debug app | Add `request.env.user._is_internal()` check, mirroring the POS pattern (`is_internal_user = request.env.user._is_internal()`) |
-| CSRF token not included in standalone page template | JSON RPC calls from the standalone app fail with CSRF errors | Include `csrf_token: request.csrf_token(None)` in the `odoo` JS global in the template, as POS does |
+| Dark bundle includes full `web.assets_backend` twice | Asset compilation takes 2–3x longer; page load has two full Bootstrap blocks | Use `('include', 'ai_debug.assets')` in the dark bundle (not `web.assets_backend`) | First run after adding the dark bundle to the manifest |
+| All colors in one `app.scss` vs split light/dark | No performance issue | Creates maintainability debt — dark overrides mixed with light defaults | Not a runtime trap; only a maintenance issue |
+| Checking `cookie.get("color_scheme")` on every render | Negligible for a developer tool | Cookie reads are synchronous and fast; not a performance concern at this scale | Never breaks at this scale |
 
 ---
 
@@ -449,23 +438,26 @@ Keep bus payloads small (see Pitfall 4). The `bus_bus` GC (`bus.gc_retention_sec
 
 | Pitfall | User Impact | Better Approach |
 |---------|-------------|-----------------|
-| Sidebar collapses to top-level loops only on reconnect | All expanded detail panels reset when WebSocket reconnects | Store selected/expanded state in `sessionStorage`, restore on reconnect |
-| Detail panel shows JSON blob with no structure | Large unformatted JSON is unreadable | The existing `JsonTree` component from v1.0 handles this — carry it forward unchanged |
-| No visual distinction between running and completed loops in the sidebar | Developer can't tell at a glance which loop is active | Use a distinct visual indicator (spinner, color) for `state === 'running'` loops; gray out completed ones |
-| "Waiting for session" state has no timeout indicator | Developer opens panel, nothing happens, wonders if it's broken | Show elapsed time in "waiting" state: "Listening for next session... (0:23 elapsed)" |
+| Syntax highlight colors don't match Odoo palette | JSON tree colors look out-of-place in light mode (Catppuccin green on white is jarring) | Map Catppuccin colors to Odoo semantic equivalents (`$o-success` for strings, etc.) |
+| Status dot colors hardcoded (connected=green, disconnected=red) | Status dot always shows Catppuccin green/red regardless of theme | Replace with `$o-success` and `$o-danger` — these are correctly themed |
+| Flash animation uses hardcoded Catppuccin blue | New trace flash effect looks wrong against light background | Use `rgba($o-action, 0.3)` for the flash start color |
+| "Looks dark on a dark page" passes visual QA | Developer tests in dark mode (matching current theme) and approves; light mode bugs escape | Always test BOTH modes after any CSS change — use a simple toggle script |
+| No visual indication that the app theme follows Odoo settings | Developer confused why changing the app's appearance requires going to Odoo settings | Add a tooltip or help text noting the theme follows Odoo user preferences |
 
 ---
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **Standalone app auth gate:** Navigate to `/ai-debug` while logged out — verify redirect to `/web/login` with correct redirect param, not a 500 or blank page.
-- [ ] **Session info embedded:** Open the page source of `/ai-debug` — verify `odoo.__session_info__` contains `uid`, `db`, and `csrf_token` in the inline script block.
-- [ ] **DB tables removed:** After running `odoo -u ai_debug`, check `\dt ai_debug*` in psql — the tables must not exist.
-- [ ] **Bus event timing:** Start an agentic loop and watch the debug panel in real time — iteration cards must appear one by one during execution, not all at once after the loop finishes.
-- [ ] **Sidebar selection survives bus events:** Click on iteration #1, then trigger a new tool call. Verify iteration #1 detail panel remains selected and does not collapse.
-- [ ] **Non-admin internal user access:** Log in as a non-admin internal user, navigate to `/ai-debug`, start an AI session — verify events arrive (not blocked by the channel security filter).
-- [ ] **Payload size check:** After a RAG-enabled session, run `SELECT max(length(message)) FROM bus_bus WHERE channel LIKE '%ai_debug%'` — result must be under 65536 bytes.
-- [ ] **parent_loop_id in schema:** Inspect a `ai_debug/loop_start` bus event payload — verify `parent_loop_id` key is present (even if null) before subagent support is added.
+- [ ] **Complete variable replacement:** `grep -n "#[0-9a-fA-F]\{3,6\}\|rgba\|rgb(" app.scss` returns zero results after migration
+- [ ] **Dark bundle loads in dark mode:** Open `/ai-debug` in dark mode; browser devtools Network tab shows two CSS bundle requests (one for base, one for `assets_dark`)
+- [ ] **Light mode passes visual review:** Switch Odoo to light mode, reload `/ai-debug`, verify no dark backgrounds visible anywhere in the app UI
+- [ ] **Notebook tabs themed correctly in both modes:** In light mode, inactive tabs have light background; in dark mode, they have `$o-gray-300` background — as defined by `notebook.dark.scss`
+- [ ] **Dialog renders correctly in both modes:** Open TextPopupDialog in both modes; modal header, body, and close button all have appropriate colors for the theme
+- [ ] **JsonTree syntax colors readable in both modes:** Verify string (green), number (orange), boolean (purple/blue), null (gray) are legible against both light and dark backgrounds
+- [ ] **StateDiff tints visible in both modes:** Added/removed/changed cells show visible but subtle color tints in both light and dark backgrounds
+- [ ] **Status dot uses correct Odoo colors:** Connected = `$o-success` green, Disconnected = `$o-danger` red — verify these look correct in both modes
+- [ ] **Controller passes `color_scheme`:** Check rendered HTML source — the `<link>` tags should include the dark CSS bundle file when `color_scheme=dark` cookie is set
+- [ ] **RGBA audit complete:** No `rgba(166,` or `rgba(243,` or `rgba(137,` or `rgba(249,` literal RGB values remain (these are Catppuccin RGB triples)
 
 ---
 
@@ -473,14 +465,12 @@ Keep bus payloads small (see Pitfall 4). The `bus_bus` GC (`bus.gc_retention_sec
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Wrong asset bundle (no services) | LOW | Add `loadMenusPromise` short-circuit to template; correct bundle reference in manifest |
-| Missing session info in template | LOW | Add `session_info` to controller context and `odoo.__session_info__` to template |
-| Orphaned DB tables after model removal | LOW | Write and run `DROP TABLE IF EXISTS ... CASCADE` migration; re-upgrade module |
-| Large bus payloads causing jank | MEDIUM | Refactor bus events to meta-only; add JSON RPC detail endpoint; frontend change to fetch on demand |
-| Bus events batching (main cursor) | MEDIUM | Refactor send helpers to use separate cursors; requires testing each iteration yields a separate pg_notify |
-| Generator still writes to removed models | HIGH | Emergency hotfix: add `try/except KeyError` guard in capture methods while the proper rewrite is prepared; deploy proper fix (rewrite + model removal) as the follow-up |
-| Sidebar loses state on every bus event | LOW | Add `t-key` on all tree nodes; switch from array replacement to `push()` mutation |
-| Access check wrong group (`group_system` not `group_user`) | LOW | Update `_build_bus_channel_list` override; test with non-admin user |
+| Controller missing `color_scheme` | LOW | Add `webclient_rendering_context()` call; update template conditional; restart server |
+| Partial variable replacement (hex done, rgba missed) | LOW | Run rgba audit; replace remaining rgba() values with `rgba($o-variable, opacity)` |
+| Notebook override conflict | LOW | Delete color properties from the override block; test both modes |
+| Dialog dark override conflicts | LOW | Delete color overrides from `.o_dialog` block; test both modes |
+| Dark bundle double-compiles Odoo CSS | MEDIUM | Restructure the dark bundle to use `('include', 'ai_debug.assets')` instead of `('include', 'web.assets_backend')` |
+| Tried real-time JS theme switching | MEDIUM | Remove JS theme switching code; implement page reload on cookie change instead |
 
 ---
 
@@ -488,36 +478,36 @@ Keep bus payloads small (see Pitfall 4). The `bus_bus` GC (`bus.gc_retention_sec
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Standalone app wrong asset bundle / no services | Phase 1: Scaffold | Navigate to `/ai-debug`; `useService('bus_service')` does not throw |
-| Missing `session_info` in template | Phase 1: Scaffold | Check page source for `odoo.__session_info__` containing uid |
-| Orphaned DB tables after model removal | Phase 1: DB Migration | `\dt ai_debug*` shows no tables after upgrade |
-| Generator still references removed models | Phase 1: DB Migration | Run an agentic loop immediately after upgrade; no KeyError in logs |
-| Access check wrong group | Phase 1: Migration | Non-admin internal user can see debug panel events |
-| Large bus payloads | Phase 2: Bus Design | `max(length(message))` < 65536 after RAG session |
-| Bus events batch-fire at end instead of real-time | Phase 2: Bus Design | Events arrive one-by-one during execution in the panel |
-| Bus payload accumulation in `bus_bus` | Phase 2: Bus Design | Payload size kept small; disk usage negligible after 1 day |
-| `parent_loop_id` missing from event schema | Phase 2: Bus Design | Event payloads contain `parent_loop_id` key |
-| Sidebar loses selection on bus events | Phase 3: Sidebar Tree | Click iteration; trigger new tool call; selection stable |
-| Subagent events arrive with unknown parent | Phase 3: Sidebar Tree | LoopsById index handles unknown parent gracefully |
-| OWL app mounted on wrong element / conflicts with backend | Phase 1: Scaffold | Navigate from backend to `/ai-debug` in new tab; no OWL conflicts in console |
+| Controller missing `color_scheme` | Phase 1: Theme detection | HTML source shows dark CSS `<link>` when cookie is dark |
+| Asset bundle loads wrong bundle | Phase 1: Bundle structure | DevTools Network shows two CSS bundles in dark mode, one in light |
+| Hex hardcoded colors not replaced | Phase 1: Variable audit | `grep "#[0-9a-f]\{3,6\}" app.scss` returns 0 results |
+| RGBA hardcoded colors missed | Phase 1: Variable audit | `grep "rgba(1\|rgba(2\|rgba(9" app.scss` returns 0 results |
+| Notebook override conflict | Phase 2: Component overrides | Notebook tabs correctly themed in both modes without app.scss color rules |
+| Dialog dark override conflict | Phase 2: Component overrides | TextPopupDialog looks correct in both modes without app.scss color rules |
+| JsonTree colors not adapted | Phase 1: Variable audit | JSON strings/numbers/booleans legible in both modes |
+| StateDiff tints not adapted | Phase 1: Variable audit | Diff cells have subtle tints in both modes |
+| Real-time switching attempted | Phase 1: Architecture decision | No `cookie.get("color_scheme")` in JS for visual switching; only reload-on-switch |
+| Full audit misses rgba() | Phase 1: QA | Both grep passes return 0 after migration |
 
 ---
 
 ## Sources
 
-- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/bus/models/bus.py` — `_sendone` precommit/postcommit mechanism, `NOTIFY_PAYLOAD_MAX_LENGTH` (applies to pg_notify channel list, not message content), `MESSAGE_MAX_SIZE = 2**20` is inbound WebSocket frame limit only
-- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/bus/websocket.py` — `MESSAGE_MAX_SIZE = 2 ** 20`, outbound frame handling in `_send_frame()`, rate limiting config
-- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/views/pos_assets_index.xml` — `loadMenusPromise = Promise.resolve()` pattern, `__session_info__` embedding, CSRF token inclusion
-- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/controllers/main.py` — `session_info()` call, `is_internal_user` check, `Cache-Control: no-store`
-- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/__manifest__.py` — `point_of_sale.base_app` bundle including bus services explicitly
-- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/static/src/app/main.js` — `mountComponent` pattern for standalone OWL app boot
-- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/static/src/env.js` — `mountComponent`, `startServices`, `makeEnv` implementation
-- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/controllers/home.py` — `web_client` route, `auth="none"` with manual UID check, `session_info` rendering
-- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/odoo/addons/base/models/ir_module.py` — `module_uninstall` does NOT drop tables, only removes `ir_model_data` entries
-- Direct source inspection: `/Users/joseph/clones/odoo/custom/ai_debug/models/ai_session.py` — current v1.0 instrumentation, separate cursor pattern for bus sends
-- Direct source inspection: `/Users/joseph/clones/odoo/custom/ai_debug/models/ir_websocket.py` — existing `_build_bus_channel_list` override with `group_system` check (should be `group_user` for v1.1)
-- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/spreadsheet_edition/models/ir_websocket.py` — reference implementation of `_build_bus_channel_list` with access check pattern
+- Direct source inspection: `/Users/joseph/clones/odoo/custom/ai_debug/static/src/app/app.scss` — 650 lines, ~40 hardcoded hex values, rgba() tints in diff grid and flash animation, Notebook + Dialog dark overrides
+- Direct source inspection: `/Users/joseph/clones/odoo/custom/ai_debug/controllers/main.py` — current controller calls `session_info()` only, missing `color_scheme`
+- Direct source inspection: `/Users/joseph/clones/odoo/custom/ai_debug/views/ai_debug_index.xml` — template has no `color_scheme` conditional, loads only `ai_debug.assets`
+- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/models/ir_http.py` — `webclient_rendering_context()` returns both `color_scheme` and `session_info`; base `color_scheme()` always returns `"light"`
+- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/models/ir_http.py` — enterprise override reads `color_scheme` cookie AND `res.users.settings_id.color_scheme`
+- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/views/webclient_templates.xml` lines 311–319 — JS loaded once with `t-css="false"`; CSS loaded conditionally with `t-js="false"`
+- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/point_of_sale/views/pos_assets_index.xml` — uses `request.cookies.get('pos_color_scheme') == 'dark'` conditional with separate `assets_prod_dark` bundle
+- Direct source inspection: `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/__manifest__.py` — `web.assets_backend` removes `*.dark.scss`; `web.assets_web_dark` includes `web.assets_web` plus all `*.dark.scss`
+- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/__manifest__.py` — `web.dark_mode_variables` pattern; `web.assets_web_dark` uses `('include', 'web.dark_mode_variables')` plus dark SCSS files
+- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/static/src/scss/primary_variables.dark.scss` — defines dark palette: `$o-gray-100: #1B1D26`, `$o-gray-200: #262A36`, `$o-view-background-color: $o-gray-200`, `$o-webclient-background-color: $o-gray-100`
+- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/static/src/scss/primary_variables.scss` — defines light palette: `$o-gray-100: #F9FAFB`, `$o-gray-200: #e7e9ed`, `$o-view-background-color` (inherited from web module)
+- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/static/src/core/notebook/notebook.dark.scss` — sets CSS custom properties `--Notebook__link-background-color`, `--Notebook__link-border-color` etc. on `.o_notebook`
+- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/web_enterprise/static/src/core/notebook/notebook.scss` — uses those custom properties via `var()` in `.nav-link`
+- Direct source inspection: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/pos_enterprise/__manifest__.py` — `point_of_sale.assets_prod_dark` uses `('include', 'web.dark_mode_variables')` plus dark SCSS, confirming the pattern for standalone dark bundles
 
 ---
-*Pitfalls research for: Odoo AI Debugger v1.1 — standalone OWL app + bus.bus streaming migration*
-*Researched: 2026-02-20*
+*Pitfalls research for: Odoo AI Debugger v1.2 — native Odoo theming migration*
+*Researched: 2026-02-22*
