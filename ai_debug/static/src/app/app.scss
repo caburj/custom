@@ -536,6 +536,11 @@
     white-space: pre-wrap;
     word-break: break-all;
     margin: 0;
+
+    &.ai-detail-confirmation-message {
+        font-family: inherit;
+        font-size: 13px;
+    }
 }
 
 // JSON tree viewer

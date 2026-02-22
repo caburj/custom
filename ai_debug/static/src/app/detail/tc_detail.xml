@@ -58,7 +58,7 @@
                         <span>Confirmation Info</span>
                         <span class="badge text-bg-warning ms-2">Confirmation Required</span>
                     </div>
-                    <div class="ai-detail-confirmation-content p-3" t-out="props.toolCall.confirmation_message"/>
+                    <pre class="ai-detail-text-block ai-detail-confirmation-message" t-esc="props.toolCall.confirmation_message"/>
                 </div>
             </t>
         </Notebook>
