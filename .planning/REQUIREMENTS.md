@@ -51,24 +51,24 @@ Requirements for v1.2 Native Theming. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INFRA-01 | — | Pending |
-| INFRA-02 | — | Pending |
-| INFRA-03 | — | Pending |
-| SCSS-01 | — | Pending |
-| SCSS-02 | — | Pending |
-| SCSS-03 | — | Pending |
-| SCSS-04 | — | Pending |
-| SCSS-05 | — | Pending |
-| COMP-01 | — | Pending |
-| COMP-02 | — | Pending |
-| DARK-01 | — | Pending |
-| DARK-02 | — | Pending |
+| INFRA-01 | Phase 8 | Pending |
+| INFRA-02 | Phase 8 | Pending |
+| INFRA-03 | Phase 8 | Pending |
+| SCSS-01 | Phase 9 | Pending |
+| SCSS-02 | Phase 9 | Pending |
+| SCSS-03 | Phase 9 | Pending |
+| SCSS-04 | Phase 9 | Pending |
+| SCSS-05 | Phase 9 | Pending |
+| COMP-01 | Phase 9 | Pending |
+| COMP-02 | Phase 9 | Pending |
+| DARK-01 | Phase 9 | Pending |
+| DARK-02 | Phase 9 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 12 total
-- Mapped to phases: 0
-- Unmapped: 12
+- Mapped to phases: 12
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-22*
-*Last updated: 2026-02-22 after initial definition*
+*Last updated: 2026-02-22 after roadmap creation (phases 8-9)*

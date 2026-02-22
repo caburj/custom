@@ -10,10 +10,14 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 ## Current Position
 
 Milestone: v1.2 Native Theming
-Phase: Not started (defining requirements)
+Phase: 8 — Theme Infrastructure
 Plan: —
-Status: Defining requirements
-Last activity: 2026-02-22 — Milestone v1.2 started
+Status: Roadmap complete, ready for planning
+Last activity: 2026-02-22 — v1.2 roadmap created (phases 8-9)
+
+```
+v1.2 progress: [░░░░░░░░░░] 0% — Phase 8 not started
+```
 
 ## Accumulated Context
 
@@ -22,6 +26,14 @@ Last activity: 2026-02-22 — Milestone v1.2 started
 Decisions are logged in PROJECT.md Key Decisions table.
 All v1.1 decisions archived — see `.planning/milestones/v1.1-ROADMAP.md` for full list.
 
+### v1.2 Key Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| 2 phases for v1.2 (not 3+) | Infrastructure and CSS migration are the only natural delivery boundary; "quick" depth confirms aggressive compression |
+| COMP-01/COMP-02 in Phase 9 (not Phase 8) | Notebook and Dialog override removal is a CSS operation — it belongs with the CSS migration, not the wiring phase |
+| DARK-01/DARK-02 in Phase 9 | Dark accent file and badge verification are part of the CSS migration deliverable, not a separate phase |
+
 ### Pending Todos
 
 None.
@@ -29,6 +41,7 @@ None.
 ### Blockers/Concerns
 
 - Payload size for RAG-enabled sessions unknown — needs empirical baseline before meta/detail split strategy
+- Bootstrap secondary/tertiary CSS custom properties (`--secondary-bg`, etc.) may not be emitted at `:root` due to `$enable-dark-mode: false` — use `$o-gray-*` SCSS variables throughout Phase 9, not CSS custom properties
 
 ### Quick Tasks Completed
 
@@ -45,5 +58,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Started v1.2 milestone
+Stopped at: v1.2 roadmap created — phases 8-9 defined
 Resume file: None
