@@ -97,7 +97,16 @@ export function writeTrace(trace) {
  * Exposed for Phase 11's delete feature.
  */
 export async function deleteTrace(traceId) {
-    return idb.delete(STORE, traceId);
+    return idb.execute((db) => {
+        if (!db) return;
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE, "readwrite");
+            tx.objectStore(STORE).delete(traceId);
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+            tx.commit();
+        });
+    });
 }
 
 /**

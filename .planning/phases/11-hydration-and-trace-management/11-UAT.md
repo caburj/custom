@@ -3,7 +3,7 @@ status: complete
 phase: 11-hydration-and-trace-management
 source: 11-01-SUMMARY.md, 11-02-SUMMARY.md
 started: 2026-02-22T20:00:00Z
-updated: 2026-02-22T20:12:00Z
+updated: 2026-02-22T20:15:00Z
 ---
 
 ## Current Test
@@ -42,9 +42,10 @@ result: pass
 
 ### 8. Bulk delete selected traces
 expected: Check one or more traces, then click the delete button. The checked traces should be removed from the sidebar and from IndexedDB (they should not reappear on refresh).
-result: issue
+result: pass (fixed)
 reported: "they're deleted, but they reappear after refresh."
 severity: major
+fix: "idb.delete() does not exist on Odoo IndexedDB class — replaced with idb.execute() using raw readwrite transaction"
 
 ### 9. Delete button disabled when none selected
 expected: When no trace checkboxes are checked, the delete button in the header should appear disabled (grayed out, unclickable).
@@ -57,20 +58,22 @@ result: pass
 ## Summary
 
 total: 10
-passed: 9
-issues: 1
+passed: 10
+issues: 0
 pending: 0
 skipped: 0
 
 ## Gaps
 
 - truth: "Checked traces are removed from sidebar and from IndexedDB (they should not reappear on refresh)"
-  status: failed
+  status: fixed
   reason: "User reported: they're deleted, but they reappear after refresh."
   severity: major
   test: 8
-  root_cause: ""
-  artifacts: []
+  root_cause: "idb.delete() does not exist on Odoo IndexedDB class — used idb.execute() with raw readwrite transaction instead"
+  artifacts:
+    - path: "ai_debug/static/src/app/db.js"
+      issue: "deleteTrace called non-existent idb.delete() method"
   missing: []
   debug_session: ""
 
