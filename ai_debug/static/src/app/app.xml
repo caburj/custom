@@ -57,6 +57,7 @@
                             <t t-esc="trace.agent_name or 'Unknown Agent'"/>
                             <span class="ai-tree-label-dim"> &#xB7; <t t-esc="trace.model_name or ''"/></span>
                         </span>
+                        <span t-if="trace.hydrated" class="ai-tree-hydrated-badge" title="Loaded from storage">archived</span>
                         <!-- Status indicator -->
                         <span t-if="trace.status === 'running'" class="ai-debug-pulse-dot small"/>
                         <span t-elif="trace.status === 'success'" class="ai-tree-status success">&#x2713;</span>

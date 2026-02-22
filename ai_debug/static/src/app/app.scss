@@ -269,6 +269,14 @@
     color: $o-danger;
 }
 
+.ai-tree-hydrated-badge {
+    font-size: 0.7em;
+    opacity: 0.55;
+    font-style: italic;
+    margin-left: 4px;
+    flex-shrink: 0;
+}
+
 // Status icons (success checkmark, error X, warn pause)
 .ai-tree-status {
     margin-left: auto;

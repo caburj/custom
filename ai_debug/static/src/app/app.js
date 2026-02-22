@@ -5,7 +5,43 @@ import { MainComponentsContainer } from "@web/core/main_components_container";
 import { LoopDetail } from "./detail/loop_detail";
 import { IterationDetail } from "./detail/iter_detail";
 import { ToolCallDetail } from "./detail/tc_detail";
-import { probeIDB, writeTrace } from "./db";
+import { probeIDB, writeTrace, loadAllTraces } from "./db";
+
+/**
+ * Reconstruct a reactive trace object from a plain IDB-stored record.
+ *
+ * IDB stores iterations and toolCalls as [id, record] pair arrays (from
+ * serializeTrace's .entries() serialization). Dates are ISO strings from
+ * the JSON round-trip in writeTrace(). This function reverses both
+ * transformations and wraps nested Maps in reactive() so that bus event
+ * handlers (.set() calls) trigger OWL re-renders after hydration.
+ *
+ * hydrated: true is a permanent marker — never removed — used by the
+ * template to display the "archived" badge.
+ */
+function hydrateTrace(plain) {
+    const iterations = reactive(new Map());
+    for (const [iterId, iter] of plain.iterations ?? []) {
+        const toolCalls = reactive(new Map());
+        for (const [tcId, tc] of iter.toolCalls ?? []) {
+            toolCalls.set(tcId, tc);
+        }
+        iterations.set(iterId, {
+            ...iter,
+            receivedAt: iter.receivedAt ? new Date(iter.receivedAt) : null,
+            expanded: false,
+            toolCalls,
+        });
+    }
+    return {
+        ...plain,
+        started_at: plain.started_at ? new Date(plain.started_at) : null,
+        ended_at: plain.ended_at ? new Date(plain.ended_at) : null,
+        expanded: false,
+        hydrated: true,
+        iterations,
+    };
+}
 
 export class AiDebugApp extends Component {
     static template = "ai_debug.App";
@@ -150,13 +186,25 @@ export class AiDebugApp extends Component {
         };
 
         // ----------------------------------------------------------------
-        // IDB availability probe — runs before first render so no flash
+        // IDB availability probe + hydration — runs before first render so no flash
         // ----------------------------------------------------------------
         onWillStart(async () => {
             const available = await probeIDB();
             if (!available) {
                 console.warn("[ai_debug] IndexedDB unavailable — running in ephemeral mode");
                 this.state.ephemeralMode = true;
+                return;
+            }
+            // Hydrate from IDB before first render (PERS-02)
+            const stored = await loadAllTraces();
+            for (const plain of stored) {
+                this.traces.set(plain.trace_id, hydrateTrace(plain));
+            }
+            // Auto-select first trace if any hydrated (SESS-03: auto-select when nothing selected)
+            if (this.state.selectedId === null && this.traces.size > 0) {
+                const firstKey = [...this.traces.keys()].at(-1); // at(-1) = top of reversed list
+                this.state.selectedId = firstKey;
+                this.state.selectedType = "trace";
             }
         });
 
