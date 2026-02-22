@@ -9,10 +9,10 @@ Requirements for local persistence milestone. Each maps to roadmap phases.
 
 ### Persistence
 
-- [ ] **PERS-01**: Traces auto-persist to IndexedDB as bus events arrive (fire-and-forget, non-blocking)
+- [x] **PERS-01**: Traces auto-persist to IndexedDB as bus events arrive (fire-and-forget, non-blocking)
 - [ ] **PERS-02**: All traces hydrate from IndexedDB on page load before first render (no flash of empty state)
 - [ ] **PERS-03**: Live bus events continue to update the UI in real time after hydration without regression
-- [ ] **PERS-04**: App degrades gracefully to ephemeral mode if IndexedDB is unavailable (e.g. private browsing)
+- [x] **PERS-04**: App degrades gracefully to ephemeral mode if IndexedDB is unavailable (e.g. private browsing)
 
 ### Trace Management
 
@@ -65,8 +65,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PERS-01 | Phase 10 | Pending |
-| PERS-04 | Phase 10 | Pending |
+| PERS-01 | Phase 10 | Complete |
+| PERS-04 | Phase 10 | Complete |
 | PERS-02 | Phase 11 | Pending |
 | PERS-03 | Phase 11 | Pending |
 | MGMT-01 | Phase 11 | Pending |

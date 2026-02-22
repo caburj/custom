@@ -46,7 +46,7 @@ Full details: `.planning/milestones/v1.2-ROADMAP.md`
 
 **Milestone Goal:** Persist traces locally via IndexedDB so they survive page refresh, with delete/clear and export/import capabilities.
 
-- [ ] **Phase 10: IDB Layer and Write-Through** - Create db.js, define schema, wire fire-and-forget writes into bus event handlers
+- [x] **Phase 10: IDB Layer and Write-Through** - Create db.js, define schema, wire fire-and-forget writes into bus event handlers (completed 2026-02-22)
 - [ ] **Phase 11: Hydration and Trace Management** - Load traces from IDB on startup, implement delete and clear-all controls
 - [ ] **Phase 12: Export and Import** - Download all traces as JSON file, import from previously exported file with validation
 
@@ -61,7 +61,7 @@ Full details: `.planning/milestones/v1.2-ROADMAP.md`
   2. The UI never pauses or jitters during a fast agentic loop — bus events render without delay regardless of IDB write activity
   3. In a private browsing window where IndexedDB is blocked, the app opens and captures traces normally (ephemeral mode, no crash)
   4. Reloading the page while an agentic loop is still running does not corrupt any in-flight IDB record
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 Plans:
 - [ ] 10-01-PLAN.md — Create db.js IDB persistence module + wire write-through and ephemeral mode into app
 
@@ -99,6 +99,6 @@ Plans:
 | 7. Detail Panel | v1.1 | 2/2 | Complete | 2026-02-21 |
 | 8. Theme Infrastructure | v1.2 | 1/1 | Complete | 2026-02-22 |
 | 9. SCSS Migration and Dark Accents | v1.2 | 3/3 | Complete | 2026-02-22 |
-| 10. IDB Layer and Write-Through | v1.3 | 0/? | Not started | - |
+| 10. IDB Layer and Write-Through | 1/1 | Complete   | 2026-02-22 | - |
 | 11. Hydration and Trace Management | v1.3 | 0/? | Not started | - |
 | 12. Export and Import | v1.3 | 0/? | Not started | - |

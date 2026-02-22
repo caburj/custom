@@ -10,24 +10,24 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 ## Current Position
 
 Phase: 10 of 12 (IDB Layer and Write-Through)
-Plan: — (not yet planned)
-Status: Ready to plan
-Last activity: 2026-02-22 — v1.3 roadmap created, phases 10-12 defined
+Plan: 1 of 1 complete
+Status: Phase 10 complete — ready for Phase 11
+Last activity: 2026-02-22 — completed plan 10-01 (IDB write-through and ephemeral mode)
 
-Progress: [░░░░░░░░░░] 0% (v1.3)
+Progress: [█░░░░░░░░░] 10% (v1.3)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0 (v1.3)
-- Average duration: —
-- Total execution time: —
+- Total plans completed: 1 (v1.3)
+- Average duration: ~15 minutes
+- Total execution time: ~15 minutes
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| — | — | — | — |
+| 10 | 1 | ~15m | ~15m |
 
 *Updated after each plan completion*
 
@@ -45,6 +45,13 @@ Key decisions for v1.3 (pre-implementation):
 - Delete is always dual: reactive Map delete + `db.deleteTrace()` in same operation
 - IDB schema: database `ai_debug_traces`, version 1, single store `traces`, keyPath = `trace_id`
 
+Key decisions from Phase 10 execution:
+- trace_id from backend is uuid.uuid4().hex — safe to use directly as IDB key, no client-side UUID needed
+- writeTrace is non-async, returns raw Promise — caller uses .catch() for error handling
+- serializeTrace is internal (not exported) — all IDB knowledge confined to db.js
+- Ephemeral indicator uses text label "Ephemeral" not Unicode — more reliable cross-platform
+- Tool call fields explicitly enumerated in serializeTrace (not spread) — produces well-defined schema for Phase 12
+
 ### Pending Todos
 
 None.
@@ -57,5 +64,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Roadmap created — phases 10-12 defined, ready to plan Phase 10
+Stopped at: Completed plan 10-01 (IDB write-through and ephemeral mode) — Phase 10 complete
 Resume file: None
