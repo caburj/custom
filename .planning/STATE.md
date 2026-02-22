@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 Milestone: v1.2 Native Theming — SHIPPED 2026-02-22
 Phase: All complete (Phases 8-9)
 Status: Milestone archived, ready for next milestone
-Last activity: 2026-02-22 - Completed quick task 14: Add Alt/Option+Click recursive expand/collapse to JSON tree widget
+Last activity: 2026-02-22 - Completed quick task 15: Restyle JSON tree widget with vertical depth lines, key pills, and CSS truncation
 
 ```
 v1.2: [██████████] 100% — SHIPPED
@@ -45,9 +45,10 @@ None.
 | 12 | fix tool result styling add truncation | 2026-02-21 | c768d6f | [12-fix-tool-result-styling-add-truncation-a](./quick/12-fix-tool-result-styling-add-truncation-a/) |
 | 13 | fix white background on short string results | 2026-02-21 | 2fa87e7 | [13-fix-white-background-on-short-string-res](./quick/13-fix-white-background-on-short-string-res/) |
 | 14 | add Alt/Option+click recursive expand/collapse to JsonTree | 2026-02-22 | 46dd86c | [14-add-alt-option-click-recursive-expand-co](./quick/14-add-alt-option-click-recursive-expand-co/) |
+| 15 | restyle JSON tree with depth lines, key pills, CSS truncation | 2026-02-22 | afcfef5 | [15-restyle-json-tree-widget-with-vertical-d](./quick/15-restyle-json-tree-widget-with-vertical-d/) |
 
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Quick task 14 complete — Alt/Option+click recursive JsonTree expand/collapse
+Stopped at: Quick task 15 complete — JSON tree restyle with depth lines, key pills, CSS truncation
 Resume file: None
