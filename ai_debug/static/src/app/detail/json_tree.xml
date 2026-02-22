@@ -8,15 +8,13 @@
         <t t-if="isExpandable">
             <div class="ai-json-row">
                 <span class="ai-json-toggle" t-on-click="toggle">
-                    <t t-if="state.expanded">&#x25BE;</t>
-                    <t t-else="">&#x25B8;</t>
+                    <t t-if="state.expanded">&#x2212;</t>
+                    <t t-else="">+</t>
                 </span>
                 <t t-if="props.label">
-                    <span class="ai-json-key" t-esc="props.label"/>:
+                    <span class="ai-json-key" t-esc="props.label"/>
                 </t>
-                <t t-if="!state.expanded">
-                    <span class="ai-json-preview ai-json-value" t-esc="collapsedPreview"/>
-                </t>
+                <span class="ai-json-preview ai-json-value" t-esc="collapsedPreview"/>
             </div>
             <t t-if="state.expanded">
                 <t t-foreach="entries" t-as="entry" t-key="entry[0]">
@@ -35,14 +33,11 @@
             <div class="ai-json-row">
                 <span class="ai-json-toggle-placeholder"/>
                 <t t-if="props.label">
-                    <span class="ai-json-key" t-esc="props.label"/>:
+                    <span class="ai-json-key" t-esc="props.label"/>
                 </t>
-                <t t-if="isLongString">
+                <t t-if="type === 'string'">
                     <span class="ai-json-string ai-json-value ai-json-truncated" t-on-click="onClickLongString"
                           t-esc="displayValue" title="Click to expand"/>
-                </t>
-                <t t-elif="type === 'string'">
-                    <span class="ai-json-string ai-json-value" t-esc="displayValue"/>
                 </t>
                 <t t-elif="type === 'number'">
                     <span class="ai-json-number ai-json-value" t-esc="displayValue"/>
