@@ -99,3 +99,24 @@ export function writeTrace(trace) {
 export async function deleteTrace(traceId) {
     return idb.delete(STORE, traceId);
 }
+
+/**
+ * Load all stored traces from IndexedDB.
+ * Returns an array of plain serialized trace records.
+ * Returns [] if IDB is unavailable or store is empty.
+ *
+ * Note: records contain iterations as [iterId, iterRecord] pair arrays
+ * and dates as ISO strings — hydrateTrace() in app.js reconstructs the
+ * reactive Maps and Date objects.
+ */
+export async function loadAllTraces() {
+    return idb.execute((db) => {
+        if (!db) return [];
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE, "readonly");
+            const req = tx.objectStore(STORE).getAll();
+            req.onsuccess = () => resolve(req.result ?? []);
+            tx.onerror = () => reject(tx.error);
+        });
+    });
+}
