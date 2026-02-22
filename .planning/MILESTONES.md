@@ -77,3 +77,33 @@
 
 ---
 
+
+## v1.3 Local Persistence (Shipped: 2026-02-22)
+
+**Phases completed:** 3 phases, 5 plans, 10 tasks
+**Commits:** 35 (fb5ed05 → abbd5f5)
+**Code changes:** 531 insertions, 18 deletions across 6 files
+**Timeline:** 2 days (2026-02-20 → 2026-02-22)
+
+**Delivered:** Traces persist across page refresh via IndexedDB with fire-and-forget writes, full hydration before first render, checkbox-based bulk delete, and JSON export/import with validation.
+
+**Key accomplishments:**
+- Created db.js IDB persistence module with fire-and-forget trace writes via Odoo's IndexedDB utility and ephemeral mode detection with amber badge indicator
+- Bulk hydration from IDB via getAll() with reactive Map reconstruction in hydrateTrace() — traces appear before first render, no flash of empty state
+- Checkbox multi-select sidebar with select-all/indeterminate state and bulk delete wired to both reactive Map and IDB
+- Export checked traces as timestamped JSON file download via Blob URL pattern (createObjectURL → click → revokeObjectURL)
+- Import traces with all-or-nothing JSON validation, ImportPreviewDialog showing trace/duplicate counts, and merge into reactive store + IDB
+
+**Key decisions:**
+- Write-through cache pattern: reactive Map is UI source of truth; IDB writes are fire-and-forget
+- hydrateTrace() explicitly reconstructs reactive(new Map()) for nested Maps — plain IDB objects break reactivity
+- All-or-nothing import validation: first invalid element rejects entire file
+- Raw JSON array format for export (no metadata envelope)
+- deleteCheckedTraces replaces clearAll — dual reactive Map + IDB delete in same operation
+
+**Known tech debt:**
+- Minor UX: if selected item is a child of a deleted trace, detail panel shows fallback state rather than proactively clearing selection (no crash)
+- Degraded standalone mode: if dialog service unavailable in non-standard context, import error dialogs are silently suppressed (normal Odoo production path fully wired)
+
+---
+

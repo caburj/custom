@@ -2,38 +2,31 @@
 
 ## What This Is
 
-A custom Odoo module that instruments the enterprise `ai` module's agentic loop to provide live visibility into every LLM call, tool execution, state change, and loop iteration. Delivered as a standalone OWL app at `/ai-debug` that respects the user's Odoo light/dark theme preference. Open it in a browser tab and it streams agentic loop events in real time via `bus.bus`. Features a 3-level sidebar tree (Loop > Iteration > Tool Call) with type-aware detail panels showing system prompts, messages, raw responses, tool args/results, and state diffs. No database persistence; all data lives in the frontend for the duration of the browser session.
+A custom Odoo module that instruments the enterprise `ai` module's agentic loop to provide live visibility into every LLM call, tool execution, state change, and loop iteration. Delivered as a standalone OWL app at `/ai-debug` that respects the user's Odoo light/dark theme preference. Traces persist locally via IndexedDB across page refresh, with checkbox-based bulk delete, JSON export/import, and automatic ephemeral mode fallback when IDB is unavailable.
 
 ## Core Value
 
 Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
 
-## Current Milestone: v1.3 Local Persistence
-
-**Goal:** Persist traces locally via IndexedDB so they survive page refresh, with clear/delete and export/import capabilities.
-
-**Target features:**
-- Auto-persist traces to IndexedDB as bus events arrive
-- Hydrate reactive store from IndexedDB on page load
-- Delete individual traces or clear all
-- Export selected traces as JSON file
-- Import previously exported JSON files
-
 ## Current State
 
-**Shipped v1.2** (2026-02-22) — Native Theming
+**Shipped v1.3** (2026-02-22) — Local Persistence
 
 The module is a fully functional developer tool with:
 - Standalone OWL app at `/ai-debug` with Odoo-native light/dark theme support
 - Real-time bus.bus streaming with separate cursors for immediate event delivery
 - 3-level sidebar tree with expand/collapse, stable selection, reverse chronological ordering, animations
 - Type-aware detail panels with tabbed Notebook views, JSON tree rendering, state diff visualization
-- Session-scoped ephemeral data (refresh clears all traces)
+- IndexedDB persistence with fire-and-forget writes — traces survive page refresh
+- Bulk hydration from IDB before first render (no flash of empty state)
+- Checkbox multi-select with select-all/indeterminate for bulk delete (UI + IDB)
+- JSON export of selected traces and import with all-or-nothing validation + preview dialog
+- Ephemeral mode degradation when IDB unavailable (amber badge indicator)
 - Conditional CSS bundle loading via `webclient_rendering_context()` — automatically adapts to user's theme preference
 - All SCSS uses Odoo `$o-*` variables — zero hardcoded colors
 
-**Tech stack:** Odoo OWL standalone app, bus.bus WebSocket, generator yield passthrough instrumentation.
-**LOC:** ~2,013 (JS/XML/SCSS/Python) — net reduction from v1.1 via dead code removal
+**Tech stack:** Odoo OWL standalone app, bus.bus WebSocket, generator yield passthrough instrumentation, IndexedDB via `@web/core/utils/indexed_db`.
+**LOC:** ~2,500 (JS/XML/SCSS/Python)
 **Module:** `ai_debug` — depends on `ai_app` and `bus`.
 
 ## Requirements
@@ -56,16 +49,19 @@ The module is a fully functional developer tool with:
 - ✓ Dead component override blocks removed (Notebook, Dialog, CopyButton, error banner, popup) — v1.2
 - ✓ Dark-specific `app.dark.scss` with syntax highlighting overrides — v1.2
 - ✓ Status badge colors use semantic `$o-success`/`$o-danger`/`$o-warning` — v1.2
+- ✓ Auto-persist all traces to IndexedDB as bus events arrive (fire-and-forget, non-blocking) — v1.3
+- ✓ Hydrate reactive store from IndexedDB on page load (traces survive refresh, no flash of empty state) — v1.3
+- ✓ Live bus events continue to update UI in real time after hydration without regression — v1.3
+- ✓ App degrades gracefully to ephemeral mode if IndexedDB unavailable — v1.3
+- ✓ Delete individual traces from IndexedDB and reactive store — v1.3
+- ✓ Clear all traces (select-all + bulk delete) — v1.3
+- ✓ Export selected traces as JSON file download — v1.3
+- ✓ Import previously exported JSON file to restore traces with validation — v1.3
+- ✓ Invalid imports rejected with user-facing error notification — v1.3
 
 ### Active
 
-- [ ] Auto-persist all traces to IndexedDB as bus events arrive
-- [ ] Hydrate reactive store from IndexedDB on page load (traces survive refresh)
-- [ ] Delete individual traces from IndexedDB and reactive store
-- [ ] Clear all traces (bulk wipe)
-- [ ] Export selected traces as JSON file download
-- [ ] Import previously exported JSON file to restore traces
-- [ ] Manual retention only (no auto-expiry)
+(None — next milestone not yet planned)
 
 ### Out of Scope
 
@@ -75,7 +71,11 @@ The module is a fully functional developer tool with:
 - Multi-instance / distributed tracing — single-process agentic loop, no value for local dev
 - Keyboard navigation in sidebar — P2 polish
 - Search/filter in sidebar — bounded tree depth makes this low-priority
-- localStorage persistence — replaced by IndexedDB in v1.3 (better structured data support, no size limits)
+- localStorage persistence — replaced by IndexedDB in v1.3
+- Auto-expiry / TTL — would delete traces the developer still needs
+- Server-side sync — export/import covers cross-machine sharing
+- Per-event normalized IDB schema — one denormalized record per trace is correct
+- Selective import picker — import all + delete unwanted is sufficient
 
 ## Context
 
@@ -83,18 +83,19 @@ The module is a fully functional developer tool with:
 - Enterprise: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/ai/`
 - Core: `/Users/joseph/clones/odoo/odoo/.worktrees/master/`
 
-**Subagent anticipation:** The enterprise `ai` module is expected to support subagents (an agentic loop spawned inside a parent agentic loop). The tracer's data model and sidebar tree should anticipate parent/child loop relationships even though the feature isn't implemented upstream yet.
-
 **v2+ candidates:**
 - RPLY-01: User can edit captured trace messages and re-run against the LLM
 - EXPT-01: Traces exportable in OpenTelemetry (OTLP) format
 - EVAL-01: Automated LLM-as-judge scoring of captured traces
 - NEST-01: Sidebar tree supports nested loops (subagent loop under parent loop iteration)
+- TSEL-01: User can select specific traces for export (currently exports all checked)
 
 **Known tech debt:**
 - Payload size for RAG-enabled sessions unknown (needs empirical baseline)
 - Confirmation Info tab in ToolCallDetail is a placeholder
 - Per-tool state granularity deferred (currently batch-level before/after)
+- Minor UX: if selected item is a child of a deleted trace, detail panel shows fallback state rather than clearing selection
+- Degraded standalone mode: dialog service unavailable suppresses import error dialogs silently
 
 ## Constraints
 
@@ -124,6 +125,12 @@ The module is a fully functional developer tool with:
 | $o-warning for JSON numbers in dark mode | Warm amber contrast on dark background vs neutral gray in light | ✓ Good — legible in both modes |
 | Bootstrap alert-danger for error banners | Automatic dark-mode adaptation without custom CSS | ✓ Good — zero custom dark styling needed |
 | All panels use same $o-webclient-background-color | Borders define visual separation, not background depth | ✓ Good — consistent with Odoo patterns |
+| Write-through cache pattern for IDB (v1.3) | Reactive Map is UI source of truth; IDB writes fire-and-forget | ✓ Good — no UI jitter, reliable persistence |
+| Hydration in onWillStart (v1.3) | Prevents flash of empty state — traces loaded before first render | ✓ Good — seamless page refresh experience |
+| hydrateTrace() reconstructs reactive(new Map()) (v1.3) | Plain objects from IDB break live-event reactivity; explicit wrapping required | ✓ Good — bus events work after hydration |
+| Dual delete: reactive Map + IDB (v1.3) | Delete must be consistent across both stores in same operation | ✓ Good — no zombie traces on refresh |
+| Raw JSON array export format (v1.3) | No metadata envelope — simple, importable by any tool | ✓ Good — clean round-trip |
+| All-or-nothing import validation (v1.3) | First invalid element rejects entire file — no partial corrupted imports | ✓ Good — safe import behavior |
 
 ---
-*Last updated: 2026-02-22 after v1.3 milestone started*
+*Last updated: 2026-02-22 after v1.3 milestone*
