@@ -491,8 +491,11 @@
     color: $o-gray-500;
     border: 1px solid $o-gray-400;
     border-radius: 2px;
+    opacity: 0.35;
+    transition: opacity 0.15s ease;
 
     &:hover {
+        opacity: 1;
         background-color: rgba($o-action, 0.1);
         border-color: $o-action;
         color: $o-action;
