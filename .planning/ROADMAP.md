@@ -107,4 +107,4 @@ Plans:
 | 9. SCSS Migration and Dark Accents | v1.2 | 3/3 | Complete | 2026-02-22 |
 | 10. IDB Layer and Write-Through | 1/1 | Complete    | 2026-02-22 | - |
 | 11. Hydration and Trace Management | 2/2 | Complete    | 2026-02-22 | - |
-| 12. Export and Import | 2/2 | Complete   | 2026-02-22 | - |
+| 12. Export and Import | 2/2 | Complete    | 2026-02-22 | - |
