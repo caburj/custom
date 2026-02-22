@@ -8,6 +8,17 @@ A custom Odoo module that instruments the enterprise `ai` module's agentic loop 
 
 Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
 
+## Current Milestone: v1.3 Local Persistence
+
+**Goal:** Persist traces locally via IndexedDB so they survive page refresh, with clear/delete and export/import capabilities.
+
+**Target features:**
+- Auto-persist traces to IndexedDB as bus events arrive
+- Hydrate reactive store from IndexedDB on page load
+- Delete individual traces or clear all
+- Export selected traces as JSON file
+- Import previously exported JSON files
+
 ## Current State
 
 **Shipped v1.2** (2026-02-22) — Native Theming
@@ -48,7 +59,13 @@ The module is a fully functional developer tool with:
 
 ### Active
 
-(No active milestone — use `/gsd:new-milestone` to start next)
+- [ ] Auto-persist all traces to IndexedDB as bus events arrive
+- [ ] Hydrate reactive store from IndexedDB on page load (traces survive refresh)
+- [ ] Delete individual traces from IndexedDB and reactive store
+- [ ] Clear all traces (bulk wipe)
+- [ ] Export selected traces as JSON file download
+- [ ] Import previously exported JSON file to restore traces
+- [ ] Manual retention only (no auto-expiry)
 
 ### Out of Scope
 
@@ -58,7 +75,7 @@ The module is a fully functional developer tool with:
 - Multi-instance / distributed tracing — single-process agentic loop, no value for local dev
 - Keyboard navigation in sidebar — P2 polish
 - Search/filter in sidebar — bounded tree depth makes this low-priority
-- localStorage persistence — stale data risk, privacy concerns
+- localStorage persistence — replaced by IndexedDB in v1.3 (better structured data support, no size limits)
 
 ## Context
 
@@ -109,4 +126,4 @@ The module is a fully functional developer tool with:
 | All panels use same $o-webclient-background-color | Borders define visual separation, not background depth | ✓ Good — consistent with Odoo patterns |
 
 ---
-*Last updated: 2026-02-22 after v1.2 milestone*
+*Last updated: 2026-02-22 after v1.3 milestone started*

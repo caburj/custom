@@ -5,18 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** Planning next milestone
+**Current focus:** v1.3 Local Persistence
 
 ## Current Position
 
-Milestone: v1.2 Native Theming — SHIPPED 2026-02-22
-Phase: All complete (Phases 8-9)
-Status: Milestone archived, ready for next milestone
-Last activity: 2026-02-22 - Completed quick task 18: Make JSON tree toggles semi-transparent, full opacity on hover
-
-```
-v1.2: [██████████] 100% — SHIPPED
-```
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-22 — Milestone v1.3 started
 
 ## Accumulated Context
 
