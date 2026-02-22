@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 ## Current Position
 
 Phase: 12 of 12 (Export and Import)
-Plan: 1 of 2 complete
-Status: Phase 12 in progress — export implemented (plan 01)
-Last activity: 2026-02-22 — completed plan 12-01 (export selected traces as JSON download)
+Plan: 2 of 2 complete
+Status: Phase 12 complete — export (plan 01) and import (plan 02) implemented
+Last activity: 2026-02-22 — completed plan 12-02 (import traces from JSON with preview dialog)
 
-Progress: [█████░░░░░] 50% (v1.3)
+Progress: [██████████] 100% (v1.3)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3 (v1.3)
-- Average duration: ~6 minutes
-- Total execution time: ~18 minutes
+- Total plans completed: 4 (v1.3)
+- Average duration: ~5 minutes
+- Total execution time: ~20 minutes
 
 **By Phase:**
 
@@ -29,7 +29,7 @@ Progress: [█████░░░░░] 50% (v1.3)
 |-------|-------|-------|----------|
 | 10 | 1 | ~15m | ~15m |
 | 11 | 2 | ~3m | ~1.5m |
-| 12 | 1 (of 2) | ~4m | ~4m |
+| 12 | 2 | ~6m | ~3m |
 
 *Updated after each plan completion*
 
@@ -72,6 +72,7 @@ Key decisions from Phase 12 plan 01 execution:
 - filter(Boolean) in exportSelected handles race condition where checked ID's trace was removed before export
 - Export button ordered before delete button; import button will insert between them in Plan 02
 - &#x2913; (DOWNWARDS ARROW TO BAR) used as export button icon
+- [Phase 12]: Import button always enabled — locked from CONTEXT.md; all-or-nothing validation rejects any file with a malformed element; hydrateTrace() before writeTrace() in _applyImport to handle array-to-Map conversion; duplicate trace_ids overwrite existing entries
 
 ### Pending Todos
 
@@ -85,5 +86,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed plan 12-01 (export selected traces as JSON download)
+Stopped at: Completed plan 12-02 (import traces from JSON with preview dialog) — Phase 12 and v1.3 complete
 Resume file: None

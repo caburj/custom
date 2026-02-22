@@ -48,7 +48,7 @@ Full details: `.planning/milestones/v1.2-ROADMAP.md`
 
 - [x] **Phase 10: IDB Layer and Write-Through** - Create db.js, define schema, wire fire-and-forget writes into bus event handlers (completed 2026-02-22)
 - [x] **Phase 11: Hydration and Trace Management** - Load traces from IDB on startup, implement delete and clear-all controls (completed 2026-02-22)
-- [ ] **Phase 12: Export and Import** - Download all traces as JSON file, import from previously exported file with validation
+- [x] **Phase 12: Export and Import** - Download all traces as JSON file, import from previously exported file with validation (completed 2026-02-22)
 
 ## Phase Details
 
@@ -87,7 +87,7 @@ Plans:
   1. Clicking "Export" triggers a browser file download of a JSON file containing all current traces in a versioned format
   2. Clicking "Import" and selecting that file restores all traces into the sidebar and into IndexedDB so they persist across subsequent refreshes
   3. Importing a malformed or incompatible JSON file shows a visible error notification and leaves existing traces untouched
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [ ] 12-01-PLAN.md — Export selected traces as JSON file download
 - [ ] 12-02-PLAN.md — Import traces from JSON file with preview dialog and validation
@@ -107,4 +107,4 @@ Plans:
 | 9. SCSS Migration and Dark Accents | v1.2 | 3/3 | Complete | 2026-02-22 |
 | 10. IDB Layer and Write-Through | 1/1 | Complete    | 2026-02-22 | - |
 | 11. Hydration and Trace Management | 2/2 | Complete    | 2026-02-22 | - |
-| 12. Export and Import | 1/2 | In Progress|  | - |
+| 12. Export and Import | 2/2 | Complete   | 2026-02-22 | - |
