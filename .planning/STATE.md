@@ -5,29 +5,30 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.3 Local Persistence — Phase 10: IDB Layer and Write-Through
+**Current focus:** v1.3 Local Persistence — Phase 11: Hydration and Trace Management
 
 ## Current Position
 
-Phase: 10 of 12 (IDB Layer and Write-Through)
+Phase: 11 of 12 (Hydration and Trace Management)
 Plan: 1 of 1 complete
-Status: Phase 10 complete — ready for Phase 11
-Last activity: 2026-02-22 — completed plan 10-01 (IDB write-through and ephemeral mode)
+Status: Phase 11 Plan 01 complete — hydration read path implemented
+Last activity: 2026-02-22 — completed plan 11-01 (IDB hydration on page load)
 
-Progress: [█░░░░░░░░░] 10% (v1.3)
+Progress: [██░░░░░░░░] 20% (v1.3)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1 (v1.3)
-- Average duration: ~15 minutes
-- Total execution time: ~15 minutes
+- Total plans completed: 2 (v1.3)
+- Average duration: ~8 minutes
+- Total execution time: ~17 minutes
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 10 | 1 | ~15m | ~15m |
+| 11 | 1 | ~2m | ~2m |
 
 *Updated after each plan completion*
 
@@ -52,6 +53,13 @@ Key decisions from Phase 10 execution:
 - Ephemeral indicator uses text label "Ephemeral" not Unicode — more reliable cross-platform
 - Tool call fields explicitly enumerated in serializeTrace (not spread) — produces well-defined schema for Phase 12
 
+Key decisions from Phase 11 execution:
+- loadAllTraces uses getAll() single-transaction bulk read — avoids N sequential reads
+- hydrateTrace is module-level pure function (not a class method) — no this dependency
+- iterations and toolCalls Maps explicitly wrapped in reactive(new Map()) — required for post-hydration bus event re-renders
+- hydrated: true is a permanent marker never removed — used by template badge
+- at(-1) selects most recent trace for auto-select (insertion order = arrival order)
+
 ### Pending Todos
 
 None.
@@ -64,5 +72,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed plan 10-01 (IDB write-through and ephemeral mode) — Phase 10 complete
+Stopped at: Completed plan 11-01 (IDB hydration on page load) — Phase 11 Plan 01 complete
 Resume file: None
