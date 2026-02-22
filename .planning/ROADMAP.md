@@ -34,7 +34,7 @@ Full details: `.planning/milestones/v1.1-ROADMAP.md`
 ### v1.2 Native Theming
 
 - [x] **Phase 8: Theme Infrastructure** - Wire controller, template, and manifest to load CSS bundles conditionally based on color_scheme cookie
-- [ ] **Phase 9: SCSS Migration and Dark Accents** - Replace all hardcoded colors in app.scss with SCSS variables and create dark-only accent overrides
+- [x] **Phase 9: SCSS Migration and Dark Accents** - Replace all hardcoded colors in app.scss with SCSS variables and create dark-only accent overrides (completed 2026-02-22)
 
 ## Phase Details
 
@@ -61,7 +61,7 @@ Plans:
   3. In dark mode, the app renders with a dark background consistent with Odoo's dark palette; JSON syntax highlighting is legible and status dots (running, done, error, paused) are visually distinct
   4. StateDiff tints (add/remove row highlights) are visible but not overpowering in both light and dark modes
   5. The connection status dot uses `$o-success` (connected) and `$o-danger` (disconnected) — semantic Odoo colors, not Catppuccin-specific values
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 Plans:
 - [ ] 09-01-PLAN.md — Migrate all hardcoded colors in app.scss to SCSS variables and remove dead override blocks
 - [ ] 09-02-PLAN.md — Create dark accent file, update manifest, and migrate error banners to Bootstrap alerts
@@ -79,4 +79,4 @@ Plans:
 | 6. Sidebar Tree | v1.1 | 5/5 | Complete | 2026-02-21 |
 | 7. Detail Panel | v1.1 | 2/2 | Complete | 2026-02-21 |
 | 8. Theme Infrastructure | v1.2 | 1/1 | Complete | 2026-02-22 |
-| 9. SCSS Migration and Dark Accents | 2/3 | In Progress|  | - |
+| 9. SCSS Migration and Dark Accents | 3/3 | Complete   | 2026-02-22 | - |

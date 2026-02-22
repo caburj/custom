@@ -10,13 +10,13 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 ## Current Position
 
 Milestone: v1.2 Native Theming
-Phase: 9 — SCSS Migration and Dark Accents
-Plan: 2 of ? (plans TBD) — Plans 01 and 02 complete
-Status: Phase 9 in progress — Plans 01 and 02 complete
-Last activity: 2026-02-22 — 09-01 complete (SCSS variable migration + dead block removal)
+Phase: 9 — SCSS Migration and Dark Accents (COMPLETE)
+Plan: 3 of 3 — All plans complete
+Status: Phase 9 complete — v1.2 Native Theming milestone complete
+Last activity: 2026-02-22 — 09-03 complete (visual verification approved)
 
 ```
-v1.2 progress: [█████░░░░░] 50% — Phase 8 complete, Phase 9 in progress
+v1.2 progress: [██████████] 100% — Phases 8 and 9 complete, v1.2 milestone done
 ```
 
 ## Accumulated Context
@@ -47,7 +47,6 @@ None.
 ### Blockers/Concerns
 
 - Payload size for RAG-enabled sessions unknown — needs empirical baseline before meta/detail split strategy
-- Bootstrap secondary/tertiary CSS custom properties (`--secondary-bg`, etc.) may not be emitted at `:root` due to `$enable-dark-mode: false` — use `$o-gray-*` SCSS variables throughout Phase 9, not CSS custom properties
 
 ### Quick Tasks Completed
 
@@ -64,5 +63,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 09-01-PLAN.md — SCSS variable migration and dead block removal
+Stopped at: Completed 09-03-PLAN.md — visual verification approved, Phase 9 and v1.2 milestone complete
 Resume file: None
