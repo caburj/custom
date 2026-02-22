@@ -11,7 +11,7 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Phase: All phases complete through v1.3
 Status: v1.3 Local Persistence shipped
-Last activity: 2026-02-22 - Completed quick task 19: Sort traces by timestamp (desc) — add timestamp to each trace item for predictable ordering during export/import
+Last activity: 2026-02-22 - Completed quick task 20: Hide chevron icon on iteration rows that have no tool calls
 
 Progress: [██████████] 100% (v1.3)
 
@@ -42,9 +42,10 @@ None — milestone complete.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 19 | Sort traces by timestamp (desc) — add timestamp to each trace item for predictable ordering during export/import | 2026-02-22 | 360f64f | [19-sort-traces-by-timestamp-desc-add-timest](./quick/19-sort-traces-by-timestamp-desc-add-timest/) |
+| 20 | Hide chevron icon on iteration rows that have no tool calls | 2026-02-22 | 7d87b5f | [20-hide-chevron-icon-on-iteration-rows-that](./quick/20-hide-chevron-icon-on-iteration-rows-that/) |
 
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed v1.3 milestone archival
+Stopped at: Completed quick task 20 — hide chevron on empty iteration rows
 Resume file: None
