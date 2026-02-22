@@ -1,10 +1,11 @@
 /** @odoo-module **/
-import { Component, useState, reactive, onMounted, onWillUnmount, onPatched, useRef } from "@odoo/owl";
+import { Component, useState, reactive, onMounted, onWillStart, onWillUnmount, onPatched, useRef } from "@odoo/owl";
 import { useService } from "@web/core/utils/hooks";
 import { MainComponentsContainer } from "@web/core/main_components_container";
 import { LoopDetail } from "./detail/loop_detail";
 import { IterationDetail } from "./detail/iter_detail";
 import { ToolCallDetail } from "./detail/tc_detail";
+import { probeIDB, writeTrace } from "./db";
 
 export class AiDebugApp extends Component {
     static template = "ai_debug.App";
@@ -25,6 +26,7 @@ export class AiDebugApp extends Component {
             connectionStatus: "connecting",
             selectedId: null,
             selectedType: null,   // 'trace' | 'iteration' | 'tool_call'
+            ephemeralMode: false, // true when IDB is unavailable (private browsing or write failure)
         });
 
         // Sidebar DOM ref for auto-scroll
@@ -137,7 +139,26 @@ export class AiDebugApp extends Component {
             trace.ended_at = new Date();
             trace.duration_ms = payload.duration_ms;
             // NEVER touch this.state.selectedId here — SIDE-05
+
+            // Fire-and-forget IDB write — do NOT await
+            if (!this.state.ephemeralMode) {
+                writeTrace(trace).catch((err) => {
+                    console.warn("[ai_debug] IDB write failed — switching to ephemeral mode:", err);
+                    this.state.ephemeralMode = true;
+                });
+            }
         };
+
+        // ----------------------------------------------------------------
+        // IDB availability probe — runs before first render so no flash
+        // ----------------------------------------------------------------
+        onWillStart(async () => {
+            const available = await probeIDB();
+            if (!available) {
+                console.warn("[ai_debug] IndexedDB unavailable — running in ephemeral mode");
+                this.state.ephemeralMode = true;
+            }
+        });
 
         // ----------------------------------------------------------------
         // Bus lifecycle

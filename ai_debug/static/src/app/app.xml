@@ -9,6 +9,11 @@
             <div class="ai-debug-header-status">
                 <span t-attf-class="ai-debug-status-dot {{statusColor}}"/>
                 <span class="ai-debug-status-label" t-esc="statusLabel"/>
+                <span t-if="state.ephemeralMode"
+                      class="ai-ephemeral-indicator"
+                      title="IndexedDB unavailable — traces won't persist across refreshes">
+                    Ephemeral
+                </span>
             </div>
         </header>
 
