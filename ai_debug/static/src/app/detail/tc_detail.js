@@ -5,11 +5,10 @@ import { CopyButton } from "@web/core/copy_button/copy_button";
 import { useService } from "@web/core/utils/hooks";
 import { JsonTree } from "./json_tree";
 import { TextPopupDialog } from "./text_popup";
-import { StateDiff } from "./state_diff";
 
 export class ToolCallDetail extends Component {
     static template = "ai_debug.ToolCallDetail";
-    static components = { Notebook, CopyButton, JsonTree, StateDiff };
+    static components = { Notebook, CopyButton, JsonTree };
     static props = {
         toolCall: Object,
     };
@@ -48,11 +47,4 @@ export class ToolCallDetail extends Component {
         return !this.resultIsObject && this.resultString.length > 300;
     }
 
-    get stateBefore() {
-        return this.props.toolCall.state_before;
-    }
-
-    get stateAfter() {
-        return this.props.toolCall.state_after;
-    }
 }
