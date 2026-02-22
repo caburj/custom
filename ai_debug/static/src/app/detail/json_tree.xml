@@ -23,7 +23,9 @@
                     <JsonTree data="entry[1]"
                               label="entry[0]"
                               depth="props.depth + 1"
-                              onExpandText="props.onExpandText"/>
+                              onExpandText="props.onExpandText"
+                              forceCollapsed="state.childForceCollapsed"
+                              forceVersion="state.childForceVersion"/>
                 </t>
             </t>
         </t>
