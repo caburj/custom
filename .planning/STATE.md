@@ -2,18 +2,17 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-22)
+See: .planning/PROJECT.md (updated 2026-02-23)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** Planning next milestone
+**Current focus:** v1.4 Subagent Support
 
 ## Current Position
 
-Phase: All phases complete through v1.3
-Status: v1.3 Local Persistence shipped
-Last activity: 2026-02-23 - Completed quick task 26: Fix IndexedDB NotFoundError after external DB deletion
-
-Progress: [██████████] 100% (v1.3)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-23 — Milestone v1.4 started
 
 ## Milestones Shipped
 
@@ -35,7 +34,7 @@ None.
 
 ### Blockers/Concerns
 
-None — milestone complete.
+None.
 
 ### Quick Tasks Completed
 
@@ -52,5 +51,5 @@ None — milestone complete.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed quick task 26 — fix IndexedDB NotFoundError after external DB deletion
+Stopped at: Starting v1.4 milestone — Subagent Support
 Resume file: None

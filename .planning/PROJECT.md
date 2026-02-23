@@ -8,6 +8,16 @@ A custom Odoo module that instruments the enterprise `ai` module's agentic loop 
 
 Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
 
+## Current Milestone: v1.4 Subagent Support
+
+**Goal:** Visualize subagent hierarchies in the debugger — nest subagent traces under the tool call that spawned them, flatten the within-trace tree, and color-code agents.
+
+**Target features:**
+- Backend emits parent_trace_id + parent_tool_call_id in subagent new_trace events
+- Flat tree within a trace (iterations and tool calls at same indentation level)
+- Subagent traces indent under the parent tool call, with arbitrary nesting depth
+- Per-agent color assignment on first appearance, persisted to IDB
+
 ## Current State
 
 **Shipped v1.3** (2026-02-22) — Local Persistence
@@ -61,7 +71,10 @@ The module is a fully functional developer tool with:
 
 ### Active
 
-(None — next milestone not yet planned)
+- [ ] Backend instrumentation emits parent_trace_id and parent_tool_call_id for subagent sessions
+- [ ] Sidebar tree flattened within a trace (iterations/tool calls at same level)
+- [ ] Subagent traces nest under parent tool call with recursive depth
+- [ ] Per-agent color-coding assigned on first appearance and persisted to IDB
 
 ### Out of Scope
 
@@ -87,7 +100,7 @@ The module is a fully functional developer tool with:
 - RPLY-01: User can edit captured trace messages and re-run against the LLM
 - EXPT-01: Traces exportable in OpenTelemetry (OTLP) format
 - EVAL-01: Automated LLM-as-judge scoring of captured traces
-- NEST-01: Sidebar tree supports nested loops (subagent loop under parent loop iteration)
+- ~~NEST-01: Sidebar tree supports nested loops~~ → promoted to v1.4
 - TSEL-01: User can select specific traces for export (currently exports all checked)
 
 **Known tech debt:**
@@ -133,4 +146,4 @@ The module is a fully functional developer tool with:
 | All-or-nothing import validation (v1.3) | First invalid element rejects entire file — no partial corrupted imports | ✓ Good — safe import behavior |
 
 ---
-*Last updated: 2026-02-22 after v1.3 milestone*
+*Last updated: 2026-02-23 after v1.4 milestone start*
