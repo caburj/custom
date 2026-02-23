@@ -75,8 +75,8 @@ Full details: `.planning/milestones/v1.3-ROADMAP.md`
   4. Existing non-subagent sessions continue emitting events with no behavioral change
 **Plans:** 2/2 plans complete
 Plans:
-- [ ] 13-01-PLAN.md -- Python instrumentation: parent linkage in new_trace + tool call event splitting
-- [ ] 13-02-PLAN.md -- JS event handling: tool_call_started/completed migration + pending-child buffer
+- [x] 13-01-PLAN.md -- Python instrumentation: parent linkage in new_trace + tool call event splitting
+- [x] 13-02-PLAN.md -- JS event handling: tool_call_started/completed migration + pending-child buffer
 
 ### Phase 14: Data Model, IDB Schema, and Color Assignment
 **Goal**: The JS trace store is a flat Map with parent pointer fields; agent colors are assigned on first appearance and survive page refresh
