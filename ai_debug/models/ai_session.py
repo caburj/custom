@@ -151,8 +151,6 @@ class AiSession(models.TransientModel):
         # or _get_direct_response (before provider formatting) and threaded here
         # via env context — no need to reverse-parse provider-specific formats.
         user_query = self.env.context.get('_ai_debug_user_query', '')
-        if len(user_query) > 200:
-            user_query = user_query[:200]
 
         self._ai_debug_bus_send('new_trace', {
             'type': 'new_trace',
