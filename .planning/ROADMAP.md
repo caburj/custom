@@ -99,7 +99,9 @@ Plans:
   3. Collapsing a parent trace hides all of its descendant traces, iterations, and tool calls
   4. Each trace row displays a 3px colored left border in the agent's assigned palette color
   5. A compact color legend showing agent names and color swatches is visible in the sidebar header; the detail panel header shows a colored chip identifying which agent owns the selected node
-**Plans**: TBD
+**Plans:** 1 plan
+Plans:
+- [ ] 15-01-PLAN.md -- sidebarNodes getter, template rewrite to single t-foreach, SCSS guide lines, flat within-trace layout (COLR-03/04/05 deferred to post-Phase 14)
 
 ## Progress
 
@@ -122,4 +124,4 @@ Phases execute in numeric order: 13 → 14 → 15
 | 12. Export and Import | v1.3 | 2/2 | Complete | 2026-02-22 |
 | 13. Python Instrumentation and Bus Event Handling | 2/2 | Complete    | 2026-02-23 | - |
 | 14. Data Model, IDB Schema, and Color Assignment | v1.4 | 0/? | Not started | - |
-| 15. Sidebar Rendering and Color Display | v1.4 | 0/? | Not started | - |
+| 15. Sidebar Rendering and Color Display | v1.4 | 0/1 | Not started | - |
