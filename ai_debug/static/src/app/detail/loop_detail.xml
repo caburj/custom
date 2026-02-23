@@ -2,7 +2,7 @@
 <templates xml:space="preserve">
 
 <t t-name="ai_debug.LoopDetail">
-    <div class="ai-detail-view">
+    <div t-if="props.trace" class="ai-detail-view">
         <!-- Header -->
         <div class="ai-detail-header">
             <span class="ai-detail-type-badge">Loop</span>
