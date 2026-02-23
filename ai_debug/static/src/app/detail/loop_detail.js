@@ -10,7 +10,7 @@ export class LoopDetail extends Component {
     static template = "ai_debug.LoopDetail";
     static components = { Notebook, CopyButton, JsonTree };
     static props = {
-        trace: Object,
+        trace: { type: Object, optional: true },
     };
 
     setup() {

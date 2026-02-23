@@ -10,7 +10,7 @@ export class IterationDetail extends Component {
     static template = "ai_debug.IterationDetail";
     static components = { Notebook, CopyButton, JsonTree };
     static props = {
-        iteration: Object,
+        iteration: { type: Object, optional: true },
     };
 
     setup() {

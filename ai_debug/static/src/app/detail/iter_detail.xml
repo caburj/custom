@@ -2,7 +2,7 @@
 <templates xml:space="preserve">
 
 <t t-name="ai_debug.IterationDetail">
-    <div class="ai-detail-view">
+    <div t-if="props.iteration" class="ai-detail-view">
         <div class="ai-detail-header">
             <span class="ai-detail-type-badge">Iteration</span>
             <span class="ai-detail-name">Iteration <t t-esc="props.iteration.iteration_index"/></span>

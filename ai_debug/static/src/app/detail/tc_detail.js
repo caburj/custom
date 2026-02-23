@@ -10,7 +10,7 @@ export class ToolCallDetail extends Component {
     static template = "ai_debug.ToolCallDetail";
     static components = { Notebook, CopyButton, JsonTree };
     static props = {
-        toolCall: Object,
+        toolCall: { type: Object, optional: true },
     };
 
     setup() {

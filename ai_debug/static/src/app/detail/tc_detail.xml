@@ -2,7 +2,7 @@
 <templates xml:space="preserve">
 
 <t t-name="ai_debug.ToolCallDetail">
-    <div class="ai-detail-view">
+    <div t-if="props.toolCall" class="ai-detail-view">
         <div class="ai-detail-header">
             <span class="ai-detail-type-badge">Tool Call</span>
             <span class="ai-detail-name" t-esc="props.toolCall.tool_name"/>
