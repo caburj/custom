@@ -219,6 +219,7 @@
     cursor: pointer;
     gap: 4px;
     padding-right: 8px;
+    position: relative; // Required for ::before guide line pseudo-element
     transition: background-color 0.1s ease;
     animation: ai-tree-slide-in 0.15s ease-out;
 
@@ -234,16 +235,40 @@
     }
 }
 
-// Level indentation — level-0 reduced by 4px to accommodate checkbox; levels 1+2 adjusted equally
-.ai-tree-row.level-0 {
-    padding-left: 4px;
+// Trace row (formerly level-0) — taller two-line layout with padding for checkbox
+.ai-tree-trace-row {
     height: auto;
     min-height: 44px;
     padding-top: 4px;
     padding-bottom: 4px;
 }
-.ai-tree-row.level-1 { padding-left: 24px; }
-.ai-tree-row.level-2 { padding-left: 44px; }
+
+// VS Code-style vertical guide lines for nested rows (depth > 0)
+.ai-tree-row.ai-tree-has-guide {
+    &::before {
+        content: '';
+        position: absolute;
+        left: calc(var(--ai-depth) * 20px - 6px);
+        top: 0;
+        bottom: 0;
+        width: 1px;
+        background-color: $o-gray-300;
+        opacity: 0.5;
+        pointer-events: none;
+    }
+}
+
+// Iteration and tool call type icons (cycle arrow / right arrow)
+.ai-tree-iter-icon,
+.ai-tree-tc-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    flex-shrink: 0;
+    font-size: 11px;
+    color: $o-gray-500;
+}
 
 // Chevron expand/collapse indicator
 .ai-tree-chevron {
@@ -281,8 +306,8 @@
     min-width: 0;
 }
 
-// Two-line label layout for level-0 rows (query title + agent/model meta)
-.ai-tree-row.level-0 > .ai-tree-label {
+// Two-line label layout for trace rows (query title + agent/model meta)
+.ai-tree-trace-row > .ai-tree-label {
     display: flex;
     flex-direction: column;
     justify-content: center;
