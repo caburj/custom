@@ -144,7 +144,7 @@ export class AiDebugApp extends Component {
             // NEVER touch this.state.selectedId here — SIDE-05
         };
 
-        this._onToolCall = (payload) => {
+        this._onToolCallStarted = (payload) => {
             const trace = this.traces.get(payload.trace_id);
             if (!trace) return;
             const iteration = trace.iterations.get(payload.iteration_id);
@@ -153,17 +153,54 @@ export class AiDebugApp extends Component {
                 tool_call_id: payload.tool_call_id,
                 iteration_id: payload.iteration_id,
                 tool_name: payload.tool_name,
-                success: payload.success,
-                // Phase 7: full payload for detail panel
-                args: payload.args || {},
-                result: payload.result,
-                error: payload.error || null,
-                state_before: payload.state_before || {},
-                state_after: payload.state_after || {},
                 call_id: payload.call_id || null,
-                triggered_confirmation: payload.triggered_confirmation || false,
-                confirmation_message: payload.confirmation_message || null,
+                args: payload.args || {},
+                // Result fields are null until tool_call_completed arrives
+                result: null,
+                success: null,
+                error: null,
+                state_before: {},
+                state_after: {},
+                triggered_confirmation: false,
+                confirmation_message: null,
+                status: "running",  // Visual indicator that tool is in progress
             });
+            // NEVER touch this.state.selectedId here — SIDE-05
+        };
+
+        this._onToolCallCompleted = (payload) => {
+            const trace = this.traces.get(payload.trace_id);
+            if (!trace) return;
+            const iteration = trace.iterations.get(payload.iteration_id);
+            if (!iteration) return;
+            const tc = iteration.toolCalls.get(payload.tool_call_id);
+            if (!tc) {
+                // tool_call_completed arrived before tool_call_started (shouldn't happen
+                // but be defensive) — create the entry directly
+                iteration.toolCalls.set(payload.tool_call_id, {
+                    tool_call_id: payload.tool_call_id,
+                    iteration_id: payload.iteration_id,
+                    tool_name: payload.tool_name,
+                    call_id: payload.call_id || null,
+                    args: payload.args || {},
+                    result: payload.result,
+                    success: payload.success,
+                    error: payload.error || null,
+                    state_before: {},
+                    state_after: {},
+                    triggered_confirmation: payload.triggered_confirmation || false,
+                    confirmation_message: payload.confirmation_message || null,
+                    status: "completed",
+                });
+                return;
+            }
+            // Update existing entry with result data
+            tc.result = payload.result;
+            tc.success = payload.success;
+            tc.error = payload.error || null;
+            tc.triggered_confirmation = payload.triggered_confirmation || false;
+            tc.confirmation_message = payload.confirmation_message || null;
+            tc.status = "completed";
             // NEVER touch this.state.selectedId here — SIDE-05
         };
 
@@ -224,7 +261,8 @@ export class AiDebugApp extends Component {
         onMounted(async () => {
             this.busService.subscribe("new_trace", this._onNewTrace);
             this.busService.subscribe("iteration", this._onIteration);
-            this.busService.subscribe("tool_call", this._onToolCall);
+            this.busService.subscribe("tool_call_started", this._onToolCallStarted);
+            this.busService.subscribe("tool_call_completed", this._onToolCallCompleted);
             this.busService.subscribe("loop_end", this._onLoopEnd);
             await this.busService.addChannel("ai_debug");
         });
@@ -232,7 +270,8 @@ export class AiDebugApp extends Component {
         onWillUnmount(() => {
             this.busService.unsubscribe("new_trace", this._onNewTrace);
             this.busService.unsubscribe("iteration", this._onIteration);
-            this.busService.unsubscribe("tool_call", this._onToolCall);
+            this.busService.unsubscribe("tool_call_started", this._onToolCallStarted);
+            this.busService.unsubscribe("tool_call_completed", this._onToolCallCompleted);
             this.busService.unsubscribe("loop_end", this._onLoopEnd);
             this.busService.deleteChannel("ai_debug");
         });
