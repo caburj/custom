@@ -1,190 +1,190 @@
 # Project Research Summary
 
-**Project:** AI Debugger — IndexedDB Persistence, Export/Import, Trace Management (v1.3)
-**Domain:** Browser-side persistence layer for an Odoo standalone OWL developer tool
-**Researched:** 2026-02-22
+**Project:** AI Debugger v1.4 — Subagent Hierarchy Visualization
+**Domain:** Odoo standalone OWL app — AI agentic loop live tracer
+**Researched:** 2026-02-23
 **Confidence:** HIGH
 
 ## Executive Summary
 
-The v1.3 milestone adds durable persistence to the `ai_debug` standalone OWL app, which previously lost all captured agentic loop traces on page refresh. The app already has a working reactive store (`useState(new Map())` with nested `reactive(new Map())` for iterations and tool calls) and a live bus subscription. The v1.3 work adds a write-through IndexedDB layer beneath this existing store, hydrates it on startup, and exposes delete/clear/export/import controls to the user. All required APIs — the Odoo `IndexedDB` class, `downloadFile`, `notification` service, `ConfirmationDialog`, and `FileReader` — exist in the current `web.assets_backend` bundle without adding any new dependencies.
+The v1.4 milestone adds subagent hierarchy visualization to the existing `ai_debug` OWL app. The app already ships with IndexedDB persistence (v1.3), native Odoo theming (v1.2), and a working bus-event-driven trace store (v1.1). V1.4 is a contained, additive change: two new nullable fields in the Python `new_trace` bus event, a flat-Map-with-parent-pointers data model in the JS store, a computed `sidebarNodes` getter replacing the three-level nested template, per-agent color assignment, and a new IDB sentinel key for color persistence. No new npm packages, Odoo modules, or Python libraries are required. All patterns are verified against the live codebase at the worktree paths.
 
-The recommended approach is a write-through cache pattern: the reactive Map remains the single source of truth for the UI; every mutation also fires an async IDB write (fire-and-forget, non-blocking). On page load, `onWillStart` (not `onMounted`) hydrates the Map from IDB before the first render, ensuring traces appear immediately without a flash of empty state. The only new file needed is `db.js`, a plain ES module wrapping the Odoo `IndexedDB` class. The STACK.md research confirms that Odoo's own `@web/core/utils/indexed_db` wrapper handles schema versioning, mutex-serialized transactions, and quota errors — it is already used in production by `menu_service`, `localization_service`, `rpc_cache`, and `offline_service`. No external npm packages are required.
+The recommended approach is: (1) instrument the Python backend to inject `_ai_debug_parent_trace_id` and `_ai_debug_parent_tool_call_id` into `env.context` before calling `super()._handle_tool_calls()` — this causes the child session's `_run_agentic_loop` override to emit parent linkage in `new_trace` automatically; (2) keep `this.traces` as a flat `useState(new Map())` keyed by `trace_id`, with parent pointer fields on each trace object rather than nesting child traces inside parent objects; (3) derive the sidebar display tree in a computed `sidebarNodes` getter using a depth-first recursive JavaScript function (not recursive OWL components, which OWL does not support as template recursion); (4) store agent colors as a sentinel record in the existing `traces` IDB store (key `__agent_colors__`) to avoid a DB version bump.
 
-The primary risks are all async/sync boundary mistakes that are well-documented and entirely avoidable with the right patterns. The three most critical: (1) awaiting IDB writes inside bus event handlers causes main-thread jank during fast loops — use fire-and-forget; (2) hydrating in `onMounted` instead of `onWillStart` causes a flash of empty state — use `onWillStart`; and (3) failing to wrap hydrated Map data in `reactive()` breaks live-event reactivity for traces loaded from IDB — always reconstruct nested reactive Maps during deserialization. These are binary right/wrong design decisions that must be made correctly in Phase 1 and Phase 2 before any other code is written.
+The key risks are well-identified and each has a low-cost mitigation: bus event ordering (child `new_trace` can arrive before the parent's `tool_call` event — requires a `_pendingChildren` buffer in the JS event handler), reactivity pitfalls (agent colors must live in `useState({})`, not a plain Map), selection logic breakage (existing `getSelectedTrace` getters must be audited when the flat+nested rendering model replaces the three-level hierarchy), and IDB serialization gaps (parent pointer fields must be explicitly added to `serializeTrace()` or they are silently lost on export/import). None of these are blocking unknowns — they are prevention patterns, not research questions.
 
 ## Key Findings
 
 ### Recommended Stack
 
-All persistence, download, notification, and confirmation functionality is available via Odoo-native imports already present in the `web.assets_backend` bundle. No new npm dependencies, Python packages, or Odoo module additions are required. The serialization strategy requires explicit `serializeTrace()` and `hydrateTrace()` helpers because OWL reactive proxies cannot be stored by IndexedDB's structured clone algorithm and nested reactive Maps must be reconstructed on hydration.
+No new dependencies are introduced in v1.4. The existing stack remains unchanged: OWL `mountComponent` for the standalone app, `bus_service` for event delivery, `@web/core/utils/indexed_db` for persistence, `downloadFile` from `@web/core/network/download` for export, and Odoo's SCSS/Bootstrap system for theming. The only backend component that changes is `ai_debug/models/ai_session.py` (Python instrumentation overrides).
 
 **Core technologies:**
 
-- `IndexedDB` from `@web/core/utils/indexed_db` — structured local storage for trace data; handles schema versioning, quota errors (`IDBQuotaExceededError`), and mutex-serialized transactions; used in production by `menu_service`, `rpc_cache`, and `offline_service`; database name `"ai_debug_traces"`, version `1`, object store `"traces"`, key = `trace_id`
-- `downloadFile` from `@web/core/network/download` — triggers browser file download from a `Blob`; handles cross-browser edge cases including Safari and object URL lifecycle; already in the bundle via `web.assets_backend`
-- Native `FileReader` API — reads user-selected JSON file client-side via `readAsText(file)`; `FileInput` from OWL is explicitly wrong here (it uploads to server routes)
-- `notification` service via `useService("notification")` — surfaces import errors and quota-exceeded failures; `notification.add(message, { type: "danger" })`
-- `dialog` service + `ConfirmationDialog` from `@web/core/confirmation_dialog/confirmation_dialog` — confirmation modal before destructive clear-all operations
-- `serializeTrace()` / `hydrateTrace()` helpers — convert between OWL reactive Maps and plain IDB-storable objects; `Date` objects serialized as ISO strings; `expanded` UI state reset to `false` on hydration; nested `reactive(new Map())` explicitly reconstructed on deserialization
+- `ai_debug/models/ai_session.py` (`_inherit = 'ai.session'`): Python instrumentation layer — detects subagent tool calls in `_handle_tool_calls`, injects parent trace linkage via `self.with_context(...)` before `super()`, emits `new_trace` events with `parent_trace_id` and `parent_tool_call_id`; a `reserved_subagent_tc_id` is generated before `super()` and used in the subsequent `tool_call` event so the parent and child refer to the same identifier
+- `useState(new Map())` flat trace store in `AiDebugApp`: single reactive source of truth for all traces (root and subagent); child traces store `parent_trace_id` and `parent_tool_call_id` pointer fields, not nested inside parent objects; the rendering tree is derived from these pointers at render time
+- `useState({})` reactive plain object for `agentColors`: keyed by `agent_name`; `useState({})` is required (not a plain Map) because OWL tracks property reads on `useState`-wrapped objects and triggers re-renders when new agent names are added
+- `@web/core/utils/indexed_db` (`IndexedDB` class): persists serialized trace records; agent colors stored as a sentinel record keyed `__agent_colors__` in the existing `traces` object store (no schema version bump needed, avoids the `onupgradeneeded` failure mode)
+- Computed `sidebarNodes` getter in `app.js`: produces a flat, ordered array of display node objects with `{type, id, depth, data}`; the template iterates this single array with one `t-foreach`; depth-based `padding-left` provides visual indentation; no recursive OWL components
+- 8-slot hardcoded hex color palette (One Dark Pro-derived): assigned on first `new_trace` per agent name; values are static hex strings verified to work on both dark (`#1B1D26`) and light (`#F9FAFB`) Odoo backgrounds as 3px left-border accents
 
-**What not to use:** `localStorage` (5-10 MB limit; silent data loss on large RAG traces), the `idb` npm package (not in Odoo's asset pipeline; duplicates what `@web/core/utils/indexed_db` already provides), `FileInput` component (server-upload only), or any `await` on non-IDB Promises inside an IDB transaction scope (Safari auto-close risk).
+**What not to use:** recursive OWL components for tree rendering (OWL templates cannot recurse — causes double-render cascades and lifecycle ordering bugs); nested Map for child traces (breaks all existing lookup, serialize, and selection functions); `reactive()` without a render observer for color storage; IDB version bump for agent colors (use sentinel key instead to avoid wiping existing traces).
 
 ### Expected Features
 
-v1.3 delivers five table-stakes features and two differentiators. All are P1 priority. All are low implementation complexity. No anti-features should be built.
+**Must have (table stakes — v1.4 launch):**
+- Subagent traces nest visually under the tool call that spawned them — causality is visible in the sidebar tree; every LLM observability tool (LangSmith, LangFuse, Arize Phoenix) implements this; flat listings lose causality
+- Arbitrary recursive nesting depth — grandchildren and beyond render correctly; no hardcoded depth limit; the `sidebarNodes` getter's recursive `renderTrace` helper handles any depth
+- Flat tree within each trace — iterations and tool calls appear at the same indentation level (not iterations > tool calls); with subagent nesting adding depth, the old 3-level within-trace hierarchy makes tool calls appear at 6 levels deep on standard monitors
+- Per-agent color strip — 3px left border on trace rows in the agent's assigned color; fastest visual differentiator when scanning a multi-agent sidebar
+- Color persisted across page refreshes — sentinel key in IDB preserves agent-to-color mapping across sessions
+- Dark and light mode compatibility — hardcoded hex palette verified for both Odoo themes
+- Collapsed parent hides all descendants — existing `trace.expanded` flag gates child trace rendering; unchanged mechanism
 
-**Must have (table stakes):**
-- IndexedDB store initialization and hydration on page load — this is the definition of persistence; without it the feature doesn't exist
-- Write-through on every bus event — required for hydration to have anything to read on the next page load
-- Delete individual trace — users accumulate traces across sessions; being able to discard stale ones is fundamental; no confirmation needed (low-stakes, reversible by re-running the agent)
-- Clear all traces — essential clean-slate mechanism; must include a `ConfirmationDialog` step (irreversible)
-- New live traces appear in real time without regression — persistence layer must not block bus event delivery
-
-**Should have (differentiators):**
-- Export all/selected traces as a JSON file — enables cross-machine sharing, bug report attachment, archival; format: `{ version: 1, exported_at, traces: [...] }`
-- Import a previously exported JSON file — closes the sharing loop; merge semantics (additive, not replace); validate schema before inserting; user-facing error via `notification` on failure
+**Should have (differentiators, add after validation):**
+- Agent legend in sidebar header — color swatches + agent names, read-only; add when 4+ agents cause orientation confusion
+- Agent color chip in detail panel header — small colored badge next to agent name; add when deep hierarchies lose context
 
 **Defer (v2+):**
-- Search/filter within the sidebar — explicitly deferred in PROJECT.md; bounded tree depth makes it low priority
-- Export selected traces only — add when volume makes "export all" too coarse; trigger: user feedback
-- OpenTelemetry/OTLP export — listed as v2+ candidate EXPT-01 in PROJECT.md
-- Selective import picker — low-priority edge case; import all and delete unwanted is the sufficient solution
-
-**Anti-features (do not build):**
-- Auto-expiry/TTL — would delete traces the developer still needs; storage quota is not a practical constraint (Chrome: up to 60% of disk)
-- Server-side sync — adds models, migrations, ORM overhead; the module's explicit design decision is no database persistence; export/import covers cross-machine sharing
-- Per-event streaming writes with a normalized IDB schema — wrong persistence unit; a partial in-flight trace is useless; persist on `loop_end` or fire-and-forget on each event overwriting the full trace record
+- Search/filter sidebar by agent — explicitly deferred per PROJECT.md; breaks multi-agent context by hiding child traces of filtered-out agents
+- Custom color picker per agent — deterministic hash + IDB is sufficient; picker adds UI complexity for marginal gain
+- OpenTelemetry export with parent/child span relationships — v1.4 is a prerequisite; add in v2+
+- Timeline/Gantt view — Odoo's agentic loop is synchronous; no concurrency to visualize
 
 ### Architecture Approach
 
-The architecture is additive: a new `db.js` plain ES module wraps the Odoo `IndexedDB` class and exposes five async functions. The existing `app.js` is modified at six integration points. No new Odoo services, no backend model changes, no asset bundle changes are required. New files (`db.js`, optionally `toolbar.js` / `toolbar.xml`) are picked up automatically by the `**/*.js` and `**/*.xml` globs in `ai_debug.assets`. The IDB storage format is identical to the export JSON format — the same `serializeTrace()` function produces output for both.
+The architecture follows the OpenTelemetry flat-span model: every trace (root or subagent) lives at the top level of `this.traces`, carries nullable `parent_trace_id` and `parent_tool_call_id` pointer fields, and the display hierarchy is computed from those pointers at render time in the `sidebarNodes` getter. This preserves all existing lookup functions, IDB write patterns, export/import logic, and selection state management with zero changes to their core logic. The only structural change is replacing the three-level nested `t-foreach` template with a single `t-foreach` over the computed node array, and removing the `iteration.expanded` toggle (iterations are always shown when their trace is expanded, at the same depth level as tool calls).
 
 **Major components:**
 
-1. `db.js` (new) — plain ES module wrapping Odoo's `IndexedDB` class; owns all IDB schema and CRUD; not an OWL service; exports `openDB`, `loadAllTraces`, `saveTrace`, `deleteTrace`, `clearAllTraces`
-2. `serializeTrace()` / `hydrateTrace()` helpers (new, in `app.js` or a shared util) — convert between OWL reactive Maps and plain IDB-storable objects; critical for correctness; `hydrateTrace()` must explicitly call `reactive(new Map())` for all nested Maps
-3. `AiDebugApp.onWillStart` hydration block (modified) — reads all IDB records before bus subscription starts; ensures event handlers can always find parent traces in the Map
-4. Bus event handlers: `_onNewTrace`, `_onIteration`, `_onToolCall`, `_onLoopEnd` (modified) — each calls `db.saveTrace(serializeTrace(...))` fire-and-forget after the existing Map mutation
-5. `deleteTrace(id)` (new method) + modified `clearAll()` — symmetric dual delete from reactive Map and IDB; deletions must be immediate and unconditional, not deferred to a flush cycle
-6. `exportTraces()` (new method) — reads from in-memory Map, serializes with `serializeTrace()`, creates Blob, calls `downloadFile`
-7. `importTraces(file)` (new method) — `FileReader.readAsText()` → `JSON.parse` → validate shape → `hydrateTrace()` → `this.traces.set()` + `db.saveTrace()`; show `notification` on validation failure
-8. `toolbar.js` / `toolbar.xml` (new, optional) — export/import/clear controls; handles hidden file input and programmatic click for the import file picker
+1. `ai_debug/models/ai_session.py` (MODIFIED) — `_handle_tool_calls`: scans tool_calls before `super()`, detects subagent tool by `"ai_request_subagent"` substring, generates `reserved_subagent_tc_id`, injects `self.with_context(_ai_debug_parent_trace_id, _ai_debug_parent_tool_call_id)`; `_run_agentic_loop`: reads context fields, emits both in `new_trace` (null for root sessions)
+2. `app.js` (MODIFIED) — adds `agentColors = useState({})`, `_pendingChildren = new Map()` buffer, `sidebarNodes` computed getter with depth-first recursive `renderTrace` helper, updated `_onNewTrace` (stores parent fields, assigns color, buffers if parent tool call not yet seen), updated `_onToolCall` (drains pending-child buffer after insert), updated `onWillStart` (loads colors from IDB before traces)
+3. `app.xml` (MODIFIED) — single `t-foreach` over `sidebarNodes`; depth-based `padding-left: calc(node.depth * 12px + 8px)`; agent color swatch `<span>` on trace rows; `iteration.expanded` toggle and `toggleExpand` calls removed
+4. `db.js` (MODIFIED) — `serializeTrace` and `hydrateTrace` gain `parent_trace_id`, `parent_tool_call_id`, `agent_color` fields; sentinel-key `writeAgentColors` and `loadAgentColors` functions added
+5. `app.scss` (MODIFIED) — `.ai-agent-color-swatch` styling; CSS custom property for depth indentation
 
-**IDB schema:** Database `"ai_debug_traces"`, version `1`, single object store `"traces"`, keyPath = `"trace_id"`. One denormalized record per trace; iterations stored as plain arrays (not normalized stores). No secondary indexes needed. The Odoo `IndexedDB` class auto-deletes and re-creates the database on version change (`_checkVersion()` behavior) — acceptable for a dev tool.
+No new files are required for v1.4.
 
-**Build order:** `db.js` → `onWillStart` hydration → write-through in bus handlers → `deleteTrace` + `clearAll` → `exportTraces` → `importTraces`. Steps 5 (delete/clear) and 6-7 (export/import) are independent of each other after step 3.
+**Build order (dependency-aware):**
+Steps 1 (Python) and 2 (IDB schema) are fully parallel. Step 3 (JS store + color) depends on step 1 for live data and step 2 for IDB. Step 4 (`sidebarNodes` getter) depends on step 3. Step 5 (template refactor) depends on step 4. Step 6 (SCSS) depends on step 5.
 
 ### Critical Pitfalls
 
-1. **Awaiting IDB writes inside bus event handlers** — bus events fire multiple times per second during active agentic loops; awaiting each write adds main-thread structured-clone overhead per event and causes UI jank. Prevention: fire-and-forget all IDB writes (`db.saveTrace(...).catch(console.error)` — no `await` in bus handlers). Bus handlers must remain synchronous.
+1. **Child `new_trace` arrives before parent `tool_call`** — bus events are committed via separate database cursors with no ordering guarantee between them. Without a buffer, subagent traces silently land at root level. Prevention: implement `_pendingChildren = new Map()` in `setup()`; buffer child payloads when `parent_tool_call_id` is not yet in any trace; drain buffer in `_onToolCall` after inserting the tool call. Recovery if missed: add the buffer after the fact — medium cost.
 
-2. **Hydrating in `onMounted` instead of `onWillStart`** — `onMounted` runs after the first render, causing a visible flash of empty state and a second render cycle. Prevention: all IDB hydration goes in `onWillStart`, which runs before the first render and blocks it until the hook resolves.
+2. **Nested subagent traces stored inside parent trace objects** — breaks every existing function that assumes `this.traces` is a flat Map keyed by `trace_id`: `getSelectedTrace`, `deleteCheckedTraces`, `exportSelected`, `serializeTrace`, `hydrateTrace`. Prevention: decide the flat model before writing any code. Recovery if missed: full data model refactor — high cost.
 
-3. **Not reconstructing `reactive()` Maps during hydration** — IDB returns plain objects; OWL reactive proxy wrappers are stripped by structured clone. If hydrated traces have plain `Map` objects, live bus events that call `trace.iterations.set(...)` post-hydration will not trigger re-renders. Prevention: `hydrateTrace()` must explicitly call `reactive(new Map())` for every nested Map.
+3. **`serializeTrace()` missing parent linkage fields** — the function explicitly enumerates fields; new fields on trace objects are silently dropped unless added to `serializeTrace()`. Hierarchy is lost on export/import. Prevention: audit `serializeTrace` and `hydrateTrace` together when adding any new field. Recovery: add fields and re-write IDB records on next `loop_end` — low cost.
 
-4. **Not pairing IDB deletes with reactive Map deletes** — `this.traces.delete(id)` removes the trace visually, but the trace returns on the next page load unless `db.deleteTrace(id)` is also called. Prevention: every delete operation (single trace and clear-all) must be dual: reactive Map + IDB. Deletions must be immediate, not deferred to a flush cycle.
+4. **Agent colors stored in a plain (non-reactive) Map** — Map mutations are invisible to OWL; new agent color assignments don't trigger re-renders; sidebar rows appear colorless until the next unrelated event. Prevention: `this.agentColors = useState({})` (plain object, string keys), not `new Map()`. Recovery: change storage and wipe existing color assignments — low cost.
 
-5. **Missing import validation** — a malformed or version-mismatched JSON file inserts broken trace objects; rendering exceptions then appear deep in template code with cryptic stack traces. Prevention: validate required fields (`trace_id`, `agent_name`, `status`, `iterations` as array) before inserting; reject with `notification.add(err.message, { type: "danger" })` on failure.
+5. **Selection logic breaks with flat+nested rendering** — the existing selection getters (`getSelectedIteration`, `getSelectedToolCall`, `selectedTraceId`) were written for flat traces only. Subagent traces are also in `this.traces` so getters still find them, but `getRootTraceId()` must be added for cases that need the root-level trace. Prevention: audit all selection getters when refactoring the template; add `getRootTraceId(traceId)` that walks `parent_trace_id` to the root. Recovery: incremental getter fixes — low-to-medium cost.
 
 ## Implications for Roadmap
 
-Based on the research, this milestone maps to three sequential implementation phases driven by hard dependency ordering. The phases are small, focused, and verifiable independently.
+Based on research, the build order has clear dependencies. Python instrumentation is the independent starting point; IDB schema additions are parallel to Python; JS store updates depend on Python being in place for live data; the `sidebarNodes` getter depends on store changes; the template refactor depends on the getter; SCSS is last.
 
-### Phase 1: IDB Layer and Write-Through
+### Phase 1: Python Instrumentation + JS Bus Event Handling
 
-**Rationale:** The `db.js` module and the write-through pattern are prerequisites for everything else. Hydration has nothing to read unless writes exist first. Delete/clear has nothing to remove from IDB unless writes exist. Export/import has nothing to validate unless the schema is defined. All schema and error-handling decisions — version strategy, IDB availability fallback, fire-and-forget vs await — must be locked in here before any other code is written. Four of the ten identified pitfalls (1, 8, 9, 10) require decisions made at this layer; they cannot be patched later without refactoring the write strategy.
+**Rationale:** Every frontend feature depends on the backend emitting `parent_trace_id` and `parent_tool_call_id`. This is the unlock. Implementing the `_pendingChildren` buffer in JS at the same time prevents the bus ordering race from being discovered as a hard-to-reproduce bug. These two pieces are the first integration point to establish and verify before touching the store or rendering.
 
-**Delivers:** Working `db.js` module with all five functions. Modified bus event handlers with fire-and-forget `db.saveTrace()`. IDB schema at version 1. `serializeTrace()` helper. IDB availability try/catch in place from the start (graceful degradation to ephemeral mode if IDB is unavailable in private browsing).
+**Delivers:** `_handle_tool_calls` override detects subagent tool, injects context, uses `reserved_subagent_tc_id`; `_run_agentic_loop` override reads and emits `parent_trace_id` + `parent_tool_call_id` (null for root); `_onNewTrace` buffers children when parent tool call not yet seen; `_onToolCall` drains buffer after insert; `_onLoopEnd` unchanged; backward compatible (existing non-subagent sessions emit null for both fields).
 
-**Addresses:** IndexedDB initialization, write-through on bus events, schema version strategy, graceful IDB failure handling.
+**Addresses:** Subagent trace nesting (table stake #1), arbitrary recursive depth (table stake #2).
 
-**Avoids:** Pitfall 1 (jank from awaiting writes in handlers), Pitfall 8 (delete not durable — deletion semantics part of layer design), Pitfall 9 (schema mismatch — version and upgrade strategy defined upfront), Pitfall 10 (IDB crash in private browsing — try/catch on open).
+**Avoids:** Pitfall 1 (pending-child buffer), Pitfall 3 (context injection must precede `super()` call — verified pattern from ARCHITECTURE.md).
 
-### Phase 2: Hydration and Delete/Clear
+### Phase 2: Data Model, IDB Schema, Color Assignment
 
-**Rationale:** Hydration depends on Phase 1 writes having persisted data to read. Delete/clear depends on Phase 1's `deleteTrace` and `clearAllTraces` functions existing. The `onWillStart` hook choice and `hydrateTrace()` reactive Map reconstruction are the most correctness-critical decisions in the entire milestone — they must be implemented correctly the first time. Verification of the full round-trip (write → reload → read → live events still work) is the acceptance criterion before proceeding to Phase 3.
+**Rationale:** IDB changes are independent of live Python events and can proceed in parallel with Phase 1. The flat-Map-with-parent-pointers decision must be locked in before rendering work begins — switching from nested to flat after template code is written is a major refactor. Agent color assignment and IDB persistence for colors are low-complexity and belong here with the data model.
 
-**Delivers:** `onWillStart` hydration block in `app.js`. `hydrateTrace()` deserializer that reconstructs nested `reactive(new Map())` Maps and converts ISO strings back to `Date` objects. Modified `clearAll()` that also calls `db.clearAllTraces()`. New `deleteTrace(id)` method that removes from both reactive Map and IDB. Delete button per trace in `app.xml`. Updated `clearAll` button with `ConfirmationDialog`.
+**Delivers:** `parent_trace_id`, `parent_tool_call_id`, `agent_color` fields on trace objects; `serializeTrace` and `hydrateTrace` updated for all three fields; `agentColors = useState({})` reactive store; `_assignAgentColor` method; sentinel-key `writeAgentColors` / `loadAgentColors` in `db.js`; two-pass hydration (load all traces first, then validate parent pointers); `onWillStart` loads colors before traces.
 
-**Addresses:** Page load hydration (traces survive refresh), delete individual trace, clear all traces, new live traces still appear in real time post-hydration.
+**Uses:** `@web/core/utils/indexed_db` (existing); sentinel key pattern (no version bump); `useState({})` for color reactivity.
 
-**Avoids:** Pitfall 3 (hydration flash — use `onWillStart`), Pitfall 4 (reactivity not reconstructed — explicit `reactive(new Map())` in `hydrateTrace()`), Pitfall 5 (Date type loss on hydration — explicit `new Date()` reconstruction), Pitfall 8 (delete not durable — must pass the reload test as part of phase verification).
+**Implements:** Flat trace store with parent pointers, IDB persistence for colors (ARCHITECTURE.md Q2, Q4).
 
-### Phase 3: Export and Import
+**Avoids:** Pitfall 2 (flat model decided upfront), Pitfall 4 (colors in `useState`), Pitfall 5 (colors in `useState({})`, not plain Map), Pitfall 6 (sentinel key, no version bump needed), Pitfall 7 (two-pass hydration), Pitfall 8 (linkage fields in `serializeTrace`), Pitfall 9 (colors keyed by `agent_name`).
 
-**Rationale:** Export reads from the in-memory Map and does not depend on Phase 2 for its read path — but it depends on Phase 1's `serializeTrace()` for the export format, since the export format is identical to the IDB storage format. Import depends on Phase 2's `hydrateTrace()` and `db.saveTrace()`. Implementing export first provides a real export file to test import against, which is the correct verification sequence.
+### Phase 3: Sidebar Rendering Refactor
 
-**Delivers:** `exportTraces()` method using `serializeTrace()` + Blob + `downloadFile`. `importTraces(file)` method using `FileReader.readAsText()` + `JSON.parse` + shape validation + `hydrateTrace()` + `this.traces.set()` + `db.saveTrace()`. Export/import controls in toolbar (inline in `app.xml` or extracted to `toolbar.js`). User-facing error notifications for invalid imports via `notification` service.
+**Rationale:** Depends on Phase 1 (parent pointers in live events) and Phase 2 (parent pointers in store). The `sidebarNodes` computed getter and template refactor are a single coherent change — the getter defines the data contract the template consumes, so they must be implemented together. Selection logic audit is a required step within this phase; skipping it produces incorrect ancestor highlighting for items inside subagent traces.
 
-**Addresses:** Export as JSON (differentiator P1), import from JSON (differentiator P1).
+**Delivers:** `sidebarNodes` getter with depth-first `renderTrace` recursive helper producing flat ordered node array; single `t-foreach` template over `sidebarNodes`; depth-based `padding-left` indentation; agent color swatch on trace rows; `iteration.expanded` toggle removed; `getRootTraceId(traceId)` helper; all selection getters audited.
 
-**Avoids:** Pitfall 5 (Date type loss on import — explicit `new Date()` reconstruction in import path), Pitfall 6 (large export blocking main thread — stringify per-trace in a loop; measure actual payload size with a real RAG session before deciding on chunking), Pitfall 7 (import without validation — validate before inserting into store).
+**Avoids:** Pitfall 4 (selection logic audit), Pitfall 10 (flat iterative rendering, not recursive OWL components).
+
+### Phase 4: Export/Import Verification and SCSS Polish
+
+**Rationale:** Export/import is the final integration point that exercises the full data lifecycle (Python events -> JS store -> IDB -> serialize -> export -> import -> hydrate -> render). SCSS is last because it has no code dependencies — only element class names from Phase 3. Running the "looks done but isn't" checklist from PITFALLS.md as a structured step before closing the milestone catches silent failures.
+
+**Delivers:** Export confirmed to include parent linkage fields; import reconstructs nesting correctly (two-pass after load); `.ai-agent-color-swatch` SCSS styling; CSS custom property for depth indentation; PITFALLS.md verification checklist completed and passing.
+
+**Avoids:** Pitfall 8 (export missing linkage fields — verify by inspecting exported JSON).
 
 ### Phase Ordering Rationale
 
-- Phase 1 must come first because the IDB schema and write strategy are the foundation all other phases build on. A wrong decision here (like using `await` in bus handlers, or skipping the IDB availability try/catch) requires refactoring the entire write strategy — it cannot be patched incrementally.
-- Phase 2 must follow Phase 1 because hydration has nothing to read until writes have persisted data. The delete/clear operations also require the IDB layer functions from Phase 1. The `onWillStart` bus subscription sequencing (hydrate fully, then subscribe) requires the hydration functions from Phase 1 to exist.
-- Phase 3 can begin as soon as Phase 1's schema and `serializeTrace()` are done. Export reads from the in-memory Map and does not require Phase 2 to be complete. Import depends on `hydrateTrace()` from Phase 2 and `db.saveTrace()` from Phase 1.
-- Within each phase, the build order in ARCHITECTURE.md applies: `db.js` → hydration → write-through → delete/clear → export → import. This order respects the dependency graph and ensures each step is verifiable before the next begins.
+- Python instrumentation must come first because there is no parent linkage to observe without it. The pending-child buffer must exist before any subagent can trigger the race condition.
+- Data model decisions (flat Map) must be made before any rendering code — the nested-Map anti-pattern discovered late is the highest-recovery-cost mistake in PITFALLS.md (full refactor).
+- The `sidebarNodes` getter bundles the tree computation and template refactor — splitting them creates an intermediate broken state where the getter exists but the template still uses the old nested `t-foreach`.
+- Export/import verification is last because it exercises the complete stack and is the best integration test for all earlier phases working together.
 
 ### Research Flags
 
-No phase needs `/gsd:research-phase`. The research is comprehensive and all patterns are verified against Odoo master source code at local worktree paths.
+No additional `/gsd:research-phase` is needed for any phase. All patterns are verified from direct source reading. No external APIs, undocumented integrations, or speculative assumptions remain.
 
 **Standard patterns (skip research-phase):**
-- **Phase 1:** IDB layer design is fully documented in STACK.md with verified Odoo source patterns for `IndexedDB`, `serializeTrace()`, and fire-and-forget. The `IDBQuotaExceededError` catch pattern is verified in `rpc_cache.js`. The schema and version strategy are fully specified.
-- **Phase 2:** `onWillStart` usage, `hydrateTrace()` implementation, OWL reactive Map reconstruction, and `ConfirmationDialog` usage are all fully specified in ARCHITECTURE.md and PITFALLS.md. The delete/clear dual-operation pattern is specified at code level.
-- **Phase 3:** Export (`downloadFile`, `serializeTrace()`) and import (`FileReader`, shape validation, `hydrateTrace()`) patterns are fully specified in STACK.md and ARCHITECTURE.md. The export file format is defined. No additional research needed.
+- **Phase 1 (Python instrumentation):** `env.context` injection before `super()` is a standard Odoo override pattern. `_handle_tool_calls` and `_run_agentic_loop` override structure verified directly from `ai_debug/models/ai_session.py`. `parent_session_id` field existence verified from `enterprise/ai/models/ai_session.py` line 62. No unknowns.
+- **Phase 2 (data model + IDB + colors):** Flat Map with parent pointers is the established OpenTelemetry span model. `useState({})` reactivity for plain objects is verified from existing codebase patterns. Sentinel key approach avoids the `onupgradeneeded` version bump entirely. Two-pass hydration is standard load-then-link. No unknowns.
+- **Phase 3 (rendering):** `sidebarNodes` flat-array pattern eliminates template recursion concerns. CSS depth-indentation is trivial. Selection getter audit is procedural.
+- **Phase 4 (verification + SCSS):** No new patterns. Checklist-driven.
+
+One empirical check needed during implementation (not a research gap):
+- **IDB sentinel key shape compatibility:** The `loadAllTraces()` function does `getAll()` and processes every record. The sentinel record (key `__agent_colors__`, no `trace_id` field) must be filtered out before `hydrateTrace()` is called on it. Add a `if (!record.trace_id) continue` guard in the hydration loop.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All APIs verified against Odoo master source at `/Users/joseph/clones/odoo/odoo/.worktrees/master/`. Odoo `IndexedDB` class confirmed used in production by `menu_service`, `rpc_cache`, `offline_service`. `downloadFile` and `ConfirmationDialog` confirmed available in `web.assets_backend`. `FileInput` confirmed wrong for local import (verified server-upload implementation). |
-| Features | HIGH | Feature set is small and unambiguous, defined by PROJECT.md. MDN, web.dev, Chrome DevTools, and Edge DevTools docs confirm what a persistence + export/import feature set for a developer tool should contain. Anti-features and deferral decisions are clearly justified with PROJECT.md citations. |
-| Architecture | HIGH | Architecture grounded in direct inspection of the existing `app.js` source, OWL lifecycle documentation, and the Odoo `IndexedDB` class source. All integration points, data flow changes, and serialization patterns are specified at the code level in ARCHITECTURE.md. Build order is derived from dependency analysis. |
-| Pitfalls | HIGH | All ten pitfalls grounded in direct source inspection (existing `app.js`, `clearAll()` method), OWL source (`onWillStart` vs `onMounted` semantics), IDB spec (transaction auto-close behavior), and official web.dev documentation on structured clone performance. Each pitfall includes specific "warning signs" and recovery cost. |
+| Stack | HIGH | All technologies verified by direct source reading of the live codebase. No external dependencies introduced. Every import path confirmed reachable from `ai_debug.assets`. |
+| Features | HIGH | Table stakes derived from PROJECT.md requirements (HIGH) and LangSmith/LangFuse/Arize patterns (MEDIUM for UI conventions; HIGH for the underlying principle that subagent causality must be visible). Differentiators and anti-features clearly reasoned from existing architecture. |
+| Architecture | HIGH | `sidebarNodes` getter, flat-Map-with-parent-pointers, `env.context` injection — all derived from direct source reading and reasoned against the full 627-line `app.js`, 201-line `app.xml`, and 143-line `db.js`. Anti-patterns derived from code analysis, not speculation. |
+| Pitfalls | HIGH | Bus event ordering race is empirically grounded (separate cursors, no ordering guarantee — verified from `_ai_debug_bus_send` implementation). OWL reactivity pitfalls verified from existing code patterns and PROJECT.md key decisions. IDB version semantics verified from Odoo `IndexedDB` class source (`_checkVersion()` deletes and recreates on version change). |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **RAG session payload sizes are empirically unknown:** PROJECT.md notes this as tech debt. A RAG-enabled trace could be 1-5MB per trace depending on conversation length. The export implementation (Phase 3) should measure actual payload sizes with a real RAG session before deciding whether per-trace chunked stringify is needed. The threshold for concern is approximately 2MB per trace — below that, `JSON.stringify` is fast enough for a developer tool. This is a verify-during-implementation decision, not a blocker.
+- **`parent_call_id` exact disambiguation for parallel subagents:** When one agent iteration calls multiple subagent tools in the same iteration, matching each child trace to its exact spawning tool call requires threading the LLM's `call_id` through `env.context`. Deferred to v1.4.1 per STACK.md recommendation. The common case (one subagent call per iteration) works correctly with the `parent_session_id` mapping approach. Accept this limitation for v1.4.
 
-- **Conflicting hook recommendations between ARCHITECTURE.md and PITFALLS.md:** ARCHITECTURE.md discusses using `onMounted` in some places while PITFALLS.md explicitly recommends `onWillStart` for hydration. The correct answer is `onWillStart` for hydration (PITFALLS.md is right). Bus subscription should start after hydration completes inside `onWillStart`. Confirm the existing `app.js` lifecycle structure before implementing to ensure the hydration and bus subscription sequence is correct.
+- **IDB sentinel key shape filter in `loadAllTraces()`:** The sentinel record (key `__agent_colors__`) has no `trace_id` field. The hydration loop must filter it out before calling `hydrateTrace()`. This is a one-line guard, not a design issue.
 
-- **Odoo `IndexedDB.invalidate()` exact behavior for single-store clear:** STACK.md states `invalidate("traces")` clears one store. Verify this against the `_invalidate` implementation at `indexed_db.js` lines 215-244 at implementation time to confirm the string-argument behavior before using it in `clearAllTraces()`.
+- **Color palette contrast on Odoo's actual dark theme:** The 8-slot One Dark Pro palette is documented as having good contrast on dark and light IDE backgrounds but should be spot-checked against Odoo's `$o-gray-100 = #1B1D26` (dark background) and `#F9FAFB` (light background) at implementation time. The 3px border accent requires only 3:1 contrast (WCAG AA for decorative elements) — all 8 slots are expected to pass easily.
 
 ## Sources
 
-### Primary (HIGH confidence — direct source inspection at local worktree paths)
+### Primary (HIGH confidence — direct source reads at worktree paths)
 
-- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/static/src/core/utils/indexed_db.js` — full Odoo `IndexedDB` class: `read`, `write`, `getAllKeys`, `invalidate`, `execute`, `_checkVersion`, `IDBQuotaExceededError`
-- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/static/src/core/network/download.js` — `downloadFile` implementation: Blob + object URL lifecycle
-- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/static/src/core/confirmation_dialog/confirmation_dialog.js` — `ConfirmationDialog` props: `body`, `confirm`, `cancel`, `confirmLabel`, `confirmClass`
-- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/static/src/core/file_input/file_input.js` — confirmed NOT suitable for local import (server-upload only)
-- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/static/src/core/network/rpc_cache.js` — `IDBQuotaExceededError` catch pattern + `execute()` usage
-- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/static/src/webclient/menus/menu_service.js` — `new IndexedDB("webclient_menu", ...)` + `read`/`write` pattern in production
-- `/Users/joseph/clones/odoo/custom/ai_debug/static/src/app/app.js` — existing reactive store (`useState(new Map())`), bus event handlers, `onMounted` lifecycle, existing `clearAll()` method
-- `/Users/joseph/clones/odoo/custom/ai_debug/static/src/app/app.xml` — existing template structure (sidebar tree, header controls)
-- `/Users/joseph/clones/odoo/custom/ai_debug/__manifest__.py` — asset bundle glob patterns confirming new files are picked up automatically
-- `/Users/joseph/clones/odoo/custom/.planning/PROJECT.md` — v1.3 requirements, out-of-scope items, tech debt notes
-- [MDN: Using IndexedDB](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB) — schema design, transactions, versioning
-- [web.dev: IndexedDB Best Practices for App State](https://web.dev/articles/indexeddb-best-practices-app-state) — structured clone blocks main thread; per-record storage; stale-while-revalidate pattern
+- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/models/ai_session.py` — full instrumentation override (334 lines); `_run_agentic_loop`, `_handle_tool_calls`, `_ai_debug_bus_send`, `_ai_debug_state_snapshot`
+- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/app.js` — reactive store, bus handlers, hydration, selection getters (627 lines)
+- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/app.xml` — sidebar template, 3-level nested `t-foreach` (201 lines)
+- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/db.js` — IDB schema, `serializeTrace`, `hydrateTrace`, `writeTrace`, `loadAllTraces` (143 lines)
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/models/ai_session.py` — upstream agentic loop, `_handle_tool_calls` subagent forward, `parent_session_id` field at line 62 (478 lines)
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/models/ai_agent.py` — `_ai_tool_request_sub_agent` at line 1339, `make_tool_name`, `parent_session_id` set in create dict at line 1365
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/data/ir_actions_server_data.xml` — subagent tool record confirming name "AI: Request Sub-Agent" → `ai_request_sub_agent_{id}`
+- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/static/src/core/utils/indexed_db.js` — `IndexedDB` class: `read`, `write`, `getAllKeys`, `invalidate`, `execute`, `_checkVersion` (version bump deletes and recreates DB)
+- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/.planning/PROJECT.md` — v1.4 requirements, key decisions, constraints
 
-### Secondary (MEDIUM confidence)
+### Secondary (MEDIUM confidence — training data as of August 2025)
 
-- [Microsoft Edge DevTools: Share Performance Traces](https://learn.microsoft.com/en-us/microsoft-edge/devtools/performance/share-performance-traces) — export/import UX patterns for developer tools (official docs, updated Nov 2025)
-- [Chrome DevTools: New in DevTools 101](https://developer.chrome.com/blog/new-in-devtools-101) — Recorder panel export/import JSON as established DevTools pattern
-- [nolanlawson.com: Speeding up IndexedDB reads and writes](https://nolanlawson.com/2021/08/22/speeding-up-indexeddb-reads-and-writes) — write batching performance benchmark: 1k records one-at-a-time ~2s vs batched ~80ms
-- [github.com/pesterhazy: Safari IDB transaction auto-close](https://gist.github.com/pesterhazy/4de96193af89a6dd5ce682ce2adff49a) — Safari closes transactions more aggressively; `Promise.resolve().then()` can close mid-transaction
-
-### Tertiary (LOW confidence — verify at implementation)
-
-- [LogRocket: Offline-first frontend apps 2025](https://blog.logrocket.com/offline-first-frontend-apps-2025-indexeddb-sqlite/) — write-through and sync queue patterns (editorial, not official docs)
-- [dexie.org: Export/Import](https://dexie.org/docs/ExportImport/dexie-export-import) — streaming Blob construction for large IDB exports (reference only; not using Dexie)
+- LangSmith multi-agent run tree — nested child runs under spawning parent; causality via indentation; color coding per run type
+- LangFuse span model — color as type/identity signal (not status); OpenTelemetry-compatible flat span storage with `parent_id`
+- Arize Phoenix agent trace model — flat span storage with `parent_id` pointer; recursive rendering with no hardcoded depth limit
+- OpenTelemetry tracing specification — `parent_span_id` as canonical way to express span causality; flat span model
+- One Dark Pro palette — 8 colors, battle-tested contrast on dark/light IDE backgrounds used across VS Code, Atom, and many terminals
+- WCAG 2.1 — AA minimum 4.5:1 for text, 3:1 for decorative elements (applies to 3px border accent use case)
 
 ---
-*Research completed: 2026-02-22*
+
+*Research completed: 2026-02-23*
 *Ready for roadmap: yes*

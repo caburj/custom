@@ -1,8 +1,471 @@
 # Stack Research
 
 **Domain:** Odoo standalone OWL app — AI agentic loop live tracer
-**Researched (v1.2 theming addendum):** 2026-02-22
-**Confidence:** HIGH (all patterns verified against Odoo master and enterprise source at `/Users/joseph/clones/odoo/`)
+**Researched (v1.4 subagent addendum):** 2026-02-23
+**Confidence:** HIGH (all patterns verified against enterprise and custom source at `/Users/joseph/clones/odoo/`)
+
+---
+
+## v1.4 Scope: Subagent Hierarchy Visualization
+
+This section covers the stack additions and changes required to visualize subagent hierarchies. No new npm packages, Python libraries, or Odoo module dependencies are required. All work is Python instrumentation changes (backend) and JS/XML reactive store restructuring (frontend).
+
+**Existing stack unchanged.** The v1.3 IndexedDB persistence, v1.2 theming, and v1.1 OWL standalone app stacks are not modified by v1.4 except where explicitly noted.
+
+---
+
+## v1.4 Backend: How `_ai_tool_request_sub_agent` Works
+
+### Source Location
+
+`/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/models/ai_agent.py` lines 1339-1375 (HIGH confidence — direct source read).
+
+### Execution Flow
+
+When a parent agent decides to delegate to a sub-agent, the LLM emits a tool call with `name` matching `"ai_request_sub_agent_{id}"` (via `make_tool_name` — strips non-alpha chars from tool name "AI: Request Sub-Agent", lowercases, appends record ID). The enterprise `ai_session._handle_tool_calls()` detects this at line 221 by checking `"ai_request_subagent" in tool_call.get("name", "")`.
+
+`_ai_tool_request_sub_agent(tool_context, agent_id, prompt)` then:
+
+1. Looks up or creates a child `ai.session` record with `parent_session_id = parent_session_sudo.id`
+2. Calls `ai_session_sudo._generate_next_response(message, tool_context["tool_request_confirmed"])`
+3. Returns the generator — which the enterprise `_handle_tool_calls` iterates, forwarding `thought` and `tool_confirmation_request` items upstream
+
+The child `_generate_next_response` → `_run_agentic_loop` call chain runs through the `ai_debug` module's overridden `_run_agentic_loop`. **This means the child session's loop is automatically instrumented** — it emits its own `new_trace`, `iteration`, `tool_call`, and `loop_end` events over the `ai_debug` bus channel, each with their own `trace_id`.
+
+### Key Facts for Instrumentation
+
+| Fact | Source | Confidence |
+|------|--------|------------|
+| `parent_session_id` field exists on `ai.session` | `ai/models/ai_session.py` line 62: `parent_session_id = fields.Many2one("ai.session", ...)` | HIGH |
+| `self.parent_session_id` is readable at `_run_agentic_loop` call time | `_run_agentic_loop` is decorated `@api.model` — `self` is the `ai.session` recordset. The instrumented override in `ai_debug/models/ai_session.py` calls `self.agent_id`, `self.channel_id` already; adding `self.parent_session_id.id` follows the identical pattern | HIGH |
+| Child session has `parent_session_id` populated when created | `ai_agent.py` line 1365: `"parent_session_id": parent_session_sudo.id` in the create dict | HIGH |
+| Existing child sessions are found by `parent_session_id + agent_id` search | `ai_agent.py` lines 1349-1358: search before create, so `parent_session_id` is set on both new and existing child sessions | HIGH |
+| The spawning tool call's `call_id` is the LLM-assigned identifier | In `_handle_tool_calls`, `tool_call['call_id']` is already captured by the `ai_debug` override in `tool_call` bus events | HIGH |
+| Tool name for subagent detection: `"ai_request_subagent"` substring | `ai_session.py` line 221 — the detection substring used by the enterprise code itself | HIGH |
+| `_run_agentic_loop` is `@api.model` — `self` may be an empty recordset in one-shot path | When called via `_get_direct_response`, `self` is an empty `ai.session` recordset (`self.env['ai.session']`). `self.parent_session_id` would be empty but safe to access — returns a falsy empty recordset. The subagent path always goes through `_generate_next_response` on a concrete session record. | HIGH |
+
+### What Must Change in `_run_agentic_loop` Override
+
+The `ai_debug` override emits `new_trace` at loop start. To correlate subagent traces with their parent, two fields must be added to the `new_trace` payload:
+
+```python
+# In ai_debug/models/ai_session.py _run_agentic_loop override:
+parent_session_id = self.parent_session_id.id if self.parent_session_id else None
+
+self._ai_debug_bus_send('new_trace', {
+    'type': 'new_trace',
+    'trace_id': trace_id,
+    # --- NEW in v1.4 ---
+    'parent_session_id': parent_session_id,  # ORM ID of parent ai.session, or None
+    # parent_tool_call_id is NOT reliably available at new_trace time (see note below)
+    # --- existing fields unchanged ---
+    'agent_name': self.agent_id.name if self.agent_id else None,
+    'model_name': model,
+    ...
+})
+```
+
+**Why `parent_session_id` and not `parent_trace_id`:** The `trace_id` is a UUID generated at the start of each `_run_agentic_loop` invocation — it is not the `ai.session.id`. The parent's `trace_id` is not directly accessible from the child's loop invocation. Using `parent_session_id` (the ORM integer ID) allows the frontend to correlate: it receives the parent's `trace_id` in an earlier `new_trace` event that carries the same `parent_session_id`-as-None (parent has no parent), while the child's `new_trace` carries `parent_session_id` pointing to the parent session.
+
+**The correlation chain:**
+1. Parent `new_trace` event: `{trace_id: "abc", parent_session_id: null}` — frontend stores `session_id → trace_id` mapping (session ID comes from `state_snapshot.agent_id` and related fields... but wait — `self.id` is what we need).
+2. Add `session_id: self.id` to the `new_trace` payload so the frontend can build the correlation map.
+3. Child `new_trace` event: `{trace_id: "xyz", parent_session_id: 42, session_id: 99}` — frontend looks up which `trace_id` has `session_id == 42`, finds "abc", nests "xyz" under "abc".
+
+**Also add `session_id` to `new_trace`:**
+
+```python
+self._ai_debug_bus_send('new_trace', {
+    'type': 'new_trace',
+    'trace_id': trace_id,
+    'session_id': self.id or None,        # NEW: own ai.session.id for correlation
+    'parent_session_id': self.parent_session_id.id if self.parent_session_id else None,  # NEW
+    ...
+})
+```
+
+**`parent_tool_call_id` availability:** The spawning tool call's `tool_call_id` (the `ai_debug`-assigned UUID, not the LLM's `call_id`) is emitted in the parent's `tool_call` bus event. However, that event fires *after* the tool executes — and the subagent's loop starts *inside* the tool execution, before the `tool_call` event fires. The `tool_call` event fires only when `_handle_tool_calls` yields `tool_results`, which happens after the subagent loop completes. Therefore:
+
+- `parent_tool_call_id` (the ai_debug UUID) **cannot** be included in `new_trace` — it does not exist yet when `new_trace` fires
+- The LLM's `call_id` (from `tool_call['call_id']` in `_handle_tool_calls`) **is** available inside the tool execution but not passed through to `_ai_tool_request_sub_agent` or `_run_agentic_loop`
+
+**Solution: emit `parent_call_id` in `tool_call` event.** The parent's `tool_call` bus event already includes `call_id` (the LLM's call_id). Add a `child_trace_id` field to the parent's `tool_call` event — populated when the tool name matches the subagent pattern. This requires the subagent tool to communicate its `trace_id` back up. This is complex.
+
+**Simpler solution: correlate via `parent_session_id` + session_id map in frontend.** The frontend maintains a `Map<session_id, trace_id>`. When a `new_trace` event arrives with `parent_session_id != null`, look up `parentTraceId = sessionToTrace.get(parent_session_id)`. The subagent trace goes under that parent trace. The exact spawning tool call is found by looking at the parent trace's tool calls that match the subagent pattern — there will typically be one per subagent invocation, and if multiple exist they can be matched by timing (tool_call receivedAt before child trace started_at).
+
+**Revised `new_trace` payload additions for v1.4:**
+
+```python
+# In _run_agentic_loop override
+self._ai_debug_bus_send('new_trace', {
+    'type': 'new_trace',
+    'trace_id': trace_id,
+    'session_id': self.id if self.id else None,            # NEW: own ORM session ID
+    'parent_session_id': self.parent_session_id.id if self.parent_session_id else None,  # NEW
+    # all existing fields unchanged
+    'agent_name': self.agent_id.name if self.agent_id else None,
+    'model_name': model,
+    'user_query': user_query,
+    'instructions': instructions,
+    'tools': self._ai_debug_serialize_tools(tools, model),
+    'state_snapshot': self._ai_debug_state_snapshot(tools_context),
+})
+```
+
+No other backend changes are required. The four event types (`new_trace`, `iteration`, `tool_call`, `loop_end`) already use `trace_id` as the correlation key within a single trace. Cross-trace correlation is fully handled by the two new fields on `new_trace`.
+
+---
+
+## v1.4 Frontend: Reactive Store Changes
+
+### Current Store Structure
+
+```
+traces: useState(new Map())           // Map<trace_id, trace>
+  trace.iterations: reactive(new Map())  // Map<iteration_id, iteration>
+    iteration.toolCalls: reactive(new Map())  // Map<tool_call_id, toolCall>
+```
+
+Each `trace` is a flat, independent entry. There is no parent-child relationship between traces.
+
+### v1.4 Required Changes
+
+**Goal:** Subagent traces nest under the tool call that spawned them in the sidebar. Within a trace, flatten the tree so iterations and tool calls appear at the same indent level (no expand/collapse of iterations).
+
+#### 1. Session-to-Trace Correlation Map
+
+Add a plain (non-reactive) `Map<session_id, trace_id>` to `AiDebugApp` state. This is populated as `new_trace` events arrive:
+
+```javascript
+// In setup() — not reactive, lookup only, no need to trigger re-renders
+this._sessionToTrace = new Map();  // session_id (int) → trace_id (string)
+```
+
+In `_onNewTrace`:
+```javascript
+this._onNewTrace = (payload) => {
+    // ...existing trace creation...
+    // NEW: register session_id → trace_id for child correlation
+    if (payload.session_id) {
+        this._sessionToTrace.set(payload.session_id, payload.trace_id);
+    }
+    // NEW: attach to parent trace if this is a subagent
+    if (payload.parent_session_id) {
+        const parentTraceId = this._sessionToTrace.get(payload.parent_session_id);
+        if (parentTraceId) {
+            const newTrace = this.traces.get(payload.trace_id);
+            if (newTrace) {
+                newTrace.parentTraceId = parentTraceId;
+            }
+        }
+    }
+    // ...
+};
+```
+
+Each trace object gains:
+- `session_id: number | null` — its own `ai.session` ORM ID (from `new_trace` payload)
+- `parentTraceId: string | null` — the `trace_id` of the parent trace (null for root traces)
+
+#### 2. Per-Agent Color Assignment
+
+A global color palette is assigned on first appearance of each `agent_name`. Colors are persisted to IDB in a separate store `"agent_colors"`.
+
+```javascript
+// In setup():
+this._agentColors = new Map();  // agent_name (string) → CSS color string
+
+// Color palette — 8 distinct Odoo-compatible hues
+const COLOR_PALETTE = [
+    '#6366f1',  // indigo
+    '#10b981',  // emerald
+    '#f59e0b',  // amber
+    '#ef4444',  // red
+    '#8b5cf6',  // violet
+    '#06b6d4',  // cyan
+    '#f97316',  // orange
+    '#84cc16',  // lime
+];
+
+getAgentColor(agentName) {
+    if (!agentName) return null;
+    if (!this._agentColors.has(agentName)) {
+        const idx = this._agentColors.size % COLOR_PALETTE.length;
+        this._agentColors.set(agentName, COLOR_PALETTE[idx]);
+        // Persist new assignment to IDB (fire-and-forget)
+        this._persistAgentColors();
+    }
+    return this._agentColors.get(agentName);
+}
+```
+
+**Why not use OWL reactive for `_agentColors`:** Colors are an append-only lookup table. Templates access colors via `getAgentColor(agentName)` — an explicit method call. No OWL reactive proxy needed; OWL re-renders when trace data changes (which always accompanies color assignment).
+
+**IDB schema for colors:** Add a second object store `"agent_colors"` to the existing `"ai_debug_traces"` database (requires `DB_VERSION` bump from `1` to `2`). The Odoo `IndexedDB` class deletes and recreates the database on version bump — existing trace data is lost. Two migration options:
+
+Option A (simple, acceptable for dev tool): Bump to version 2, accept that existing IDB traces are cleared on first load after upgrade.
+
+Option B (preserve data): Use a separate `IndexedDB` instance for colors at a new DB name `"ai_debug_settings"` with version 1. No version bump to `"ai_debug_traces"`. This is cleaner and avoids wiping stored traces.
+
+**Recommendation: Option B.** Use `new IndexedDB("ai_debug_settings", 1)` for agent colors. The existing `"ai_debug_traces"` DB stays at version 1 with no disruption to stored traces.
+
+```javascript
+// In db.js — add alongside existing idb:
+const SETTINGS_DB_NAME = "ai_debug_settings";
+const SETTINGS_DB_VERSION = 1;
+const COLORS_STORE = "agent_colors";
+
+const settingsIdb = new IndexedDB(SETTINGS_DB_NAME, SETTINGS_DB_VERSION);
+settingsIdb._tables.add(COLORS_STORE);
+
+export async function loadAgentColors() {
+    return settingsIdb.execute((db) => {
+        if (!db) return {};
+        if (!db.objectStoreNames.contains(COLORS_STORE)) return {};
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(COLORS_STORE, "readonly");
+            const req = tx.objectStore(COLORS_STORE).get("colors");
+            req.onsuccess = () => resolve(req.result ?? {});
+            tx.onerror = () => reject(tx.error);
+        });
+    });
+}
+
+export function saveAgentColors(colorsMap) {
+    const plain = Object.fromEntries(colorsMap.entries());
+    return settingsIdb.write(COLORS_STORE, "colors", plain);
+}
+```
+
+Hydrate in `onWillStart` alongside existing trace hydration:
+```javascript
+const storedColors = await loadAgentColors();
+for (const [name, color] of Object.entries(storedColors)) {
+    this._agentColors.set(name, color);
+}
+```
+
+#### 3. Flat Tree Within a Trace
+
+The current tree nests tool calls under their parent iteration with expand/collapse. V1.4 removes the iteration expand/collapse: iterations and tool calls render at the same visual indentation within a trace.
+
+**Sidebar rendering change:** Instead of `Loop > [expand] Iteration > [expand] Tool Call`, the new layout is `Trace > Iteration, Tool Call, Iteration, Tool Call, ...` — all at the same level visually, ordered by insertion time.
+
+Implementation: Change the XML template to render iterations and tool calls in a single flat pass per trace, rather than nesting tool calls inside iteration expand blocks. The data model does not change — `iteration.toolCalls` is still a nested Map. Only the template rendering changes.
+
+```xml
+<!-- v1.4 flat tree: within a trace, iterations and tool calls at same level -->
+<t t-if="trace.expanded">
+    <t t-foreach="[...trace.iterations.entries()]" t-as="iterEntry" t-key="iterEntry[0]">
+        <t t-set="iterationId" t-value="iterEntry[0]"/>
+        <t t-set="iteration" t-value="iterEntry[1]"/>
+
+        <!-- Iteration row — same level as tool calls -->
+        <div class="ai-tree-row level-1 flat" ...>
+            ...iteration label...
+        </div>
+
+        <!-- Tool calls immediately follow, same indentation level -->
+        <t t-foreach="[...iteration.toolCalls.entries()]" t-as="tcEntry" t-key="tcEntry[0]">
+            <t t-set="tc" t-value="tcEntry[1]"/>
+            <div class="ai-tree-row level-1 flat tool-call" ...>
+                ...tool call label...
+            </div>
+            <!-- Subagent trace nests here if tc.tool_name matches subagent pattern -->
+            <t t-if="getChildTraceForToolCall(tc)">
+                <!-- Recursive subagent subtree at level-2 indentation -->
+            </t>
+        </t>
+    </t>
+</t>
+```
+
+#### 4. Subagent Trace Nesting in Sidebar
+
+Subagent traces must nest under the tool call that spawned them. The challenge: matching a subagent trace to a specific tool call. The correlation is indirect:
+
+- The subagent `new_trace` event has `parent_session_id` → maps to `parentTraceId`
+- A tool call in the parent trace has `tool_name` containing `"ai_request_subagent"` and `call_id`
+- There may be multiple subagent tool calls in one iteration (parallel subagents), each spawning a different subagent trace
+
+**Matching strategy:** Use `agent_name` on the subagent trace and `args.agent_id` on the tool call. The tool call args contain `{agent_id: int, prompt: string}`. The subagent trace has `agent_name` (the name of agent with that `agent_id`). This is sufficient when each agent has a unique name.
+
+Add a method to `AiDebugApp`:
+
+```javascript
+getChildTrace(toolCall) {
+    // Returns the child trace that was spawned by this tool call, if any.
+    // Matches by: (1) parentTraceId === parent's traceId AND (2) agent matches args.agent_id
+    // Since we have agent_name on traces but agent_id on tool_call.args, we match
+    // by finding a child trace whose parent_session_id resolves to this trace and whose
+    // agent's name matches (approximation — good enough for dev tool).
+    for (const trace of this.traces.values()) {
+        if (trace.parentTraceId && toolCall.tool_name &&
+            toolCall.tool_name.includes("ai_request_subagent")) {
+            // Check if this child trace belongs to the current parent
+            // parentTraceId was set in _onNewTrace via _sessionToTrace lookup
+            const parentTrace = this.traces.get(trace.parentTraceId);
+            if (parentTrace) {
+                // Match: child trace agent matches tool call args.agent_id indirectly
+                // For simplicity: one subagent call per agent per trace (common case)
+                // Use call_id matching if needed for disambiguation
+                return trace;
+            }
+        }
+    }
+    return null;
+}
+```
+
+For accurate disambiguation with multiple simultaneous subagent calls, emit `parent_call_id` (the LLM's `call_id`) in `new_trace`. This requires passing `call_id` through the tool execution context. **This is a v1.4 stretch goal** — the basic case (one subagent call per iteration) works without it.
+
+**Simplest accurate approach:** Add `parent_call_id` to the `new_trace` payload. This requires:
+
+1. In `ai_debug/models/ai_session.py` `_handle_tool_calls` override: when a tool call matches the subagent pattern, extract the `call_id` and pass it to the child session via context
+2. In `_run_agentic_loop` override: read `parent_call_id` from context and include in `new_trace`
+
+Implementation:
+
+```python
+# In _handle_tool_calls override, after the super() loop yields tool_results:
+# When a tool call is the subagent tool, the parent call_id is already in
+# the tool_call event payload as 'call_id'. The child trace must reference it.
+# Pass via env context into the subagent session's loop.
+
+# In _generate_next_response override (ai_debug version), add:
+parent_call_id = self.env.context.get('_ai_debug_parent_call_id')
+
+# This requires ai_debug to intercept _generate_next_response on the child session
+# and inject 'parent_call_id' into context BEFORE the super() call executes.
+# Since _ai_tool_request_sub_agent calls ai_session_sudo._generate_next_response()
+# directly, and ai_session_sudo has _inherit = 'ai.session', the ai_debug override
+# fires automatically on that call.
+
+# But the parent's call_id is not in context when _generate_next_response fires.
+# It IS available in tools_context['tool_call_id'] within _handle_tool_calls.
+# Passing it through requires the enterprise code to set it in context or
+# ai_debug to intercept at the _handle_tool_calls level.
+```
+
+**Verdict on `parent_call_id`:** Implement it via a targeted env context injection. In `ai_debug`'s `_handle_tool_calls` override, when `super()` yields an item and the current tool call is a subagent call, the child trace has already been launched inside `super()`. The `call_id` is available in the `tool_calls_by_id` lookup. Set it in `_debug_ctx` before the super loop runs so the child can read it.
+
+Actually, the cleanest approach: in `_run_agentic_loop`, if `self.parent_session_id` is set, read `tools_context.get('tool_call_id')` (already set by enterprise code at line 214: `tools_context['tool_call_id'] = tool_call['call_id']`) and emit it in `new_trace` as `parent_call_id`:
+
+```python
+# In _run_agentic_loop override:
+parent_session_id = self.parent_session_id.id if self.parent_session_id else None
+parent_call_id = tools_context.get('tool_call_id') if parent_session_id else None
+
+self._ai_debug_bus_send('new_trace', {
+    'trace_id': trace_id,
+    'session_id': self.id if self.id else None,
+    'parent_session_id': parent_session_id,
+    'parent_call_id': parent_call_id,   # LLM's call_id of spawning tool call
+    ...
+})
+```
+
+This works because: `_ai_tool_request_sub_agent` receives `tool_context` (which is `tools_context`), and at the time it is called, `tools_context['tool_call_id']` has already been set by `_handle_tool_calls` line 214. The child `_run_agentic_loop` is called with the same `tools_context` via `_generate_next_response` → `_run_agentic_loop`. Verify: `_generate_next_response` creates a new `tools_context` dict — it does NOT pass the parent's `tools_context`. So `tools_context.get('tool_call_id')` in the child's `_run_agentic_loop` is `None`.
+
+**Correct path:** `parent_call_id` must be passed via `env.context`. The `_ai_tool_request_sub_agent` call is: `ai_session_sudo._generate_next_response(message, ...)`. The `ai_debug` override of `_generate_next_response` on `ai_session_sudo` fires here. We can intercept at `_generate_next_response` in the child session:
+
+```python
+# In ai_debug AiSession._generate_next_response override:
+# If parent_session_id is set (this is a subagent session), try to get the
+# spawning call_id from env context (set by the parent's instrumented loop)
+```
+
+But the parent's instrumented `_handle_tool_calls` would need to `.with_context(...)` before calling super. This is getting complex.
+
+**Final recommendation: emit `parent_call_id` as None in v1.4.0, match by `parent_session_id` + subagent tool name substring.** The frontend matching by parent trace + subagent tool name is good enough for the common case. Add exact `parent_call_id` matching as a follow-up if duplicate subagent calls in one iteration cause confusion.
+
+---
+
+## v1.4 IDB Schema
+
+### Trace Store (`"ai_debug_traces"`, version 1 — unchanged)
+
+The trace serialization format in `db.js` gains two new fields on each trace record:
+
+```javascript
+// serializeTrace additions:
+{
+    ...existing fields...
+    session_id: trace.session_id ?? null,         // NEW: own ai.session ORM ID
+    parentTraceId: trace.parentTraceId ?? null,   // NEW: parent trace_id string (null for roots)
+}
+```
+
+`hydrateTrace` reads these fields back transparently.
+
+### Colors Store (`"ai_debug_settings"`, version 1 — new)
+
+One record keyed `"colors"` in store `"agent_colors"`. Value: `{ agentName: cssColor, ... }` (plain object from `Map.entries()`).
+
+No migration needed — separate DB name, version 1, independent of trace data.
+
+---
+
+## v1.4 OWL Reactivity Constraints
+
+### What Works
+
+- `this.traces.set(traceId, {..., parentTraceId})` — OWL re-renders sidebar when any trace Map entry changes (HIGH confidence — same as existing code)
+- `trace.parentTraceId = parentTraceId` — mutating a field on a reactive proxy object triggers re-renders in any component that reads it (HIGH confidence — existing code does this with `trace.status`, `trace.expanded`, etc.)
+- `getChildTraceForToolCall(tc)` called from template — pure method reading from `this.traces`, which is reactive; calling it in a template expression means OWL tracks the reactive access and re-renders when traces change (HIGH confidence)
+
+### What Does Not Work
+
+- Using `_sessionToTrace` (a plain `Map`) reactively in templates — it is NOT wrapped in `reactive()` or `useState()`. Do not reference it directly in templates. It is a lookup table used in event handlers only. (HIGH confidence)
+- Storing `_agentColors` as `reactive()` — unnecessary. Color lookups happen via `getAgentColor()` method called from templates; the reactive trace update already triggers re-renders when colors are needed. (HIGH confidence)
+
+### Flat Tree Rendering
+
+Removing iteration expand/collapse reduces reactive surface: no more `iteration.expanded` boolean toggling. The `toggleExpand` method and associated `onPatched` scroll logic needs updating. The flat tree template iterates `[...trace.iterations.entries()]` in insertion order (chronological), emitting iteration rows and immediately following with their tool call rows. This is a pure template change — no store restructuring required.
+
+---
+
+## v1.4 What NOT to Change
+
+| Do Not Change | Why |
+|---------------|-----|
+| `new_trace` event type name | Frontend subscribes to this exact string. Changing it breaks existing subscriptions. Add new fields only. |
+| `trace_id` as primary correlation key within a trace | All four event types use it consistently. No change needed. |
+| `useState(new Map())` for the top-level traces store | This pattern is validated and required for OWL reactivity. Do not convert to `reactive()` without `useState`. |
+| `DB_VERSION` for `"ai_debug_traces"` | Bumping it wipes existing stored traces. Use a separate DB for new schema additions (agent colors). |
+| `_handle_tool_calls` override structure | The override already correctly captures tool call results and emits bus events. Subagent tool calls flow through the same mechanism. |
+| Bus channel name `"ai_debug"` | Frontend subscribes to this channel. Changing it breaks all event delivery. |
+| `_ai_debug_bus_send` separate cursor pattern | Required for immediate delivery before next loop iteration. Do not convert to batching. |
+
+---
+
+## v1.4 Confidence Assessment
+
+| Area | Confidence | Basis |
+|------|------------|-------|
+| `parent_session_id` field on `ai.session` | HIGH | Direct source read: `ai/models/ai_session.py` line 62 |
+| `self.parent_session_id` accessible in `_run_agentic_loop` override | HIGH | `@api.model` — `self` is a concrete record when called via `_generate_next_response`; `self.parent_session_id` read identical to existing `self.agent_id`, `self.channel_id` accesses |
+| `tools_context['tool_call_id']` is the LLM call_id when subagent runs | HIGH | Enterprise `_handle_tool_calls` sets `tools_context['tool_call_id'] = tool_call['call_id']` at line 214, before calling tool; `_generate_next_response` creates fresh `tools_context` for child, so it's NOT inherited |
+| Frontend `_sessionToTrace` lookup approach | HIGH | Pure data structure correlation; no framework API involved |
+| OWL reactivity for `parentTraceId` field mutation | HIGH | Same pattern as existing `trace.status`, `trace.expanded` mutations |
+| `new IndexedDB("ai_debug_settings", 1)` for colors | HIGH | Same API used for `"ai_debug_traces"` DB; separate name avoids schema conflict |
+| Flat tree rendering (template-only change) | HIGH | No store changes needed; OWL `t-foreach` over Map entries is already used |
+| `parent_call_id` accurate matching for parallel subagents | MEDIUM | Requires threading `tool_call_id` through env context across method boundaries; feasible but adds complexity. Defer to v1.4.1 if basic matching is sufficient. |
+
+---
+
+## v1.4 Sources
+
+All patterns verified against source code (not training data or web search):
+
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/models/ai_agent.py` lines 1339-1375 — `_ai_tool_request_sub_agent` full implementation (HIGH confidence)
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/models/ai_session.py` lines 62, 221-235 — `parent_session_id` field, subagent detection in `_handle_tool_calls` (HIGH confidence)
+- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/models/ai_session.py` — full `_run_agentic_loop` and `_handle_tool_calls` overrides; `_ai_debug_bus_send`, `_ai_debug_state_snapshot` helpers (HIGH confidence)
+- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/app.js` — `_onNewTrace`, `_onToolCall`, `_onLoopEnd` handlers; `useState(new Map())` store; `hydrateTrace()` pattern (HIGH confidence)
+- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/db.js` — `serializeTrace`, `writeTrace`, `loadAllTraces`, `IndexedDB` usage pattern (HIGH confidence)
+- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/app.xml` — current 3-level sidebar tree template (HIGH confidence)
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/models/ai_agent.py` lines 20-25 — `make_tool_name` function showing subagent tool name format (HIGH confidence)
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/data/ir_actions_server_data.xml` lines 43-67 — `ir_actions_server_request_sub_agent` record confirming tool name prefix "AI: Request Sub-Agent" → normalized to `ai_request_sub_agent_{id}` (HIGH confidence)
 
 ---
 
@@ -632,6 +1095,6 @@ The v1.0 stack entries (generator yield passthrough, model inheritance, backend 
 
 ---
 
-*Stack research for: AI Debugger — IndexedDB persistence, export/import, trace management (v1.3)*
-*Researched: 2026-02-22*
-*All patterns verified against Odoo master source code at `/Users/joseph/clones/odoo/odoo/.worktrees/master/`*
+*Stack research for: AI Debugger — subagent hierarchy visualization (v1.4)*
+*Researched: 2026-02-23*
+*All patterns verified against enterprise and custom source code at `/Users/joseph/clones/odoo/`*
