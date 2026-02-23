@@ -478,6 +478,85 @@ export class AiDebugApp extends Component {
     }
 
     // ----------------------------------------------------------------
+    // Sidebar tree — flat node list computed depth-first (TREE-01 to TREE-04)
+    // No recursive OWL components; a single t-foreach renders this array.
+    // ----------------------------------------------------------------
+
+    /**
+     * Returns a flat array of node descriptors representing the full sidebar
+     * tree in display order (depth-first, newest-first within siblings).
+     * Each descriptor carries { type, id, depth, ...refs }.
+     *
+     * Called during OWL render — reactive reads on this.traces and nested
+     * reactive Maps are tracked here, so any mutation triggers re-render.
+     */
+    get sidebarNodes() {
+        const nodes = [];
+        // Root traces: those without a parent_trace_id, newest-first
+        const rootTraces = [...this.traces.values()]
+            .filter((t) => !t.parent_trace_id)
+            .reverse();
+        for (const trace of rootTraces) {
+            this._collectTraceNodes(trace, 0, nodes);
+        }
+        return nodes;
+    }
+
+    /**
+     * Recursively emit node descriptors for one trace and all its descendants.
+     *
+     * Depth rules (TREE-03):
+     *   - The trace row itself is at `depth`.
+     *   - Iteration rows and tool call rows within that trace share the same `depth`
+     *     (flat within trace — indented only by inline padding, not by depth value).
+     *   - Child subagent traces increment to `depth + 1`.
+     *
+     * @param {object} trace - reactive trace object
+     * @param {number} depth - nesting depth (0 = root)
+     * @param {Array}  nodes - accumulator array (mutated in place)
+     */
+    _collectTraceNodes(trace, depth, nodes) {
+        // Push the trace row itself
+        nodes.push({ type: "trace", id: trace.trace_id, depth, trace });
+
+        // TREE-04: collapsed trace hides all descendants
+        if (!trace.expanded) return;
+
+        // Iterate iterations newest-first (matching existing template behavior)
+        const iterKeys = [...trace.iterations.keys()].reverse();
+        for (const iterId of iterKeys) {
+            const iter = trace.iterations.get(iterId);
+            if (!iter) continue;
+
+            // Push iteration row (flat: same depth as trace)
+            nodes.push({ type: "iter", id: iterId, depth, iter, trace });
+
+            // Collapsed iteration: skip its tool calls and child traces
+            if (!iter.expanded) continue;
+
+            // Push tool call rows (flat: same depth as iteration)
+            for (const [tcId, tc] of iter.toolCalls) {
+                nodes.push({ type: "tc", id: tcId, depth, tc, iter, trace });
+
+                // After each tool call, find child subagent traces that were
+                // spawned by this tool call. Match by tc.call_id (the LLM
+                // call_id), since parent_tool_call_id on child traces equals
+                // the call_id field — NOT the UUID key (tcId).
+                if (tc.call_id) {
+                    for (const childTrace of this.traces.values()) {
+                        if (
+                            childTrace.parent_trace_id === trace.trace_id &&
+                            childTrace.parent_tool_call_id === tc.call_id
+                        ) {
+                            this._collectTraceNodes(childTrace, depth + 1, nodes);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
     // Iteration duration helpers
     // ----------------------------------------------------------------
 
@@ -540,8 +619,20 @@ export class AiDebugApp extends Component {
     // Selection state getters — used by template and deleteCheckedTraces
     // ----------------------------------------------------------------
 
+    /**
+     * Count of root (non-subagent) traces. Used by checkbox logic so that
+     * subagent child traces don't inflate the expected denominator.
+     */
+    get rootTracesCount() {
+        let count = 0;
+        for (const t of this.traces.values()) {
+            if (!t.parent_trace_id) count++;
+        }
+        return count;
+    }
+
     get allChecked() {
-        return this.traces.size > 0 && this.state.checkedTraceIds.size === this.traces.size;
+        return this.rootTracesCount > 0 && this.state.checkedTraceIds.size === this.rootTracesCount;
     }
 
     get someChecked() {
@@ -564,8 +655,10 @@ export class AiDebugApp extends Component {
         if (this.allChecked) {
             this.state.checkedTraceIds.clear();
         } else {
-            for (const id of this.traces.keys()) {
-                this.state.checkedTraceIds.add(id);
+            for (const [id, trace] of this.traces) {
+                if (!trace.parent_trace_id) {
+                    this.state.checkedTraceIds.add(id);
+                }
             }
         }
     }
