@@ -6,6 +6,11 @@ const DB_VERSION = 1;
 const STORE = "traces";
 
 const idb = new IndexedDB(DB_NAME, DB_VERSION);
+// Ensure the "traces" store is registered with the IndexedDB utility so that
+// onupgradeneeded creates it when the DB is opened (e.g. after external deletion).
+// Without this, direct idb.execute() calls skip store registration (only read/write/
+// getAllKeys add to _tables) and the store won't exist after DB recreation.
+idb._tables.add(STORE);
 
 /**
  * Probe whether IndexedDB is available in this session.
@@ -103,6 +108,7 @@ export function writeTrace(trace) {
 export async function deleteTrace(traceId) {
     return idb.execute((db) => {
         if (!db) return;
+        if (!db.objectStoreNames.contains(STORE)) return;
         return new Promise((resolve, reject) => {
             const tx = db.transaction(STORE, "readwrite");
             tx.objectStore(STORE).delete(traceId);
@@ -125,6 +131,7 @@ export async function deleteTrace(traceId) {
 export async function loadAllTraces() {
     return idb.execute((db) => {
         if (!db) return [];
+        if (!db.objectStoreNames.contains(STORE)) return [];
         return new Promise((resolve, reject) => {
             const tx = db.transaction(STORE, "readonly");
             const req = tx.objectStore(STORE).getAll();
