@@ -13,10 +13,10 @@
 
 ### Tree Nesting
 
-- [ ] **TREE-01**: Subagent traces nest visually under the parent tool call that spawned them in the sidebar
-- [ ] **TREE-02**: Tree supports arbitrary recursive nesting depth (subagents of subagents render correctly)
-- [ ] **TREE-03**: Within a single trace, iterations and tool calls render at the same indentation level (flat within trace)
-- [ ] **TREE-04**: Collapsing a parent trace hides all descendant traces, iterations, and tool calls
+- [x] **TREE-01**: Subagent traces nest visually under the parent tool call that spawned them in the sidebar
+- [x] **TREE-02**: Tree supports arbitrary recursive nesting depth (subagents of subagents render correctly)
+- [x] **TREE-03**: Within a single trace, iterations and tool calls render at the same indentation level (flat within trace)
+- [x] **TREE-04**: Collapsing a parent trace hides all descendant traces, iterations, and tool calls
 - [x] **TREE-05**: Frontend handles out-of-order bus events via pending-child buffer (child trace arriving before parent tool call is buffered and attached when parent arrives)
 
 ### Color Coding
@@ -63,10 +63,10 @@
 | DATA-01 | Phase 14 | Pending |
 | DATA-02 | Phase 14 | Pending |
 | DATA-03 | Phase 14 | Pending |
-| TREE-01 | Phase 15 | Pending |
-| TREE-02 | Phase 15 | Pending |
-| TREE-03 | Phase 15 | Pending |
-| TREE-04 | Phase 15 | Pending |
+| TREE-01 | Phase 15 | Complete |
+| TREE-02 | Phase 15 | Complete |
+| TREE-03 | Phase 15 | Complete |
+| TREE-04 | Phase 15 | Complete |
 | COLR-03 | Phase 15 | Pending |
 | COLR-04 | Phase 15 | Pending |
 | COLR-05 | Phase 15 | Pending |

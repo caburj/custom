@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-23)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.4 Subagent Support — Phase 13
+**Current focus:** v1.4 Subagent Support — Phase 15
 
 ## Current Position
 
-Phase: 13 of 15 (Python Instrumentation and Bus Event Handling)
-Plan: 02 complete (of 2 in Phase 13)
-Status: Phase 13 complete — ready for Phase 14
-Last activity: 2026-02-23 — Phase 13 Plan 02 complete (JS split event handlers + pending-child buffer)
+Phase: 15 of 15 (Sidebar Rendering)
+Plan: 01 in progress — paused at Task 3 (human-verify checkpoint)
+Status: Tasks 1-2 complete, awaiting visual verification before Task 3 approval
+Last activity: 2026-02-23 — Phase 15 Plan 01 Tasks 1-2 complete (sidebarNodes getter + flat template + SCSS guide lines)
 
-Progress: [██░░░░░░░░] 20% of v1.4
+Progress: [████████░░] 80% of v1.4
 
 ## Milestones Shipped
 
@@ -48,6 +48,14 @@ Phase 13 Plan 02 decisions (2026-02-23):
 - Orphan traces promoted after 30s retain parent fields for potential future silent re-attachment
 - status field ('running'/'completed') on tool calls stored now for Phase 15 visual indicators
 
+Phase 15 Plan 01 decisions (2026-02-23):
+- sidebarNodes computed getter (flat array) + single t-foreach — avoids recursive OWL component anti-pattern
+- Child trace matched by tc.call_id (LLM call_id), not UUID key — parent_tool_call_id on child traces is the LLM call_id
+- Iteration and tool call rows share same depth as owning trace (flat-within-trace rule, TREE-03)
+- Checkboxes only on depth===0 trace rows — subagent traces excluded from bulk select/delete
+- allChecked and toggleSelectAll use rootTracesCount to exclude subagent traces from denominator
+- COLR-03/04/05 deferred — no color work in Phase 15 per CONTEXT.md
+
 ### Pending Todos
 
 None.
@@ -71,5 +79,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Phase 13 Plan 01 complete — Phase 13 fully complete, Phase 14 ready to execute
+Stopped at: Phase 15 Plan 01 — paused at Task 3 checkpoint:human-verify (Tasks 1-2 committed)
 Resume file: None
