@@ -122,10 +122,11 @@ class AiSession(models.TransientModel):
     def _run_agentic_loop(self, model, instructions, messages, temperature, tools, tools_context, record=None, schema=None, web_grounding=False):
         """Override to instrument the agentic loop with bus events.
 
-        Emits four event types over the 'ai_debug' bus channel:
-          - new_trace: once at loop start (agent name, model, system prompt, tools, state)
+        Emits five event types over the 'ai_debug' bus channel:
+          - new_trace: once at loop start (session_id, parent linkage, agent name, model, tools)
           - iteration: once per LLM API call (messages sent, raw response, or error)
-          - tool_call: once per tool executed (via _handle_tool_calls override)
+          - tool_call_started: once per tool BEFORE execution (name, args, stable tool_call_id)
+          - tool_call_completed: once per tool AFTER execution (result, success, same tool_call_id)
           - loop_end: once at loop termination (reason, stats, duration)
 
         All events use separate cursors (registry.cursor()) so they arrive in the
