@@ -57,98 +57,103 @@
                     <span>No traces yet</span>
                 </div>
 
-                <!-- Tree entries — Loop > Iteration > Tool Call -->
-                <t t-foreach="[...traces.keys()].reverse()" t-as="traceId" t-key="traceId">
-                    <t t-set="trace" t-value="traces.get(traceId)"/>
+                <!-- Tree entries — flat list from sidebarNodes computed getter -->
+                <t t-foreach="sidebarNodes" t-as="node" t-key="node.id">
 
-                    <!-- Level 0: Loop entry -->
-                    <div class="ai-tree-row level-0"
-                         t-att-class="{
-                             'selected': state.selectedId === traceId,
-                             'ancestor': selectedTraceId === traceId and state.selectedId !== traceId
-                         }"
-                         t-att-data-node-id="traceId">
-                        <input type="checkbox"
-                               class="ai-tree-row-check"
-                               t-att-checked="state.checkedTraceIds.has(traceId)"
-                               t-on-change.stop="() => this.toggleTraceCheck(traceId)"/>
-                        <span class="ai-tree-chevron"
-                              t-att-class="{'expanded': trace.expanded}"
-                              t-on-click.stop="() => this.toggleExpand(traceId, 'trace')">&#x203A;</span>
-                        <span class="ai-tree-label"
-                              t-on-click="() => this.selectItem(traceId, 'trace')">
-                            <t t-if="trace.user_query">
-                                <span class="ai-tree-query-title"
-                                      t-att-title="trace.user_query"
-                                      t-on-click="(ev) => this.showFullQuery(ev, trace.user_query)"
-                                      t-esc="trace.user_query"/>
-                            </t>
-                            <t t-else="">
-                                <t t-esc="trace.agent_name or 'Unknown Agent'"/>
-                            </t>
-                            <span class="ai-tree-meta-line">
-                                <t t-esc="trace.agent_name or 'Agent'"/> &#xB7; <t t-esc="trace.model_name or ''"/>
-                            </span>
-                        </span>
-                        <span t-if="trace.hydrated" class="ai-tree-hydrated-badge" title="Loaded from storage">archived</span>
-                        <!-- Status indicator -->
-                        <span t-if="trace.status === 'running'" class="ai-debug-pulse-dot small"/>
-                        <span t-elif="trace.status === 'success'" class="ai-tree-status success">&#x2713;</span>
-                        <span t-elif="trace.status === 'error'" class="ai-tree-status error">&#x2717;</span>
-                        <span t-elif="trace.status === 'max_iterations'" class="ai-tree-status warn">&#x23F8;</span>
-                    </div>
-
-                    <!-- Level 1: Iteration entries (when loop expanded) — latest on top -->
-                    <t t-if="trace.expanded">
-                        <t t-foreach="[...trace.iterations.keys()].reverse()" t-as="iterationId" t-key="iterationId">
-                            <t t-set="iteration" t-value="trace.iterations.get(iterationId)"/>
-
-                            <div class="ai-tree-row level-1"
-                                 t-att-class="{
-                                     'selected': state.selectedId === iterationId,
-                                     'ancestor': selectedIterationId === iterationId and state.selectedId !== iterationId
-                                 }"
-                                 t-att-data-node-id="iterationId">
-                                <span t-if="iteration.toolCalls.size > 0"
-                                      class="ai-tree-chevron"
-                                      t-att-class="{'expanded': iteration.expanded}"
-                                      t-on-click.stop="() => this.toggleExpand(traceId, iterationId)">&#x203A;</span>
-                                <span t-else="" class="ai-tree-chevron-placeholder"/>
-                                <span class="ai-tree-label"
-                                      t-on-click="() => this.selectItem(iterationId, 'iteration')">
-                                    Iteration <t t-esc="iteration.iteration_index"/>
-                                    <t t-set="duration" t-value="this.getIterationDuration(trace, iterationId)"/>
-                                    <t t-if="duration">
-                                        <span class="ai-tree-label-dim"> &#xB7; <t t-esc="duration"/></span>
-                                    </t>
-                                    <t t-elif="trace.status === 'running' and iterationId === [...trace.iterations.keys()].pop()">
-                                        <span class="ai-tree-label-dim"> &#xB7; <span class="ai-debug-pulse-dot tiny"/></span>
-                                    </t>
-                                    <t t-if="iteration.has_error"><span class="ai-tree-label-error"> &#xB7; error</span></t>
-                                </span>
-                            </div>
-
-                            <!-- Level 2: Tool call entries (when iteration expanded) -->
-                            <t t-if="iteration.expanded">
-                                <t t-foreach="[...iteration.toolCalls.keys()]" t-as="toolCallId" t-key="toolCallId">
-                                    <t t-set="tc" t-value="iteration.toolCalls.get(toolCallId)"/>
-
-                                    <div class="ai-tree-row level-2"
-                                         t-att-class="{'selected': state.selectedId === toolCallId}"
-                                         t-att-data-node-id="toolCallId">
-                                        <span class="ai-tree-chevron-placeholder"/>
-                                        <span class="ai-tree-label"
-                                              t-on-click="() => this.selectItem(toolCallId, 'tool_call')">
-                                            <t t-esc="tc.tool_name"/>
-                                        </span>
-                                        <span t-if="tc.success" class="ai-tree-status success">&#x2714;</span>
-                                        <span t-else="" class="ai-tree-status error">&#x2717;</span>
-                                    </div>
-
+                    <!-- Trace row (two-line format: query title + agent/model meta) -->
+                    <t t-if="node.type === 'trace'">
+                        <div class="ai-tree-row ai-tree-trace-row"
+                             t-attf-style="--ai-depth: {{ node.depth }}; padding-left: {{ node.depth * 20 + 4 }}px"
+                             t-att-class="{
+                                 'selected': state.selectedId === node.id,
+                                 'ancestor': selectedTraceId === node.id and state.selectedId !== node.id,
+                                 'ai-tree-has-guide': node.depth > 0
+                             }"
+                             t-att-data-node-id="node.id">
+                            <input t-if="node.depth === 0"
+                                   type="checkbox"
+                                   class="ai-tree-row-check"
+                                   t-att-checked="state.checkedTraceIds.has(node.id)"
+                                   t-on-change.stop="() => this.toggleTraceCheck(node.id)"/>
+                            <span class="ai-tree-chevron"
+                                  t-att-class="{'expanded': node.trace.expanded}"
+                                  t-on-click.stop="() => this.toggleExpand(node.id, 'trace')">&#x203A;</span>
+                            <span class="ai-tree-label"
+                                  t-on-click="() => this.selectItem(node.id, 'trace')">
+                                <t t-if="node.trace.user_query">
+                                    <span class="ai-tree-query-title"
+                                          t-att-title="node.trace.user_query"
+                                          t-on-click="(ev) => this.showFullQuery(ev, node.trace.user_query)"
+                                          t-esc="node.trace.user_query"/>
                                 </t>
-                            </t>
+                                <t t-else="">
+                                    <t t-esc="node.trace.agent_name or 'Unknown Agent'"/>
+                                </t>
+                                <span class="ai-tree-meta-line">
+                                    <t t-esc="node.trace.agent_name or 'Agent'"/> &#xB7; <t t-esc="node.trace.model_name or ''"/>
+                                </span>
+                            </span>
+                            <span t-if="node.trace.hydrated" class="ai-tree-hydrated-badge" title="Loaded from storage">archived</span>
+                            <span t-if="node.trace.status === 'running'" class="ai-debug-pulse-dot small"/>
+                            <span t-elif="node.trace.status === 'success'" class="ai-tree-status success">&#x2713;</span>
+                            <span t-elif="node.trace.status === 'error'" class="ai-tree-status error">&#x2717;</span>
+                            <span t-elif="node.trace.status === 'max_iterations'" class="ai-tree-status warn">&#x23F8;</span>
+                        </div>
+                    </t>
 
-                        </t>
+                    <!-- Iteration row (flat: same depth as parent trace's tool calls) -->
+                    <t t-elif="node.type === 'iter'">
+                        <div class="ai-tree-row ai-tree-iter-row"
+                             t-attf-style="--ai-depth: {{ node.depth }}; padding-left: {{ node.depth * 20 + 24 }}px"
+                             t-att-class="{
+                                 'selected': state.selectedId === node.id,
+                                 'ancestor': selectedIterationId === node.id and state.selectedId !== node.id,
+                                 'ai-tree-has-guide': node.depth > 0
+                             }"
+                             t-att-data-node-id="node.id">
+                            <span t-if="node.iter.toolCalls.size > 0"
+                                  class="ai-tree-chevron"
+                                  t-att-class="{'expanded': node.iter.expanded}"
+                                  t-on-click.stop="() => this.toggleExpand(node.trace.trace_id, node.id)">&#x203A;</span>
+                            <span t-else="" class="ai-tree-chevron-placeholder"/>
+                            <span class="ai-tree-iter-icon">&#x21BA;</span>
+                            <span class="ai-tree-label"
+                                  t-on-click="() => this.selectItem(node.id, 'iteration')">
+                                Iteration <t t-esc="node.iter.iteration_index"/>
+                                <span class="ai-tree-label-dim">
+                                    &#xB7; <t t-esc="node.iter.toolCalls.size"/> call<t t-if="node.iter.toolCalls.size !== 1">s</t>
+                                </span>
+                                <t t-set="duration" t-value="this.getIterationDuration(node.trace, node.id)"/>
+                                <t t-if="duration">
+                                    <span class="ai-tree-label-dim"> &#xB7; <t t-esc="duration"/></span>
+                                </t>
+                                <t t-elif="node.trace.status === 'running' and node.id === [...node.trace.iterations.keys()].pop()">
+                                    <span class="ai-tree-label-dim"> &#xB7; <span class="ai-debug-pulse-dot tiny"/></span>
+                                </t>
+                                <t t-if="node.iter.has_error"><span class="ai-tree-label-error"> &#xB7; error</span></t>
+                            </span>
+                        </div>
+                    </t>
+
+                    <!-- Tool call row (flat: same depth as iteration rows) -->
+                    <t t-elif="node.type === 'tc'">
+                        <div class="ai-tree-row ai-tree-tc-row"
+                             t-attf-style="--ai-depth: {{ node.depth }}; padding-left: {{ node.depth * 20 + 24 }}px"
+                             t-att-class="{
+                                 'selected': state.selectedId === node.id,
+                                 'ai-tree-has-guide': node.depth > 0
+                             }"
+                             t-att-data-node-id="node.id">
+                            <span class="ai-tree-chevron-placeholder"/>
+                            <span class="ai-tree-tc-icon">&#x2192;</span>
+                            <span class="ai-tree-label"
+                                  t-on-click="() => this.selectItem(node.id, 'tool_call')">
+                                <t t-esc="node.tc.tool_name"/>
+                            </span>
+                            <span t-if="node.tc.status === 'running'" class="ai-debug-pulse-dot tiny"/>
+                            <span t-elif="node.tc.success" class="ai-tree-status success">&#x2714;</span>
+                            <span t-elif="node.tc.success === false" class="ai-tree-status error">&#x2717;</span>
+                        </div>
                     </t>
 
                 </t>
