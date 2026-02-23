@@ -49,6 +49,9 @@ export function serializeTrace(trace) {
         instructions: trace.instructions,
         tools: trace.tools,
         state_snapshot: trace.state_snapshot,
+        parent_trace_id: trace.parent_trace_id,
+        parent_tool_call_id: trace.parent_tool_call_id,
+        session_id: trace.session_id,
         // Map → array of [iterationId, iterationRecord] pairs
         iterations: [...trace.iterations.entries()].map(([iterId, iter]) => [
             iterId,

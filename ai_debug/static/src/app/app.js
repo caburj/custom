@@ -31,7 +31,7 @@ function hydrateTrace(plain) {
         iterations.set(iterId, {
             ...iter,
             receivedAt: iter.receivedAt ? new Date(iter.receivedAt) : null,
-            expanded: false,
+            expanded: true,
             toolCalls,
         });
     }
@@ -149,7 +149,7 @@ export class AiDebugApp extends Component {
                     iteration_index: payload.iteration_index,
                     has_error: !!payload.error,
                     receivedAt: new Date(),
-                    expanded: false,
+                    expanded: true,
                     toolCalls,
                     // Phase 7: full payload for detail panel
                     messages_sent: payload.messages_sent || [],
