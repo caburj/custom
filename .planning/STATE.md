@@ -77,9 +77,10 @@ None.
 | 24 | Remove StateDiff tabs and state capture logic | 2026-02-22 | b5b45d3 | Verified | [24-remove-state-diff-tabs-and-associated-lo](./quick/24-remove-state-diff-tabs-and-associated-lo/) |
 | 25 | Implement Confirmation Info tab in AI Debugger | 2026-02-22 | 99574e1 | Verified | [25-implement-confirmation-info-tab-in-ai-de](./quick/25-implement-confirmation-info-tab-in-ai-de/) |
 | 26 | Fix IndexedDB NotFoundError after external DB deletion | 2026-02-23 | 9774a91 | | [26-fix-indexeddb-error-when-database-is-del](./quick/26-fix-indexeddb-error-when-database-is-del/) |
+| 27 | Cascade delete descendant traces on bulk delete | 2026-02-23 | 93bd1bc | | [27-when-deleting-a-trace-all-descendant-tra](./quick/27-when-deleting-a-trace-all-descendant-tra/) |
 
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed Phase 15 Plan 01 (15-01-PLAN.md) — all tasks done, SUMMARY.md created
+Stopped at: Completed Quick Task 27 — cascade delete for subagent traces
 Resume file: None
