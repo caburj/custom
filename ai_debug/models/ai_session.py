@@ -302,6 +302,25 @@ class AiSession(models.TransientModel):
         # carry call_id) can recover tool_name and args from the original request.
         tool_calls_by_id = {tc['call_id']: tc for tc in tool_calls}
 
+        # Pre-generate stable tool_call_id UUIDs keyed by LLM call_id.
+        # Same UUID is used in tool_call_started and tool_call_completed events
+        # so the JS can link them together.
+        _tc_id_map = {tc['call_id']: uuid.uuid4().hex for tc in tool_calls}
+
+        # Emit tool_call_started for each tool in the batch — fires BEFORE
+        # tool execution begins. This ensures the parent tool call node exists
+        # in the JS tree before any subagent trace event arrives.
+        for tc in tool_calls:
+            self._ai_debug_bus_send('tool_call_started', {
+                'type': 'tool_call_started',
+                'trace_id': _debug_ctx['trace_id'],
+                'iteration_id': _debug_ctx['iteration_id'],
+                'tool_call_id': _tc_id_map[tc['call_id']],
+                'call_id': tc['call_id'],
+                'tool_name': tc['name'],
+                'args': tc.get('args', {}),
+            })
+
         for item in super()._handle_tool_calls(
             tool_calls, tools_by_name, tools_context, record,
             confirmed_tool_id, refuse_all,
@@ -320,14 +339,13 @@ class AiSession(models.TransientModel):
 
                     _debug_ctx['tool_call_count'] += 1
 
-                    self._ai_debug_bus_send('tool_call', {
-                        'type': 'tool_call',
+                    self._ai_debug_bus_send('tool_call_completed', {
+                        'type': 'tool_call_completed',
                         'trace_id': _debug_ctx['trace_id'],
                         'iteration_id': _debug_ctx['iteration_id'],
-                        'tool_call_id': uuid.uuid4().hex,
-                        'tool_name': tool_name,
+                        'tool_call_id': _tc_id_map.get(call_id, uuid.uuid4().hex),
                         'call_id': call_id,
-                        'args': args,
+                        'tool_name': tool_name,
                         'result': result,
                         'success': success,
                         'error': error,
@@ -338,13 +356,13 @@ class AiSession(models.TransientModel):
                 originating_tc = tool_calls_by_id.get(call_id, {})
                 _debug_ctx['tool_call_count'] += 1
 
-                self._ai_debug_bus_send('tool_call', {
-                    'type': 'tool_call',
+                self._ai_debug_bus_send('tool_call_completed', {
+                    'type': 'tool_call_completed',
                     'trace_id': _debug_ctx['trace_id'],
                     'iteration_id': _debug_ctx['iteration_id'],
-                    'tool_call_id': uuid.uuid4().hex,
-                    'tool_name': originating_tc.get('name', 'unknown'),
+                    'tool_call_id': _tc_id_map.get(call_id, uuid.uuid4().hex),
                     'call_id': call_id,
+                    'tool_name': originating_tc.get('name', 'unknown'),
                     'args': originating_tc.get('args', {}),
                     'result': None,
                     'success': None,
