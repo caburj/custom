@@ -120,6 +120,6 @@ Phases execute in numeric order: 13 → 14 → 15
 | 10. IDB Layer and Write-Through | v1.3 | 1/1 | Complete | 2026-02-22 |
 | 11. Hydration and Trace Management | v1.3 | 2/2 | Complete | 2026-02-22 |
 | 12. Export and Import | v1.3 | 2/2 | Complete | 2026-02-22 |
-| 13. Python Instrumentation and Bus Event Handling | 2/2 | Complete   | 2026-02-23 | - |
+| 13. Python Instrumentation and Bus Event Handling | 2/2 | Complete    | 2026-02-23 | - |
 | 14. Data Model, IDB Schema, and Color Assignment | v1.4 | 0/? | Not started | - |
 | 15. Sidebar Rendering and Color Display | v1.4 | 0/? | Not started | - |
