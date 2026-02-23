@@ -73,7 +73,10 @@ Full details: `.planning/milestones/v1.3-ROADMAP.md`
   2. When a root session starts, the `new_trace` bus event payload includes `session_id` and `parent_session_id: null`
   3. A subagent `new_trace` event that arrives in the browser before its parent tool_call event is buffered and correctly attached to the parent trace once the parent tool_call event arrives — no trace is silently dropped or misplaced at root level
   4. Existing non-subagent sessions continue emitting events with no behavioral change
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 13-01-PLAN.md -- Python instrumentation: parent linkage in new_trace + tool call event splitting
+- [ ] 13-02-PLAN.md -- JS event handling: tool_call_started/completed migration + pending-child buffer
 
 ### Phase 14: Data Model, IDB Schema, and Color Assignment
 **Goal**: The JS trace store is a flat Map with parent pointer fields; agent colors are assigned on first appearance and survive page refresh
@@ -117,6 +120,6 @@ Phases execute in numeric order: 13 → 14 → 15
 | 10. IDB Layer and Write-Through | v1.3 | 1/1 | Complete | 2026-02-22 |
 | 11. Hydration and Trace Management | v1.3 | 2/2 | Complete | 2026-02-22 |
 | 12. Export and Import | v1.3 | 2/2 | Complete | 2026-02-22 |
-| 13. Python Instrumentation and Bus Event Handling | v1.4 | 0/? | Not started | - |
+| 13. Python Instrumentation and Bus Event Handling | v1.4 | 0/2 | Planned | - |
 | 14. Data Model, IDB Schema, and Color Assignment | v1.4 | 0/? | Not started | - |
 | 15. Sidebar Rendering and Color Display | v1.4 | 0/? | Not started | - |
