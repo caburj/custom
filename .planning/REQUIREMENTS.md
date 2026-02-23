@@ -7,9 +7,9 @@
 
 ### Instrumentation
 
-- [ ] **INST-01**: Backend emits `session_id` (own ORM ID) in `new_trace` bus event payload
-- [ ] **INST-02**: Backend emits `parent_session_id` (parent ORM ID or null) in `new_trace` bus event payload for subagent sessions
-- [ ] **INST-03**: Backend injects parent trace context via `env.context` before `super()` in `_handle_tool_calls` so child session's `_run_agentic_loop` can read it
+- [x] **INST-01**: Backend emits `session_id` (own ORM ID) in `new_trace` bus event payload
+- [x] **INST-02**: Backend emits `parent_session_id` (parent ORM ID or null) in `new_trace` bus event payload for subagent sessions
+- [x] **INST-03**: Backend injects parent trace context via `env.context` before `super()` in `_handle_tool_calls` so child session's `_run_agentic_loop` can read it
 
 ### Tree Nesting
 
@@ -54,9 +54,9 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INST-01 | Phase 13 | Pending |
-| INST-02 | Phase 13 | Pending |
-| INST-03 | Phase 13 | Pending |
+| INST-01 | Phase 13 | Complete |
+| INST-02 | Phase 13 | Complete |
+| INST-03 | Phase 13 | Complete |
 | TREE-05 | Phase 13 | Complete |
 | COLR-01 | Phase 14 | Pending |
 | COLR-02 | Phase 14 | Pending |
