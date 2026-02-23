@@ -152,9 +152,18 @@ class AiSession(models.TransientModel):
         # via env context — no need to reverse-parse provider-specific formats.
         user_query = self.env.context.get('_ai_debug_user_query', '')
 
+        # INST-02: Read parent linkage from env context — set by _handle_tool_calls
+        # (via ai_parent_trace_id) and ai.agent override (via ai_parent_tool_call_id)
+        # when a subagent session is spawned. None for root sessions.
+        parent_trace_id = self.env.context.get('ai_parent_trace_id')        # None for root
+        parent_tool_call_id = self.env.context.get('ai_parent_tool_call_id')  # None for root
+
         self._ai_debug_bus_send('new_trace', {
             'type': 'new_trace',
             'trace_id': trace_id,
+            'session_id': self.id,                       # INST-01: own ORM ID
+            'parent_trace_id': parent_trace_id,          # INST-02: UUID hex or None
+            'parent_tool_call_id': parent_tool_call_id,  # INST-02: LLM call_id or None
             'agent_name': self.agent_id.name if self.agent_id else None,
             'model_name': model,
             'user_query': user_query,
@@ -254,7 +263,16 @@ class AiSession(models.TransientModel):
             })
 
     def _handle_tool_calls(self, tool_calls, tools_by_name, tools_context, record, confirmed_tool_id=None, refuse_all=False):
-        """Override to emit tool_call bus events for each tool executed.
+        """Override to emit tool_call_started and tool_call_completed bus events per tool.
+
+        Each tool call emits two events:
+          - tool_call_started: fired BEFORE super() delegation with tool name, args, and a
+            stable tool_call_id UUID (pre-generated so started and completed share the same ID)
+          - tool_call_completed: fired AFTER super() yields tool_results with the same
+            tool_call_id, result, success, and error fields
+
+        Also injects ai_parent_trace_id into env.context so any subagent sessions spawned
+        during tool execution can identify their parent trace in their new_trace bus event.
 
         State capture (state_before/state_after via deepcopy) is disabled — no built-in
         Odoo AI tool modifies tools_context['state'], so the diff is always empty. The
@@ -271,6 +289,10 @@ class AiSession(models.TransientModel):
                 confirmed_tool_id, refuse_all,
             )
             return
+
+        # Thread parent trace ID into env.context so child sessions spawned during
+        # tool execution can read it in their _run_agentic_loop.
+        self = self.with_context(ai_parent_trace_id=_debug_ctx['trace_id'])
 
         # State capture disabled — no built-in Odoo AI tool modifies
         # tools_context['state'], so the diff is always empty.
