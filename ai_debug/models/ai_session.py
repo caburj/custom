@@ -291,9 +291,12 @@ class AiSession(models.TransientModel):
             )
             return
 
-        # Thread parent trace ID into env.context so child sessions spawned during
-        # tool execution can read it in their _run_agentic_loop.
-        self = self.with_context(ai_parent_trace_id=_debug_ctx['trace_id'])
+        # Thread parent trace ID via tools_context (mutable dict passed to tool functions)
+        # rather than env.context, because tool records (ir.actions.server) are fetched
+        # in _generate_next_response BEFORE _run_agentic_loop sets _debug_ctx, so they
+        # never carry _debug_ctx in their env. tools_context reaches the agent via the
+        # tool_context parameter in _ai_tool_request_sub_agent.
+        tools_context['_debug_trace_id'] = _debug_ctx['trace_id']
 
         # State capture disabled — no built-in Odoo AI tool modifies
         # tools_context['state'], so the diff is always empty.
