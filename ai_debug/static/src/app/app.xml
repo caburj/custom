@@ -62,12 +62,11 @@
 
                     <!-- Trace row (two-line format: query title + agent/model meta) -->
                     <t t-if="node.type === 'trace'">
-                        <div class="ai-tree-row ai-tree-trace-row"
-                             t-attf-style="--ai-depth: {{ node.depth }}; padding-left: {{ node.depth * 20 + 4 }}px"
+                        <div t-attf-class="ai-tree-row ai-tree-trace-row ai-depth-{{ node.depth > 4 ? 4 : node.depth }}"
+                             style="padding-left: 4px"
                              t-att-class="{
                                  'selected': state.selectedId === node.id,
                                  'ancestor': selectedTraceId === node.id and state.selectedId !== node.id,
-                                 'ai-tree-has-guide': node.depth > 0
                              }"
                              t-att-data-node-id="node.id">
                             <input t-if="node.depth === 0"
@@ -75,6 +74,7 @@
                                    class="ai-tree-row-check"
                                    t-att-checked="state.checkedTraceIds.has(node.id)"
                                    t-on-change.stop="() => this.toggleTraceCheck(node.id)"/>
+                            <span t-else="" class="ai-tree-row-check-spacer"/>
                             <span class="ai-tree-chevron"
                                   t-att-class="{'expanded': node.trace.expanded}"
                                   t-on-click.stop="() => this.toggleExpand(node.id, 'trace')">&#x203A;</span>
@@ -103,14 +103,14 @@
 
                     <!-- Iteration row (flat: same depth as parent trace's tool calls) -->
                     <t t-elif="node.type === 'iter'">
-                        <div class="ai-tree-row ai-tree-iter-row"
-                             t-attf-style="--ai-depth: {{ node.depth }}; padding-left: {{ node.depth * 20 + 24 }}px"
+                        <div t-attf-class="ai-tree-row ai-tree-iter-row ai-depth-{{ node.depth > 4 ? 4 : node.depth }}"
+                             style="padding-left: 4px"
                              t-att-class="{
                                  'selected': state.selectedId === node.id,
                                  'ancestor': selectedIterationId === node.id and state.selectedId !== node.id,
-                                 'ai-tree-has-guide': node.depth > 0
                              }"
                              t-att-data-node-id="node.id">
+                            <span class="ai-tree-row-check-spacer"/>
                             <span t-if="node.iter.toolCalls.size > 0"
                                   class="ai-tree-chevron"
                                   t-att-class="{'expanded': node.iter.expanded}"
@@ -136,14 +136,18 @@
 
                     <!-- Tool call row (flat: same depth as iteration rows) -->
                     <t t-elif="node.type === 'tc'">
-                        <div class="ai-tree-row ai-tree-tc-row"
-                             t-attf-style="--ai-depth: {{ node.depth }}; padding-left: {{ node.depth * 20 + 24 }}px"
+                        <div t-attf-class="ai-tree-row ai-tree-tc-row ai-depth-{{ node.depth > 4 ? 4 : node.depth }}"
+                             style="padding-left: 4px"
                              t-att-class="{
                                  'selected': state.selectedId === node.id,
-                                 'ai-tree-has-guide': node.depth > 0
                              }"
                              t-att-data-node-id="node.id">
-                            <span class="ai-tree-chevron-placeholder"/>
+                            <span class="ai-tree-row-check-spacer"/>
+                            <span t-if="node.hasChildren"
+                                  class="ai-tree-chevron"
+                                  t-att-class="{'expanded': node.tc.expanded}"
+                                  t-on-click.stop="() => this.toggleExpand(node.trace.trace_id, node.tc.iteration_id, node.id)">&#x203A;</span>
+                            <span t-else="" class="ai-tree-chevron-placeholder"/>
                             <span class="ai-tree-label"
                                   t-on-click="() => this.selectItem(node.id, 'tool_call')">
                                 <t t-esc="node.tc.tool_name"/>

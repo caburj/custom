@@ -26,7 +26,7 @@ function hydrateTrace(plain) {
     for (const [iterId, iter] of plain.iterations ?? []) {
         const toolCalls = reactive(new Map());
         for (const [tcId, tc] of iter.toolCalls ?? []) {
-            toolCalls.set(tcId, tc);
+            toolCalls.set(tcId, { ...tc, expanded: tc.expanded !== false });
         }
         iterations.set(iterId, {
             ...iter,
@@ -183,6 +183,7 @@ export class AiDebugApp extends Component {
                 triggered_confirmation: false,
                 confirmation_message: null,
                 status: "running",  // Visual indicator that tool is in progress
+                expanded: true,
             });
             // Check if any buffered child trace is waiting for this tool call
             const buffered = this._pendingChildren[payload.call_id];
@@ -218,6 +219,7 @@ export class AiDebugApp extends Component {
                     triggered_confirmation: payload.triggered_confirmation || false,
                     confirmation_message: payload.confirmation_message || null,
                     status: "completed",
+                    expanded: true,
                 });
                 return;
             }
@@ -397,12 +399,21 @@ export class AiDebugApp extends Component {
         });
     }
 
-    toggleExpand(idOrTraceId, typeOrIterationId) {
+    toggleExpand(idOrTraceId, typeOrIterationId, toolCallId) {
         // Called as toggleExpand(traceId, 'trace') for loops
         // Called as toggleExpand(traceId, iterationId) for iterations
+        // Called as toggleExpand(traceId, iterationId, toolCallId) for tool calls
         if (typeOrIterationId === "trace") {
             const trace = this.traces.get(idOrTraceId);
             if (trace) trace.expanded = !trace.expanded;
+        } else if (toolCallId) {
+            // Three args: toggle a tool call's child subagent traces
+            const trace = this.traces.get(idOrTraceId);
+            if (!trace) return;
+            const iteration = trace.iterations.get(typeOrIterationId);
+            if (!iteration) return;
+            const tc = iteration.toolCalls.get(toolCallId);
+            if (tc) tc.expanded = !tc.expanded;
         } else {
             // Two string args: first is traceId, second is iterationId
             const trace = this.traces.get(idOrTraceId);
@@ -536,13 +547,23 @@ export class AiDebugApp extends Component {
 
             // Push tool call rows (flat: same depth as iteration)
             for (const [tcId, tc] of iter.toolCalls) {
-                nodes.push({ type: "tc", id: tcId, depth, tc, iter, trace });
-
-                // After each tool call, find child subagent traces that were
-                // spawned by this tool call. Match by tc.call_id (the LLM
-                // call_id), since parent_tool_call_id on child traces equals
-                // the call_id field — NOT the UUID key (tcId).
+                // Check if this tool call spawned any child subagent traces
+                let hasChildren = false;
                 if (tc.call_id) {
+                    for (const ct of this.traces.values()) {
+                        if (
+                            ct.parent_trace_id === trace.trace_id &&
+                            ct.parent_tool_call_id === tc.call_id
+                        ) {
+                            hasChildren = true;
+                            break;
+                        }
+                    }
+                }
+                nodes.push({ type: "tc", id: tcId, depth, tc, iter, trace, hasChildren });
+
+                // Recurse into child subagent traces (only when expanded)
+                if (hasChildren && tc.expanded !== false) {
                     for (const childTrace of this.traces.values()) {
                         if (
                             childTrace.parent_trace_id === trace.trace_id &&
