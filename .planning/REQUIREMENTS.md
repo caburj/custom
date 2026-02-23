@@ -54,28 +54,28 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INST-01 | — | Pending |
-| INST-02 | — | Pending |
-| INST-03 | — | Pending |
-| TREE-01 | — | Pending |
-| TREE-02 | — | Pending |
-| TREE-03 | — | Pending |
-| TREE-04 | — | Pending |
-| TREE-05 | — | Pending |
-| COLR-01 | — | Pending |
-| COLR-02 | — | Pending |
-| COLR-03 | — | Pending |
-| COLR-04 | — | Pending |
-| COLR-05 | — | Pending |
-| DATA-01 | — | Pending |
-| DATA-02 | — | Pending |
-| DATA-03 | — | Pending |
+| INST-01 | Phase 13 | Pending |
+| INST-02 | Phase 13 | Pending |
+| INST-03 | Phase 13 | Pending |
+| TREE-05 | Phase 13 | Pending |
+| COLR-01 | Phase 14 | Pending |
+| COLR-02 | Phase 14 | Pending |
+| DATA-01 | Phase 14 | Pending |
+| DATA-02 | Phase 14 | Pending |
+| DATA-03 | Phase 14 | Pending |
+| TREE-01 | Phase 15 | Pending |
+| TREE-02 | Phase 15 | Pending |
+| TREE-03 | Phase 15 | Pending |
+| TREE-04 | Phase 15 | Pending |
+| COLR-03 | Phase 15 | Pending |
+| COLR-04 | Phase 15 | Pending |
+| COLR-05 | Phase 15 | Pending |
 
 **Coverage:**
 - v1.4 requirements: 16 total
-- Mapped to phases: 0
-- Unmapped: 16
+- Mapped to phases: 16
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-23*
-*Last updated: 2026-02-23 after initial definition*
+*Last updated: 2026-02-23 after roadmap creation*
