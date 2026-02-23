@@ -1,437 +1,333 @@
 # Pitfalls Research
 
-**Domain:** Adding IndexedDB persistence and export/import to an existing OWL standalone app with a reactive Map store
-**Researched:** 2026-02-22
-**Confidence:** HIGH (direct codebase inspection + official IndexedDB documentation + OWL source)
+**Domain:** Adding subagent nesting, recursive trace linking, and color-coding to an existing OWL reactive Map store (ai_debug v1.4)
+**Researched:** 2026-02-23
+**Confidence:** HIGH (direct codebase inspection of current v1.3 implementation + OWL source-level reasoning + empirical IDB behavior)
 
-This document is scoped to v1.3: adding IndexedDB persistence, hydration on load, delete/clear, export, and import to the existing `ai_debug` OWL app. The v1.2 pitfalls (CSS/theming) are superseded. This document focuses on async/sync mismatches between IndexedDB and OWL rendering, write pressure from rapid bus events, large payload handling, schema design, and import validation.
+This document supersedes the v1.3 PITFALLS.md for the purposes of v1.4 planning. V1.3 pitfalls are resolved and confirmed — see Sources. This document focuses exclusively on the new surface area: adding parent/child trace linking, restructuring the flat Map store for recursive nesting, flattening the 3-level tree to a flat+nested rendering model, persisting color assignments to IDB alongside trace data, handling bus event ordering, and hydrating nested trace relationships.
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Writing to IndexedDB Synchronously in Every Bus Event Handler Blocks the UI
+### Pitfall 1: Child `new_trace` Bus Event Arrives Before Parent `tool_call` Event
 
 **What goes wrong:**
 
-Bus events arrive rapidly during an agentic loop — `new_trace`, `iteration`, `tool_call`, `loop_end` can fire in bursts with no natural throttle. If each handler calls `await db.put(...)` inline, two problems compound: (1) the handler is now async, which changes OWL's render scheduling, and (2) even though IndexedDB writes are nominally "asynchronous," the structured clone algorithm that serializes the object before storing it **runs on the main thread synchronously**. A trace object carrying a full conversation history (all prior messages per iteration) can take 2–10ms per clone operation. At 5–10 events per second, this adds up to janky scroll and missed renders during active loop execution.
+Bus events are sent via separate database cursors (`registry.cursor()`) and committed independently. The parent agent's `tool_call` event is sent when `_handle_tool_calls` yields a result — but the subagent's `_run_agentic_loop` may emit its `new_trace` event before the parent's cursor has committed (depending on Postgres NOTIFY delivery timing and Python execution order). The JS event handler for `new_trace` looks up `payload.parent_tool_call_id` in the parent trace's tool call map — which doesn't exist yet. Without an out-of-order buffer, the subagent trace is silently dropped or inserted at root level.
 
 **Why it happens:**
 
-The natural reflex when adding persistence is to add the write at the end of the existing handler: "the event arrives, update the Map, then persist it." This feels safe because the write is awaited. But it means every render cycle now includes a main-thread clone operation plus an async IDB transaction overhead, all firing at bus frequency.
+Two separate cursors commit independently. There is no ordering guarantee between a parent `tool_call` commit and a child `new_trace` commit on the bus channel. The Python execution order is: parent yields tool results → sends `tool_call` event → subagent `_run_agentic_loop` is called → sends `new_trace`. But NOTIFY processing on the Postgres side and WebSocket delivery can reorder these. Even a 1ms delivery delta causes the child to arrive first.
 
 **How to avoid:**
 
-Decouple persistence from the bus handlers entirely. The bus handlers write to the reactive Map (existing behavior — stays sync). A separate persistence layer observes completions and writes to IndexedDB on its own cadence:
-
-- Use a pending-write queue: bus handlers push the trace ID to a Set of "dirty" traces. A `setTimeout(flush, 0)` or microtask debounce drains the queue by writing only changed traces.
-- Write at natural checkpoint events, not on every sub-event: persist the full trace record on `loop_end`, and persist in-progress trace state at a throttled interval (e.g., every 2s) for crash recovery only.
-- Per-record storage: store each trace as one IDB record (keyed by `trace_id`). On update, overwrite the full trace record. This is one `put()` call per trace per flush cycle, not one per bus event.
-
-The transaction cost for inserting 1k records one-at-a-time is ~2s vs ~80ms batched. For traces this is not the bottleneck, but the structured clone per write is. Keep individual records small by accepting a full-trace-per-record model rather than a per-event-append model.
-
-**Warning signs:**
-
-- UI stutters or scroll jank during fast agentic loops (multi-tool iterations)
-- DevTools Performance timeline shows main thread busy with `IDBRequest` during bus event callbacks
-- Bus event handlers become `async` functions — check that OWL doesn't misinterpret the returned Promise as a component lifecycle concern
-
-**Phase to address:** Phase 1 (IndexedDB layer design) — decide the write strategy before writing a line of IDB code
-
----
-
-### Pitfall 2: IndexedDB Transaction Auto-Commits If an `await` Spans a Microtask Boundary Mid-Transaction
-
-**What goes wrong:**
-
-An IndexedDB transaction auto-commits once there are no pending IDB requests within the transaction scope. If you open a transaction, then `await` something that is NOT an IDB request (e.g., a `Promise.resolve()`, a `fetch()`, a `setTimeout`, or even an OWL render tick), the transaction commits before you make additional requests against it. You get a `TransactionInactiveError` on the second request. This is especially acute in Safari, which closes transactions more aggressively than Chrome.
-
-Example of the trap:
-```javascript
-const tx = db.transaction('traces', 'readwrite');
-const store = tx.objectStore('traces');
-await store.put(traceData);       // OK — this IS an IDB request
-const extra = await someHelper(); // NOT an IDB request — transaction may auto-commit here
-await store.put(moreData);        // TransactionInactiveError in Safari
-```
-
-**Why it happens:**
-
-The spec intends transactions to be short-lived. The auto-commit behavior is by design. Developers familiar with SQL transactions assume "open transaction, do work, commit" — but IDB commits eagerly, not at explicit `.commit()`. When using `async/await` with IDB, it's easy to accidentally yield the microtask queue to non-IDB work inside a transaction scope.
-
-**How to avoid:**
-
-Keep all IDB requests within a transaction contiguous — no awaiting non-IDB Promises between requests in the same transaction:
+Implement a pending-child buffer. When a `new_trace` event arrives with a `parent_tool_call_id` that is not yet in any trace's tool call map, add the child payload to a `Map<parent_tool_call_id, payload[]>` buffer. When a `tool_call` event arrives, after inserting the tool call, check the buffer for any pending children with that `tool_call_id` and process them in order. The buffer needs a TTL or a max size to prevent unbounded growth if a child event arrives for a tool call that is never seen (e.g., dropped `tool_call` event).
 
 ```javascript
-// CORRECT: prepare data first, then open transaction and do all IDB work
-const cloned = structuredClone(traceData); // prepare outside transaction
-const tx = db.transaction('traces', 'readwrite');
-const store = tx.objectStore('traces');
-store.put(cloned);
-await tx.done; // idb library helper — waits for transaction to complete
-```
-
-Use the `idb` library (Jake Archibald) which wraps IDB in Promises with correct transaction semantics and a `tx.done` promise that resolves on commit. This eliminates most transaction-close timing bugs. Alternatively, use Dexie which fully abstracts transaction management.
-
-For the `ai_debug` use case: since writes are one `put()` per trace per flush, this pitfall only appears if the flush function tries to write multiple stores or performs non-IDB async work between requests. Keep flush functions to: get store reference, `store.put()`, `await tx.done` — nothing else in between.
-
-**Warning signs:**
-
-- `TransactionInactiveError` exceptions in the console during writes, especially in Safari
-- Writes succeed in Chrome but silently fail (or throw) in Firefox/Safari
-- Any non-IDB `await` expression between two `store.put()` or `store.get()` calls in the same function
-
-**Phase to address:** Phase 1 (IDB wrapper implementation) — use `idb` library to eliminate this class of bugs
-
----
-
-### Pitfall 3: Hydrating the Reactive Map Before OWL Mounts Causes a Render Before State Is Ready
-
-**What goes wrong:**
-
-The most natural place to hydrate `this.traces` from IndexedDB is in `onMounted`. But `onMounted` runs AFTER the first render. If the component renders with an empty Map, shows "No traces" state, then hydrates from IDB and triggers a second render, the user sees a flash of empty state on every page load — even when traces are already persisted.
-
-Worse: if hydration is awaited inside `onMounted` and the IDB read returns a large dataset, the component has already rendered the empty state and now must patch the full tree of traces into the DOM in a single large render. This causes perceptible jank on load.
-
-**Why it happens:**
-
-OWL's `onMounted` is the familiar DOM-ready hook from React/Vue. Developers reach for it to do "initialization after render." But OWL also provides `onWillStart`, which runs asynchronously BEFORE the first render, blocking it until the hook resolves. `onWillStart` is the correct place for data loading that should be present for initial render.
-
-**How to avoid:**
-
-Use `onWillStart` for IDB hydration:
-
-```javascript
-setup() {
-    this.traces = useState(new Map());
-    this.state = useState({ hydrating: true, ... });
-
-    onWillStart(async () => {
-        const stored = await loadTracesFromIDB();
-        for (const trace of stored) {
-            // Reconstruct nested reactive Maps — IDB stores plain objects
-            const iterations = reactive(new Map());
-            for (const iter of trace.iterations) {
-                const toolCalls = reactive(new Map());
-                for (const tc of iter.toolCalls) {
-                    toolCalls.set(tc.tool_call_id, tc);
-                }
-                iterations.set(iter.iteration_id, { ...iter, toolCalls });
-            }
-            this.traces.set(trace.trace_id, { ...trace, iterations });
-        }
-        this.state.hydrating = false;
-    });
-}
-```
-
-Keep the `onWillStart` read fast — IDB bulk reads of the trace index are fast; the bottleneck is deserializing large payloads. If there are many traces, consider loading only metadata (trace_id, agent_name, status, started_at) during `onWillStart` and lazy-loading full payloads on selection.
-
-**Warning signs:**
-
-- Hydration logic in `onMounted` (not `onWillStart`)
-- A visible flash of "No traces" on page load even when IDB has data
-- Console logs showing trace data being set after the initial render completes
-
-**Phase to address:** Phase 2 (Hydration implementation) — use `onWillStart` from the start, not as a fix
-
----
-
-### Pitfall 4: IDB Stores Plain Objects — Nested `reactive()` Maps Are Lost on Roundtrip
-
-**What goes wrong:**
-
-The current store uses a nested structure of reactive Maps: `this.traces` is `useState(new Map())`, each trace contains `iterations: reactive(new Map())`, each iteration contains `toolCalls: reactive(new Map())`. IndexedDB uses the structured clone algorithm to serialize objects for storage. Structured clone **cannot** clone Proxy objects (which is what `reactive()` returns). It strips proxy wrappers and stores the underlying plain object — and a Map is stored as a Map, but NOT as a reactive Map.
-
-When data is read back from IDB on hydration, the returned objects are plain — no reactivity. If you do `this.traces.set(traceId, storedTrace)` where `storedTrace.iterations` is a plain `Map`, OWL will not observe mutations on `storedTrace.iterations`. Adding an iteration from a live bus event after hydration will not trigger a re-render unless the iterations Map is wrapped in `reactive()` again.
-
-**Why it happens:**
-
-Developers test persistence with a fresh trace (write then read), see the UI populate correctly, and conclude it works. The bug only manifests when a bus event arrives AFTER hydration for an in-progress trace that was loaded from IDB — the new iteration appears in the Map but the UI doesn't update.
-
-**How to avoid:**
-
-Deserialize IDB data by explicitly wrapping nested structures in `reactive()` during hydration. Treat IDB as a serialization format, not a live store:
-
-```javascript
-// Hydration: always reconstruct reactivity from plain IDB data
-function hydrateTrace(rawTrace) {
-    const toolCallsMaps = new Map(
-        rawTrace.iterations.map(iter => [
-            iter.iteration_id,
-            {
-                ...iter,
-                toolCalls: reactive(new Map(
-                    iter.toolCalls.map(tc => [tc.tool_call_id, tc])
-                )),
-            }
-        ])
-    );
-    return {
-        ...rawTrace,
-        iterations: reactive(toolCallsMaps),
-    };
-}
-```
-
-Also: store traces in IDB as plain serializable objects — use `Array.from(trace.iterations.values())` when serializing, not the Map itself (Map serializes and deserializes correctly via structured clone, but the nested reactive wrapping is what needs reconstruction). Consider storing iterations and toolCalls as arrays in IDB (more portable, simpler to reconstruct).
-
-**Warning signs:**
-
-- UI shows stale iteration count after page refresh + new bus events arrive for an in-progress trace
-- Clicking a trace loaded from IDB shows correct detail data but live events don't append to the sidebar
-- Console shows `trace.iterations.set(...)` being called but no render cycle fires
-
-**Phase to address:** Phase 2 (Hydration implementation) — add reactivity reconstruction as a design constraint from the start
-
----
-
-### Pitfall 5: `Date` Objects in Stored Traces Become Strings After IDB Roundtrip If JSON Is Used
-
-**What goes wrong:**
-
-The current trace objects contain `started_at: new Date()`, `ended_at: new Date()`, and `receivedAt: new Date()` (per iteration). IndexedDB's structured clone algorithm CAN store `Date` objects natively — they are round-tripped as `Date` instances. However, if at any point the data is passed through `JSON.stringify` / `JSON.parse` (e.g., during export, or if using `JSON.stringify` as a serialization shortcut for IDB), the `Date` objects become ISO string strings. After that, `trace.ended_at - trace.started_at` (used in `getIterationDuration`) returns `NaN` because string subtraction doesn't work.
-
-**Why it happens:**
-
-Export/import necessarily involves `JSON.stringify` / `JSON.parse`. If the same data model is used for both IDB storage and JSON export without explicit Date handling, and if import restores data directly from parsed JSON into the IDB (bypassing reconstruction), all Dates become strings. The symptom is that duration calculations show `NaN` or `NaN ms` in the UI, only for imported traces.
-
-Additionally: the code uses `new Date()` at event-receipt time for `receivedAt` and `started_at`. On hydration from IDB, if Dates are correctly stored as Date objects, the subtraction in `getIterationDuration` will work. But after a JSON import roundtrip, it will not unless Dates are explicitly reconstructed.
-
-**How to avoid:**
-
-Establish a consistent serialization contract:
-
-1. **IDB storage**: Let structured clone handle `Date` objects natively. Never pre-serialize with `JSON.stringify` before storing in IDB.
-2. **JSON export**: Convert `Date` objects to ISO strings explicitly (`date.toISOString()`). Document this in the export schema.
-3. **JSON import**: Explicitly reconstruct `Date` objects from ISO strings after `JSON.parse`:
-
-```javascript
-function deserializeTrace(raw) {
-    return {
-        ...raw,
-        started_at: raw.started_at ? new Date(raw.started_at) : null,
-        ended_at: raw.ended_at ? new Date(raw.ended_at) : null,
-        iterations: raw.iterations.map(iter => ({
-            ...iter,
-            receivedAt: new Date(iter.receivedAt),
-        })),
-    };
-}
-```
-
-**Warning signs:**
-
-- `getIterationDuration()` returns `'NaNms'` or `'NaN ms'` for imported traces
-- `trace.started_at instanceof Date` returns `false` after import
-- `typeof trace.started_at === 'string'` returns `true` after import
-
-**Phase to address:** Phase 3 (Export/import) — define the export schema with explicit Date serialization before writing import logic
-
----
-
-### Pitfall 6: Large JSON Export Payloads Block the Main Thread During `JSON.stringify`
-
-**What goes wrong:**
-
-A trace with a RAG-enabled session carries full conversation history per iteration. An agentic loop with 10 iterations, each with 20-message history plus tool args/results, can easily produce a 1–5MB JSON payload per trace. `JSON.stringify` of a 5MB object is synchronous and runs entirely on the main thread. At 10MB+ (multiple traces exported together), the browser tab freezes for 100–500ms during stringify — the user sees a hang, a spinner that doesn't move, or in worst cases a "Page Unresponsive" dialog.
-
-**Why it happens:**
-
-Export is triggered once by a user action ("Export selected traces") and feels low-frequency, so developers reach for the simple `JSON.stringify(allSelectedTraces)` approach. Traces are held in memory anyway, so it "should be fast." But structured data with deeply nested Maps serialized via `.values()` and spread operators can produce very large intermediate object graphs, and stringify on large objects is not incremental.
-
-**How to avoid:**
-
-- Export one trace at a time via `JSON.stringify` per trace to avoid one giant blocking call. Generate one export file per trace, or concatenate via Blob:
-
-```javascript
-// Stream-style export: build Blob from per-trace chunks
-const chunks = [];
-for (const trace of selectedTraces) {
-    chunks.push(JSON.stringify(serializeTrace(trace)));
-    chunks.push('\n'); // newline-delimited JSON (NDJSON)
-}
-const blob = new Blob(chunks, { type: 'application/json' });
-```
-
-- For multi-trace export as a single JSON array, use chunked stringify with `setTimeout` yield between traces to avoid blocking. For a developer tool with typically 1–20 traces of moderate size, this is overkill — but plan the export format to support it.
-- Set a practical soft limit: warn the user if exporting more than N traces or the estimated payload exceeds a threshold (e.g., 10MB). This tool is for developer use; it's fine to communicate payload size.
-- Measure actual payload size with a real RAG-enabled session before deciding whether chunking is needed. The PROJECT.md notes this as known tech debt.
-
-**Warning signs:**
-
-- The "Export" button appears to hang for >200ms before the download starts
-- DevTools flame chart shows a long `JSON.stringify` block on the main thread during export
-- The app becomes briefly non-interactive during export on large trace sets
-
-**Phase to address:** Phase 3 (Export implementation) — measure payload size with a real session before deciding on chunking strategy
-
----
-
-### Pitfall 7: JSON Import With No Schema Validation Causes Runtime Errors Deep in the Component Tree
-
-**What goes wrong:**
-
-A user imports a JSON file that was manually edited, came from a different version of the app, or is simply malformed. The import reads the file, parses JSON, and sets the restored traces into `this.traces`. The component then tries to render the trace — accessing `trace.iterations.values()`, `iter.toolCalls.get(...)`, etc. If the imported data has a different shape (e.g., `iterations` is an array instead of a Map, `trace_id` is missing, `status` is not one of the expected enum values), the component throws a rendering exception deep in a child component. The error surface is cryptic: a blank detail panel, or an OWL render error with a stack trace pointing into template code.
-
-**Why it happens:**
-
-Import validation is easy to defer — "we'll add it later, for now just parse and load." The happy path works perfectly. The failure modes only appear with edge-case files (manual edits, version mismatches, corrupt downloads, truncated exports).
-
-**How to avoid:**
-
-Validate import data before inserting it into the store. At minimum:
-
-1. Confirm the top-level structure (`Array.isArray(data)` or expected schema key exists)
-2. Validate each trace has required fields: `trace_id`, `agent_name`, `status`, `started_at`, `iterations`
-3. Validate each iteration has: `iteration_id`, `trace_id`, `toolCalls`
-4. Reject (with user-facing error message) rather than silently skip invalid records
-
-A full JSON Schema validation (e.g., with `ajv`) is not necessary for a developer tool. A simple shape-check function is sufficient:
-
-```javascript
-function validateImport(data) {
-    if (!Array.isArray(data)) throw new Error('Expected array of traces');
-    for (const trace of data) {
-        if (!trace.trace_id || !trace.agent_name) {
-            throw new Error(`Invalid trace: missing required fields`);
-        }
-        if (!Array.isArray(trace.iterations)) {
-            throw new Error(`Trace ${trace.trace_id}: iterations must be array`);
-        }
+// In setup():
+this._pendingChildren = new Map(); // parent_tool_call_id → [payload, ...]
+
+// In _onNewTrace:
+if (payload.parent_tool_call_id) {
+    const parentFound = this._attachChildTrace(payload);
+    if (!parentFound) {
+        // Buffer for later
+        const pending = this._pendingChildren.get(payload.parent_tool_call_id) || [];
+        pending.push(payload);
+        this._pendingChildren.set(payload.parent_tool_call_id, pending);
     }
-    return true;
+    return;
+}
+// Root trace: handle as before
+
+// In _onToolCall, after inserting the tool call:
+const waiting = this._pendingChildren.get(payload.tool_call_id);
+if (waiting) {
+    this._pendingChildren.delete(payload.tool_call_id);
+    for (const child of waiting) this._attachChildTrace(child);
 }
 ```
 
-Also guard against import of duplicate `trace_id` values — if the same trace_id already exists in the store (from IDB or from the current session), decide the policy (skip, overwrite, or error) before writing the import code.
-
 **Warning signs:**
 
-- Import logic does `this.traces.set(...)` without any shape validation
-- OWL rendering errors appear after import with stack traces in template code
-- Blank detail panel after selecting an imported trace (iteration or toolCall is undefined)
+- Subagent traces appear at root level in the sidebar (not nested under parent tool call)
+- Console logs show "parent tool call not found" or equivalent for traces with `parent_tool_call_id`
+- The pending buffer grows unboundedly (a `tool_call` event was dropped)
 
-**Phase to address:** Phase 3 (Import implementation) — validation is part of the import, not an afterthought
+**Phase to address:** Phase 1 (backend events + JS event handlers) — buffer must exist before any subagent can trigger the race
 
 ---
 
-### Pitfall 8: `clearAll()` Clears the Reactive Map But Not IDB — Deleted Data Reappears on Refresh
+### Pitfall 2: Nested Subagent Traces Stored in the Flat Top-Level Map Break the IDB Write
 
 **What goes wrong:**
 
-The existing `clearAll()` method calls `this.traces.clear()` and resets selection state. This clears the in-memory store. But on the next page load, `onWillStart` hydrates from IDB — which still has all the traces. The user clears all traces, sees an empty sidebar, then reloads the page and finds all the traces are back. This is maximally surprising behavior.
+The current IDB write is triggered in `_onLoopEnd` per trace: `writeTrace(trace)` serializes the trace as a self-contained record keyed by `trace_id`. If subagent traces are stored as nested objects inside the parent trace (e.g., `parentTrace.children.set(childTraceId, childTrace)`), the IDB record for the parent trace grows unboundedly with each level of subagent nesting, and the structured clone cost per write multiplies. Worse: if both the parent and child have their own `_onLoopEnd` events, they will both try to write, and the child's write will serialize an object that's not a top-level trace record.
 
-The same issue applies to `deleteTrace(traceId)`: deleting from the reactive Map is immediately visible in the UI, but if IDB is not updated synchronously with the UI action, a reload restores the deleted trace.
+Alternatively, if subagent traces remain in the top-level `this.traces` Map (flat storage with `parent_tool_call_id` pointer), then `serializeTrace` must be updated to include the linkage fields — otherwise the relationship is lost on hydration.
 
 **Why it happens:**
 
-The reactive Map clear is instant and visible; the IDB delete is async and deferred. Developers test the clear behavior without testing the reload case. The reflex is to add persistence but not to update the deletion operations to be persistence-aware.
+The natural first instinct is "nest child traces inside parent" to mirror the rendering hierarchy. But the current IDB schema is one record per `trace_id`. Nesting produces a schema mismatch with the write layer and the hydration layer.
 
 **How to avoid:**
 
-Delete operations must be dual: delete from both the reactive Map AND from IDB, atomically from the user's perspective. Because both are fast, the simplest approach is to await the IDB delete before showing the empty UI — but this is only acceptable if the IDB delete is fast (it is, for record-level deletes).
+Keep subagent traces flat in `this.traces` (keyed by their own `trace_id`). Add linkage fields to each trace record: `parent_trace_id` and `parent_tool_call_id`. The rendering layer computes the tree from these pointers rather than from nested data structure. IDB stores each trace independently. Hydration reconstructs the parent–child relationship by linking after loading all records.
 
-```javascript
-async deleteTrace(traceId) {
-    // Remove from reactive store immediately (UI updates)
-    this.traces.delete(traceId);
-    // Clear selection if the deleted trace was selected
-    if (this.state.selectedId === traceId || this._isDescendantOf(traceId)) {
-        this.state.selectedId = null;
-        this.state.selectedType = null;
-    }
-    // Persist the deletion
-    await idbDeleteTrace(traceId);
-}
+This is the same approach used by distributed tracing systems (OpenTelemetry span model) and is the correct design for a fire-and-forget IDB write pattern.
 
-async clearAll() {
-    this.traces.clear();
-    this.state.selectedId = null;
-    this.state.selectedType = null;
-    await idbClearAll();
-}
+Update `serializeTrace` to include `parent_trace_id` and `parent_tool_call_id`. Update `hydrateTrace` to preserve them. No change to IDB schema version required if both fields are nullable.
+
+**Warning signs:**
+
+- `serializeTrace` does not include `parent_trace_id` or `parent_tool_call_id` fields
+- Subagent traces are stored as properties of their parent trace object rather than as entries in `this.traces`
+- After reload, subagent traces appear at root level even though they nested correctly in the live session
+
+**Phase to address:** Phase 1 (data model design) and Phase 2 (IDB serialization) — decide flat vs. nested storage before writing any code
+
+---
+
+### Pitfall 3: `reactive()` Without a Render Observer Silently Breaks Nested Map Mutations
+
+**What goes wrong:**
+
+In OWL, `reactive(obj)` creates a proxy that notifies observers when properties are read/written. However, if `reactive()` is called without a callback argument (the second parameter), it uses OWL's `NO_CALLBACK` sentinel — meaning mutations are tracked but there is no observer to notify. Re-renders only happen when the mutation is observed through a `useState()` proxy chain.
+
+When subagent traces are added to the flat `this.traces` Map (which IS a `useState`-wrapped Map), the traces themselves are reactive by association — OWL tracks reads through the proxy chain. But the subagent's `children` relationship is computed by iterating `this.traces.values()` and filtering on `parent_tool_call_id`. This is a computed derived view, not a stored reactive property. If the rendering template calls a method to build the tree (e.g., `getChildren(traceId)`), OWL tracks that call during render and re-renders when `this.traces` changes — which is correct.
+
+The failure mode is when intermediate objects are created outside of a render cycle (e.g., in a `setup()` helper or a one-time computation) and stored as plain objects. Those objects are not in the proxy chain and mutations to them do not trigger renders.
+
+**Why it happens:**
+
+The pattern `reactive(new Map())` for `iterations` and `toolCalls` worked in v1.3 because those Maps were explicitly created inside `_onNewTrace` (inside a bus handler that's called during rendering or triggers a render via `useState`). If subagent nesting introduces a new level (e.g., `trace.childTraces = reactive(new Map())`), the new Map must be created with the same care — but developers may skip `reactive()` assuming the parent trace's proxy chain handles it.
+
+**How to avoid:**
+
+Use the same flat `this.traces` Map for all traces (root and subagent). Never add a `childTraces` or `children` property to a trace object. The tree is a view computed from the flat Map on every render. This avoids the nested-reactive problem entirely.
+
+If a precomputed child index is needed for performance (many traces), store it in a `useState({})` plain object (not a Map), keyed by `parent_tool_call_id`. OWL tracks plain object property reads through `useState`, so mutations trigger renders correctly.
+
+**Warning signs:**
+
+- A `childTraces` or `children` property appears on trace objects
+- `reactive(new Map())` called inside a function that's not a bus event handler or `setup()`
+- Subagent trace additions don't trigger sidebar re-renders even though the data is in the store
+
+**Phase to address:** Phase 1 (data model design) — decide the reactive structure before writing rendering code
+
+---
+
+### Pitfall 4: Flattening the 3-Level Tree to Flat+Nested Rendering Breaks Existing Selection Logic
+
+**What goes wrong:**
+
+The current sidebar renders a 3-level hierarchy: Loop > Iteration > Tool Call. The template iterates `trace.iterations` and within each iteration, `iteration.toolCalls`. Selection state (`selectedId`, `selectedType`) and ancestor highlighting (`selectedTraceId`, `selectedIterationId`) depend on this 3-level structure.
+
+V1.4 flattens within-trace rendering (iterations and tool calls at the same level) and adds a new fourth dimension: subagent traces indented under the parent tool call. The existing `selectedTraceId` getter does a nested scan of all iterations to find which trace owns the selected iteration — this scan must now also descend into subagent traces.
+
+If the selection getters are not updated, selecting an item inside a subagent trace returns `null` for `selectedTraceId` (because the scan only traverses root traces), breaking the ancestor-highlighting CSS classes and the detail panel "which agent's color accent to show."
+
+**Why it happens:**
+
+The existing getters `getSelectedIteration()`, `getSelectedToolCall()`, `selectedTraceId`, and `selectedIterationId` assume all traces are top-level entries in `this.traces`. Subagent traces are also in `this.traces` (flat model), so the getters will find them — but the ancestor walk for `selectedTraceId` when a `tool_call` is selected inside a subagent will return the subagent's `trace_id`, not the root agent's `trace_id`. This is technically correct but breaks the visual "which root loop owns this selection" expectation.
+
+**How to avoid:**
+
+When flattening the rendering tree, audit every selection getter and update it to work with the new flat+recursive model. Define clearly: does "selected trace" mean the immediate containing trace or the root-level trace? For color-coding and breadcrumbs, the immediate trace is correct. For checkbox selection, the root trace is correct (only root traces have checkboxes). Document this distinction.
+
+Add a `getRootTraceId(traceId)` helper that walks `parent_trace_id` pointers up to the root. Use this consistently in all places that need "the root trace for a given selection."
+
+**Warning signs:**
+
+- Selecting an item inside a subagent trace causes the parent tool call highlight to disappear
+- The detail panel shows no color accent or wrong color accent for subagent content
+- Checkbox state becomes confused when subagent traces appear in the sidebar
+
+**Phase to address:** Phase 3 (rendering flatten + nesting) — selection logic audit must be a required step when restructuring the template
+
+---
+
+### Pitfall 5: Color Assignment Stored in a Plain Object Inside `useState` Loses Reactivity on Color Map Growth
+
+**What goes wrong:**
+
+The per-agent color assignment (agent_name or trace_id → CSS color token) needs to be reactive: the first time an agent appears (new `new_trace` event), a color is assigned and the sidebar must re-render to show that color. The simplest storage is `this.agentColors = useState({})`, keyed by `agent_name`.
+
+The problem: `useState({})` makes the top-level object reactive (its direct properties are tracked). Adding a new key (`this.agentColors[agentName] = 'color-3'`) triggers a re-render. But if the template reads `agentColors[trace.agent_name]` during render, OWL tracks that specific key access. A new agent name being added (new key) triggers a full re-render of the traces list — which is correct.
+
+The failure mode is when colors are stored in a plain `Map` (not reactive): `this.agentColors = new Map()` without `useState` or `reactive()`. Map mutations are not observable by OWL. Adding a new color for a new agent does not trigger a render, so the new agent's sidebar row appears without its color until the next render triggered by something else (e.g., the next iteration event).
+
+**Why it happens:**
+
+The color assignment feels like "configuration state" rather than "UI data," so developers may store it in a module-level Map or a plain instance property rather than a reactive store.
+
+**How to avoid:**
+
+Store color assignments in `useState({})` (plain object, not Map). Keys are agent names (strings). Values are CSS class names or color tokens. The first time a `new_trace` event arrives for an agent not yet in the map, assign a color and add it to `this.agentColors`. This triggers a re-render that applies the color to the new trace row immediately.
+
+Persist color assignments to IDB as a separate record (not embedded in trace records), keyed by a fixed key (e.g., `__agent_colors__`). Load from IDB in `onWillStart` before first render — same as trace hydration. This ensures color consistency across page refreshes.
+
+**Warning signs:**
+
+- `agentColors` is a plain `Map` or a plain instance property (not `useState`)
+- New agent's first trace row appears without its color chip until the next render
+- After page reload, all agents revert to color 1 (no persistence)
+
+**Phase to address:** Phase 2 (color assignment + IDB persistence) — reactive storage and persistence design must be decided before implementing color assignment
+
+---
+
+### Pitfall 6: IDB DB Version Not Bumped When Adding `agentColors` Store — Upgrade Silently Fails
+
+**What goes wrong:**
+
+V1.3 opened IndexedDB at version 1 with a single `traces` store. V1.4 needs to persist color assignments (a separate logical record). If the color data is added to the existing `traces` store as a special record (e.g., keyed by `__agent_colors__`), no version bump is required. But if a new `agent_colors` object store is added, the IDB version must be bumped to 2 and `onupgradeneeded` must create the new store.
+
+The current `db.js` uses `@web/core/utils/indexed_db` (Odoo's IDB wrapper), which uses `idb._tables.add(STORE)` to register stores. If a second store is registered without bumping the version, `onupgradeneeded` is not called (it only fires on version change), so the new store is never created. All writes to the new store fail with `NotFoundError: The operation failed because the requested database object could not be found`.
+
+**Why it happens:**
+
+Developers assume that adding `idb._tables.add('agent_colors')` is sufficient to create the store. It is only sufficient when the DB is being created for the first time (version 0 → 1). For an existing DB (already at version 1), adding to `_tables` without bumping the version means `onupgradeneeded` never fires and the store is never created.
+
+**How to avoid:**
+
+Two options:
+1. **No version bump**: Store agent colors as a special sentinel record in the existing `traces` store (key `__agent_colors__`, value is the color map object). This avoids the schema migration entirely and is acceptable for a simple key-value payload.
+2. **Version bump to 2**: Change `DB_VERSION = 2`, add `idb._tables.add('agent_colors')`. The `onupgradeneeded` handler (which Odoo's IDB util calls) creates the new store. Existing `traces` data is preserved.
+
+Option 1 is simpler and recommended — it avoids a migration and keeps the IDB schema minimal.
+
+**Warning signs:**
+
+- `DB_VERSION` is still 1 but a new object store is being added
+- `NotFoundError` in the console when writing to the new store
+- Color assignments are lost on page reload (write silently failed)
+
+**Phase to address:** Phase 2 (IDB persistence for colors) — decide the storage strategy before implementing
+
+---
+
+### Pitfall 7: Hydrating Nested Traces From IDB Requires a Two-Pass Load to Reconstruct Parent Pointers
+
+**What goes wrong:**
+
+On page load, `loadAllTraces()` returns all trace records from IDB. Currently, each record is independently hydrated with `hydrateTrace()` and inserted into `this.traces`. This works for flat traces.
+
+With subagent nesting, some traces have `parent_trace_id` and `parent_tool_call_id`. For correct rendering, those pointer fields must reference traces that are ALSO in the store. But the IDB records are loaded in arbitrary order — there is no guarantee the parent trace record is processed before the child. If the rendering logic does a parent-pointer lookup during hydration (e.g., to validate linkage), it may not find the parent yet.
+
+More subtly: after hydration, the pending-child buffer (from Pitfall 1) must be initialized empty — but the rendering template builds the tree by walking `parent_tool_call_id` pointers, not by looking up a buffer. So the ordering issue only affects the buffer, not rendering.
+
+**Why it happens:**
+
+IDB's `getAll()` returns records in key-path order (alphabetical by `trace_id` UUID strings, which are random — so effectively random order). If any hydration code does a parent lookup during the load loop, it will sometimes find the parent (already loaded) and sometimes not (not yet loaded).
+
+**How to avoid:**
+
+Do the hydration in two passes:
+1. First pass: call `hydrateTrace()` on every record and insert into `this.traces`. No parent-linking logic.
+2. Second pass: for every trace with `parent_trace_id`, verify the parent exists in `this.traces`. Log a warning if the parent is missing (orphaned trace — parent was deleted). No structural repair needed; the rendering template handles missing parents gracefully by rendering the orphan at root level.
+
+The pending-child buffer (`_pendingChildren`) should be initialized empty and NOT pre-populated during hydration — it is only for in-flight live events. Hydrated traces are already complete records; there are no "pending" relationships to resolve.
+
+**Warning signs:**
+
+- Hydration loop does parent-pointer validation inline (single pass)
+- `_pendingChildren` is populated during IDB hydration (should only be for live events)
+- Subagent traces appear at root level after reload (parent pointer not being used in template)
+
+**Phase to address:** Phase 2 (IDB hydration) — two-pass design must be explicit in the implementation plan
+
+---
+
+### Pitfall 8: Export Format Does Not Include `parent_trace_id` — Nesting Is Lost on Import
+
+**What goes wrong:**
+
+The current `serializeTrace()` function does not include `parent_trace_id` or `parent_tool_call_id` (they don't exist yet in v1.3). If these fields are added to trace objects in v1.4 but not added to `serializeTrace()`, the export file contains all the traces (both root and subagent) but with no parent linkage. When imported into a fresh session, all traces appear at root level — the hierarchy is gone.
+
+**Why it happens:**
+
+`serializeTrace()` explicitly lists every field it preserves (it's not a `{...trace}` spread — it's a manual field enumeration). Adding a new field to the trace object requires a matching addition to `serializeTrace()`. This is easy to forget because the export still works (no error), it just silently drops the relationship field.
+
+**How to avoid:**
+
+Add `parent_trace_id: trace.parent_trace_id || null` and `parent_tool_call_id: trace.parent_tool_call_id || null` to `serializeTrace()`. Add the same fields to the import validation: a trace with `parent_trace_id` but no matching trace in the import set is an orphan — log a warning but don't reject the import (the user may have exported a subset).
+
+Update the import validator to also accept `parent_trace_id` as an optional string field. The import should reconstruct nesting after all traces are loaded (same two-pass approach as hydration).
+
+**Warning signs:**
+
+- `serializeTrace()` does not include `parent_trace_id` or `parent_tool_call_id`
+- After export + import, all traces are flat (no nesting) even if they were nested in the original session
+- Import validation rejects traces with `parent_trace_id` (unexpected field)
+
+**Phase to address:** Phase 2 (IDB serialization) and Phase 4 (export/import) — `serializeTrace` must be updated in the same phase as the data model change
+
+---
+
+### Pitfall 9: Color Assignment Keyed by `agent_name` Collides When Two Different Agents Have the Same Name
+
+**What goes wrong:**
+
+The color assignment is intended to visually distinguish different agents. If the key is `agent_name` (a human-readable string like "Research Agent"), two completely different agent configurations with the same display name get the same color — which is correct by definition if the name is the identity key.
+
+But if the user has two agents with the same name in different Odoo configurations, or if an agent's name changes between runs, the color assignment becomes confusing: a "new" agent gets the color of an old one, or two unrelated agents share a color.
+
+The deeper problem: what is the correct identity key? `agent_name` (human-readable, collides), `agent_id` (database ID, stable across name changes), or `trace_id` (unique but gives every trace a different color, making comparison impossible)?
+
+**Why it happens:**
+
+The first implementation reaches for `agent_name` because it's what the user sees and expects to map to a color. The collision case isn't obvious until two same-named agents appear in the same session.
+
+**How to avoid:**
+
+Use `agent_name` as the color key. The collision is intentional: if two agents share a name, they share a color (the user probably treats them as equivalent). Document this decision explicitly. If `agent_id` is available in the bus payload, prefer it as the key (more stable than name).
+
+Per the PROJECT.md, `agent_name` is already available in `new_trace` payloads. Check whether `agent_id` (database record ID) is also available — if so, use it and display `agent_name` as the label.
+
+**Warning signs:**
+
+- Color assignment keyed by `trace_id` (every trace gets a unique color — defeats the purpose)
+- No documentation of what the identity key means
+- Two agents with the same name display different colors (key is more granular than `agent_name`)
+
+**Phase to address:** Phase 2 (color assignment design) — decide the identity key before implementing
+
+---
+
+### Pitfall 10: Rendering Subagent Nesting With Recursive OWL Components Causes Double-Render Cascades
+
+**What goes wrong:**
+
+The natural approach to rendering a recursive tree is a recursive OWL component: `<TraceRow>` renders itself for each child trace. But OWL renders components depth-first. If a subagent trace's data arrives via a bus event while the parent is being re-rendered (a common pattern during fast loops), the component mount/patch lifecycle for the recursive child may fire during the parent's patch cycle. This is not a correctness problem (OWL queues patches), but it can cause visual flicker — the parent renders without the child, then the child renders, producing two visible updates in rapid succession.
+
+The more significant problem is with `t-key` assignment. The current template uses `traceId` as the key for trace rows. If a subagent trace is rendered inside the parent trace's subtree (as a child of a tool call row), its `t-key` must be globally unique to prevent OWL from reusing the wrong DOM node. Using just `traceId` inside a nested `t-foreach` could cause key collisions if the same `traceId` appears at multiple rendering levels (which it won't in this model, but is worth documenting).
+
+**Why it happens:**
+
+Recursive OWL components are uncommon in Odoo codebases. The pattern is supported (OWL is a full component framework) but requires explicit attention to lifecycle ordering. Developers may use a flat template loop with indentation via CSS margin instead of a recursive component — this is actually the correct approach for the ai_debug use case, since the nesting is bounded (not truly unbounded-recursive in practice).
+
+**How to avoid:**
+
+Do NOT use recursive OWL components. Instead, flatten the render loop: after each root trace's rows, check if any subagent traces reference a tool call in that trace, and render those subagent rows immediately after (with CSS indentation). This is a depth-first iterative walk, not a recursive component tree. It keeps the rendering logic in a single template, avoids component lifecycle complexity, and is consistent with how the v1.3 template already works (flat `t-foreach` loops with conditional expansion).
+
+```xml
+<!-- Pseudocode: flat iterative rendering with depth-aware indentation -->
+<t t-foreach="orderedTraceIds" t-as="traceId" t-key="traceId">
+    <!-- render trace row with depth-dependent indent class -->
+    <!-- then recurse via a helper that yields child trace IDs in order -->
+</t>
 ```
 
-Do not defer IDB deletes to a "flush" cycle — deletions must be immediate and unconditional.
-
 **Warning signs:**
 
-- `clearAll()` or `deleteTrace()` do not have `async` in their signature (or do not call an IDB delete)
-- After clearing and reloading the page, traces reappear in the sidebar
-- The pending-write queue has no mechanism for deletions — it only batches puts
+- A recursive OWL component (`TraceRow` that renders `<TraceRow>` inside itself) is being introduced
+- Double-render flicker on fast bus events (parent re-renders, then child re-renders separately)
+- Template has nested `t-foreach` loops with the same key variable name at different depths
 
-**Phase to address:** Phase 1 (IDB layer design) — deletion semantics must be part of the initial IDB layer design, not added later
-
----
-
-### Pitfall 9: IDB Version Mismatch After Schema Change — Existing Data Becomes Inaccessible
-
-**What goes wrong:**
-
-The IndexedDB database is opened with a version number. If the code changes the schema (adds an object store, changes an index, adds a field that the IDB `keyPath` depends on) and bumps the version, the `onupgradeneeded` event fires and migrations can run. But if the code changes in a way that assumes a new schema field is present (e.g., `trace.schema_version`) without migrating existing records, IDB successfully opens (the store structure didn't change) but the JS code that reads old records crashes because the expected field is absent.
-
-More critically: if an object store needs to be deleted and recreated (e.g., to change the `keyPath`), the only safe approach is to delete the old store in `onupgradeneeded` — which destroys all existing data in that store.
-
-**Why it happens:**
-
-During development of v1.3, the schema evolves. An early implementation might store traces differently than the final design. If the schema is changed without incrementing the version number (or without writing migration code), stale IDB data in the developer's own browser causes confusing bugs — traces that should have been deleted, missing fields, or data that doesn't match the current code expectations.
-
-**How to avoid:**
-
-- Start with DB version `1`. Define the schema carefully before writing any storage code.
-- Never change the schema without incrementing the version number.
-- Write explicit migration logic for each version increment in `onupgradeneeded`.
-- For development: if the schema is still being finalized, provide a "nuke and restart" escape hatch in the `onupgradeneeded` handler (delete all stores on version mismatch during development). Document this as dev-only behavior.
-- Store a `schemaVersion` field on each trace record (application-level versioning, separate from IDB's DB version). Check this on hydration and skip/migrate records from older schema versions.
-
-**Warning signs:**
-
-- Console shows `DOMException: The database connection is closing` or similar on page reload after a code change
-- Hydration silently loads zero traces even though the IDB has data (field name mismatch causes a filter to exclude all records)
-- `onupgradeneeded` handler is missing or empty (version is hardcoded without upgrade logic)
-
-**Phase to address:** Phase 1 (IDB layer design) — define the schema and version strategy before writing any IDB code
-
----
-
-### Pitfall 10: IDB Is Unavailable in Firefox Private Browsing (Older Versions) — App Must Not Crash
-
-**What goes wrong:**
-
-In Firefox versions before 115, IndexedDB throws a hard error in Private Browsing mode: `"A mutation operation was attempted on a database that did not allow mutations"`. The `ai_debug` app is a developer tool used in normal browser sessions, so this is unlikely — but if a developer opens `/ai-debug` in a private window for any reason (e.g., to test with a clean session), the app crashes at the IDB initialization point and becomes completely unusable, even though the core functionality (live bus streaming) works fine without persistence.
-
-**Why it happens:**
-
-IDB initialization is done in `onWillStart`, which throws if IDB fails. An unhandled Promise rejection in `onWillStart` propagates as an OWL mount error and the entire component fails to render.
-
-**How to avoid:**
-
-Wrap IDB initialization in a try/catch. Treat persistence as optional — if IDB is unavailable, fall back to in-memory-only behavior (the v1.1 baseline):
-
-```javascript
-onWillStart(async () => {
-    try {
-        this.db = await openTraceDB();
-        const stored = await loadTracesFromDB(this.db);
-        // ... hydrate store ...
-    } catch (e) {
-        console.warn('[ai_debug] IndexedDB unavailable, persistence disabled:', e);
-        this.db = null; // persistence disabled flag
-    }
-});
-```
-
-All subsequent IDB calls (put, delete, clear) should check `if (!this.db) return;` before attempting to write. The app then degrades gracefully to ephemeral mode.
-
-**Warning signs:**
-
-- `openDB()` or IDB initialization has no try/catch
-- A failed IDB open causes an unhandled Promise rejection that prevents `onWillStart` from completing
-- The app shows a blank white page in Firefox private browsing instead of the expected UI
-
-**Phase to address:** Phase 1 (IDB layer design) — error handling is part of the initial wrapper, not an afterthought
+**Phase to address:** Phase 3 (rendering restructure) — decide flat-iterative vs. recursive-component before writing any template code
 
 ---
 
@@ -439,13 +335,13 @@ All subsequent IDB calls (put, delete, clear) should check `if (!this.db) return
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Write to IDB on every bus event (no batching) | Simple code, immediate persistence | Main thread jank during fast agentic loops; structured clone overhead per event | Never — batch writes are required |
-| Store the entire reactive Map as one IDB record | Simple serialization | Grows unbounded; structured clone on write blocks main thread for large traces | Never — per-trace records |
-| Skip `onWillStart` in favor of `onMounted` for hydration | Familiar hook | Flash of empty state on every page load | Never — `onWillStart` is the correct hook |
-| No IDB availability check / try-catch on open | Less boilerplate | Hard crash in private browsing or quota-exceeded scenarios | Never — always wrap IDB init |
-| Import restores data without Date reconstruction | Simpler import code | `getIterationDuration` returns `NaN` for imported traces | Never — Date reconstruction is required |
-| Skip import schema validation | Faster to ship | Runtime errors in render tree for malformed imports | Only in a prototype that will never see real files |
-| Use same DB version for schema changes | Avoids migration code | Old data silently breaks on field name changes | Never — always bump version on schema change |
+| Skip the pending-child buffer (assume events arrive in order) | Simpler bus handlers | Subagent traces silently dropped or misplaced under race conditions | Never — race is real, buffer is cheap |
+| Nest subagent traces inside parent trace objects | Mirrors visual hierarchy | IDB write complexity multiplies; structured clone on large parent; selection logic breaks | Never — flat model is correct |
+| Key agentColors by `trace_id` instead of `agent_name` | No collision risk | Each trace gets a unique color; color-coding loses its purpose | Never |
+| Recursive OWL component for tree rendering | Elegant code | Double-render cascades; t-key complexity; lifecycle ordering bugs | Never for this use case |
+| Store colors embedded in trace records | No new IDB key | Colors change when any trace is updated (incorrect coupling) | Never — colors are orthogonal to traces |
+| Single-pass hydration with inline parent validation | Simpler code | Occasionally fails when child record is processed before parent | Never — two-pass is the correct approach |
+| Skip bumping DB version when adding agent_colors to sentinel key in traces store | No migration needed | Acceptable — sentinel key approach does not require version bump | Acceptable only for the sentinel key approach |
 
 ---
 
@@ -453,14 +349,14 @@ All subsequent IDB calls (put, delete, clear) should check `if (!this.db) return
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| IDB + OWL reactive Map | Await IDB reads/writes inside bus event handlers | Bus handlers stay sync; a separate flush layer handles IDB writes |
-| IDB + `reactive()` Maps | Hydrate from IDB with plain Maps and assume reactivity | Explicitly wrap nested Maps in `reactive()` during deserialization |
-| IDB + Date objects | Use `JSON.stringify` to store, lose Date type | Use structured clone (native IDB) for storage; explicit `new Date()` for import |
-| IDB + `onMounted` | Load stored data in `onMounted` | Load stored data in `onWillStart` to block initial render until hydrated |
-| IDB transactions + non-IDB `await` | `await fetch(...)` or `await someHelper()` inside a transaction scope | Prepare all data before opening the transaction; only IDB requests inside it |
-| Export + large payloads | `JSON.stringify(allTraces)` synchronously | Stringify per-trace in a loop; measure actual payload size with real sessions |
-| Import + duplicate IDs | Silently overwrite existing traces | Check for ID collision and apply a defined policy (skip, overwrite, or error) |
-| Delete + IDB | Delete from reactive Map only | Always pair reactive Map delete with IDB record delete |
+| Bus events + subagent ordering | Assume `tool_call` always arrives before child `new_trace` | Buffer pending children; check buffer on every `tool_call` arrival |
+| OWL reactive Map + computed tree view | Store parent-child relationships in nested Map properties | Store in flat Map; compute tree from `parent_tool_call_id` pointers at render time |
+| IDB + subagent fields | Forget to add `parent_trace_id` to `serializeTrace()` | Audit `serializeTrace()` and `hydrateTrace()` together when adding any new field |
+| IDB + color store | Bump DB version without migration code | Use sentinel key in existing store, or bump version with proper `onupgradeneeded` |
+| IDB hydration + parent pointers | Single-pass with inline parent lookup (sometimes fails) | Two-pass: load all traces first, then validate/link parent pointers |
+| Export + nesting | Export traces without parent linkage fields | Always include `parent_trace_id` and `parent_tool_call_id` in serialization |
+| OWL template + recursive tree | Recursive component for subagent nesting | Flat iterative render with CSS indentation; depth computed from pointer walk |
+| Color assignment + identity | Key by `trace_id` (too granular) or `agent_id` (may not be in payload) | Key by `agent_name`; document the collision semantics |
 
 ---
 
@@ -468,28 +364,25 @@ All subsequent IDB calls (put, delete, clear) should check `if (!this.db) return
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Structured clone on large objects (main thread) | UI jank/freeze during or after bus events | Per-trace IDB records; batch writes; measure with real RAG sessions | When a single trace exceeds ~1MB of serialized data |
-| Unbatched IDB writes (one transaction per event) | Multiple `IDBRequest` items per second in DevTools; degraded animation | Coalesce writes — dirty-Set + debounced flush | During fast multi-iteration agentic loops |
-| Synchronous `JSON.stringify` of all traces on export | Tab freeze for >200ms during export | Per-trace stringify; Blob concatenation; soft payload size limit | Multi-trace export with RAG traces >2MB each |
-| Full trace hydration on load (no lazy load) | Slow page load when IDB has many large traces | Load metadata only on `onWillStart`; lazy-load full payloads on selection | When IDB accumulates >10 large RAG traces |
-| No IDB index on `trace_id` | Slow lookups when many records exist | Define `trace_id` as the keyPath (or create an index) | After accumulating >100 traces (not likely for this tool) |
+| Computing the full tree on every render (no memoization) | Render time scales with total number of traces × nesting depth | Use a precomputed `childIndex` map in state; update only on `new_trace` events | When >50 total traces (root + subagent) are in the store |
+| Pending-child buffer grows unboundedly | Memory increases monotonically during multi-agent session | Add a buffer size cap (100 entries) and TTL (clear entries older than 30s) | During sessions where `tool_call` events are dropped |
+| Walking all traces for `getSelectedTrace()` and `getRootTraceId()` during render | Getter called per render, scans all traces | Cache the root-trace lookup when selection changes, not per-render | When trace count exceeds ~200 |
+| Serializing nested subagent hierarchy in `serializeTrace()` | Structured clone includes child trace data duplicated in parent | Keep flat model; parent record only stores `parent_trace_id` pointer, not child data | When nesting depth exceeds 3 levels |
 
 ---
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **Persistence survives refresh:** Add a trace, reload the page, verify the trace appears in the sidebar (tests IDB write + hydration)
-- [ ] **Delete is durable:** Delete a trace, reload the page, verify the trace does NOT reappear (tests IDB delete, not just reactive Map delete)
-- [ ] **Clear all is durable:** Clear all traces, reload the page, sidebar is empty (tests IDB clearAll)
-- [ ] **Live events post-hydration work:** Load the page with stored traces, then trigger a new agentic loop; verify the new trace appears AND its iterations/tool calls append in real time (tests reactive Map reconstruction after hydration)
-- [ ] **Iteration durations are correct after hydration:** Reload with stored traces, select an iteration, verify duration displays correctly (tests Date roundtrip — not `NaN ms`)
-- [ ] **Iteration durations are correct after import:** Import a previously exported file, select an iteration, verify duration displays correctly (tests Date deserialization in import path)
-- [ ] **Import rejects malformed files:** Import a JSON file with missing `trace_id` field; verify a user-facing error appears rather than a crash
-- [ ] **Import rejects non-JSON files:** Import a `.txt` file; verify a user-facing error rather than a JSON parse exception propagating to the UI
-- [ ] **Export produces valid JSON:** Export a trace, open the file in a text editor, confirm it parses as valid JSON
-- [ ] **Export + import roundtrip:** Export a trace, import the exported file, verify the trace renders identically to the original
-- [ ] **IDB unavailable degrades gracefully:** Open the app in Firefox private browsing; the sidebar loads (possibly empty), bus events still appear, no blank page or uncaught exception
-- [ ] **No write jank during fast loop:** Run a multi-tool agentic loop while monitoring DevTools Performance; no main thread blocking frames >50ms attributable to IDB writes
+- [ ] **Race condition handled:** Trigger a subagent that emits `new_trace` before parent emits `tool_call`; verify the child trace appears nested correctly, not at root level
+- [ ] **Color persists across refresh:** Assign colors to 3 agents, reload the page, verify the same agents get the same colors
+- [ ] **Color not in trace record:** Inspect IDB trace records directly; confirm no `agent_color` field on trace objects (colors are stored separately)
+- [ ] **Subagent nesting survives IDB roundtrip:** Run a nested session, reload the page, verify subagent traces are still nested under the correct parent tool call
+- [ ] **Export preserves nesting:** Export a session with subagent traces, import into a fresh session, verify the hierarchy is intact
+- [ ] **`serializeTrace` includes linkage fields:** Inspect exported JSON; confirm `parent_trace_id` and `parent_tool_call_id` are present on subagent trace records
+- [ ] **Selection works inside subagent traces:** Select a tool call inside a 2-deep subagent trace; verify the detail panel shows correct data and the correct ancestor rows are highlighted
+- [ ] **Pending-child buffer is cleared:** After a session ends, verify `_pendingChildren.size === 0` (no orphaned pending children from dropped events)
+- [ ] **Flat rendering: no recursive components:** Inspect the component tree in OWL devtools; confirm only one level of `AiDebugApp` exists (no `TraceRow` inside `TraceRow`)
+- [ ] **Orphaned subagent traces render gracefully:** Manually delete a parent trace from IDB while leaving a child trace; reload and verify the child renders at root level without errors
 
 ---
 
@@ -497,16 +390,14 @@ All subsequent IDB calls (put, delete, clear) should check `if (!this.db) return
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| IDB writes in bus handlers (jank) | MEDIUM | Extract persistence to a separate flush module; audit all bus handlers to ensure they are synchronous |
-| Transaction auto-close bug | LOW | Switch to `idb` library wrapper; `tx.done` pattern eliminates this class |
-| Hydration in `onMounted` (flash) | LOW | Move hydration to `onWillStart`; add `hydrating` state and loading indicator |
-| Reactivity not reconstructed | MEDIUM | Add `hydrateTrace()` deserialization function that wraps nested Maps in `reactive()`; test with post-hydration live events |
-| Date strings instead of Date objects | LOW | Add explicit `new Date()` reconstruction in both hydration and import deserialization |
-| Large export blocks main thread | LOW | Wrap stringify in per-trace loop with Blob concatenation |
-| Import crashes on malformed data | LOW | Add shape validation before inserting imported data into store |
-| Delete not durable | LOW | Add IDB delete call paired with every reactive Map delete |
-| Schema mismatch on version bump | HIGH | Increment IDB version; write `onupgradeneeded` migration; or nuke and recreate (data loss) |
-| IDB crash in private browsing | LOW | Wrap IDB open in try/catch; set `this.db = null` on failure; guard all IDB calls |
+| Child arrives before parent (no buffer) | MEDIUM | Add `_pendingChildren` buffer to `setup()`; update `_onToolCall` to drain buffer after insert; retest ordering scenarios |
+| Subagent traces nested in parent objects | HIGH | Refactor data model to flat Map; update all selection getters, serialization, and rendering — major refactor if nesting is deep in the codebase |
+| Color stored in trace record | LOW | Extract color to separate `agentColors` state; update serialization to exclude color from trace records |
+| IDB version not bumped for new store | LOW | Bump `DB_VERSION`; add `idb._tables.add()` for new store; existing traces are preserved |
+| Export missing parent linkage fields | LOW | Add fields to `serializeTrace()`; existing IDB records need re-write (trigger via next `loop_end`) |
+| Single-pass hydration breaks | LOW | Add second pass after load loop; validate parent pointers with warnings for orphans |
+| Recursive component double-render | MEDIUM | Replace recursive component with flat iterative template loop; update all CSS indentation logic |
+| Color key too granular (per-trace) | LOW | Change key from `trace_id` to `agent_name`; wipe existing color assignments and re-assign |
 
 ---
 
@@ -514,32 +405,29 @@ All subsequent IDB calls (put, delete, clear) should check `if (!this.db) return
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Writes block UI (no batching) | Phase 1: IDB layer design | DevTools Performance shows no IDB-related jank during fast loops |
-| Transaction auto-close | Phase 1: IDB wrapper | Use `idb` library; zero `TransactionInactiveError` in console |
-| Hydration in wrong hook | Phase 2: Hydration | No flash of empty state on page load with stored traces |
-| Reactivity not reconstructed | Phase 2: Hydration | Live bus events update the sidebar for traces loaded from IDB |
-| Date type loss | Phase 2 + Phase 3 | Duration displays correctly for both hydrated and imported traces |
-| Large export blocking | Phase 3: Export | Export of 5+ traces completes in <100ms measured in DevTools |
-| Import without validation | Phase 3: Import | Malformed file produces user error, not a render exception |
-| Delete not durable | Phase 1: IDB layer design | Delete + reload shows empty sidebar |
-| Schema version mismatch | Phase 1: IDB layer design | `onupgradeneeded` handler present and versioned from the start |
-| IDB unavailable crash | Phase 1: IDB layer design | App loads in Firefox private browsing without blank page |
+| Child `new_trace` before parent `tool_call` | Phase 1: Bus event handlers | Manual test with artificial delay on parent `tool_call` send |
+| Subagent traces nested in parent objects | Phase 1: Data model design | Code review: `this.traces` is the only store; no `.children` property on traces |
+| `reactive()` without render observer | Phase 1: Data model design | OWL devtools shows renders firing when any child trace is added |
+| Selection logic breaks with flat+nested rendering | Phase 3: Template restructure | Select tool call inside level-2 subagent; ancestor highlight is correct |
+| Color assignment not reactive | Phase 2: Color assignment | New agent's first trace row shows color immediately without a second event |
+| IDB version not bumped | Phase 2: IDB persistence for colors | No `NotFoundError` in console; colors survive reload |
+| Two-pass hydration for parent pointers | Phase 2: IDB hydration | Reload after subagent session; nesting is intact |
+| Export missing linkage fields | Phase 2: Serialization + Phase 4: Export | Exported JSON contains `parent_trace_id`; import restores nesting |
+| Color collision semantics undocumented | Phase 2: Color assignment | Code comment explains key choice; behavior is intentional |
+| Recursive component double-render | Phase 3: Template restructure | OWL devtools shows single render cycle per bus event; no flicker |
 
 ---
 
 ## Sources
 
-- Direct source inspection: `/Users/joseph/clones/odoo/custom/ai_debug/static/src/app/app.js` — current bus event handlers, `useState(new Map())` reactive store, `onMounted` bus subscription, existing `clearAll()` method
-- OWL lifecycle documentation: `onWillStart` is the correct async-before-render hook; `onMounted` runs post-render; modifying state in `onMounted` causes a second render — [github.com/odoo/owl/blob/master/doc/reference/component.md](https://github.com/odoo/owl/blob/master/doc/reference/component.md)
-- IndexedDB transaction auto-commit: transactions auto-close when no pending IDB requests exist after microtasks flush; no non-IDB `await` inside a transaction scope — [MDN IDBTransaction](https://developer.mozilla.org/en-US/docs/Web/API/IDBTransaction), [javascript.info/indexeddb](https://javascript.info/indexeddb)
-- IndexedDB structured clone blocks main thread: "the structured cloning process happens on the main thread. The larger the object, the longer the blocking time will be" — [web.dev/articles/indexeddb-best-practices-app-state](https://web.dev/articles/indexeddb-best-practices-app-state)
-- Write batching performance: 1k records one-at-a-time ~2s vs. batched ~80ms — [nolanlawson.com/2021/08/22/speeding-up-indexeddb-reads-and-writes](https://nolanlawson.com/2021/08/22/speeding-up-indexeddb-reads-and-writes/)
-- Safari transaction auto-close bug: more aggressive than Chrome; `Promise.resolve().then()` can close transaction prematurely — [github.com/pesterhazy/4de96193af89a6dd5ce682ce2adff49a](https://gist.github.com/pesterhazy/4de96193af89a6dd5ce682ce2adff49a)
-- Firefox private browsing IDB error: throws on open in older Firefox private mode; resolved in Firefox 115 — [bugzilla.mozilla.org/show_bug.cgi?id=781982](https://bugzilla.mozilla.org/show_bug.cgi?id=781982)
-- IDB export with large data: streaming Blob construction avoids holding entire DB in RAM — [dexie.org/docs/ExportImport/dexie-export-import](https://dexie.org/docs/ExportImport/dexie-export-import)
-- IDB schema migration: changing keyPath requires delete + recreate (data destructive); version must be incremented — [MDN Using IndexedDB](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB)
-- PROJECT.md: "Payload size for RAG-enabled sessions unknown (needs empirical baseline)" — known tech debt, informs export payload risk
+- Direct codebase inspection: `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/app.js` — current flat `this.traces` Map, `hydrateTrace()`, `serializeTrace()` in `db.js`, bus event handler structure
+- OWL reactive model: `reactive()` without callback uses `NO_CALLBACK` sentinel — mutations tracked but no observer notification; `useState()` wraps the Map so OWL's render function observes mutations — confirmed from PROJECT.md "Key Decisions" table and OWL source
+- IDB `onupgradeneeded` semantics: fires only on version change, not on `_tables.add()` — confirmed from v1.3 PITFALLS.md Pitfall 9 and MDN IndexedDB documentation
+- Bus event ordering: separate `registry.cursor()` per event means NOTIFY is committed independently per event; no ordering guarantee between two separate cursors — confirmed from `ai_session.py` `_ai_debug_bus_send()` implementation
+- OpenTelemetry span model: flat span storage with parent pointer is the standard distributed tracing pattern — used as the reference model for the flat `parent_trace_id` approach
+- PROJECT.md v1.4 requirements: "subagent traces indent under the parent tool call, with arbitrary nesting depth"; "per-agent color assignment on first appearance, persisted to IDB" — requirements as stated
+- v1.3 PITFALLS.md (superseded): IDB write patterns, `hydrateTrace()` reactive reconstruction, `onWillStart` vs `onMounted` — all confirmed resolved in the current codebase
 
 ---
-*Pitfalls research for: Odoo AI Debugger v1.3 — IndexedDB persistence and export/import*
-*Researched: 2026-02-22*
+*Pitfalls research for: Odoo AI Debugger v1.4 — Subagent nesting, recursive trace linking, color-coding*
+*Researched: 2026-02-23*
