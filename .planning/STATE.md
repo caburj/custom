@@ -36,6 +36,11 @@ Key v1.4 decisions locked in by research:
 - `sidebarNodes` computed getter with depth-first recursive JS helper — no recursive OWL components (OWL doesn't support template recursion)
 - `_pendingChildren` buffer in JS `_onNewTrace` — prevents child traces silently landing at root when bus events arrive out of order
 
+Phase 13 Plan 01 decisions (2026-02-23):
+- new_trace includes session_id (ORM int), parent_trace_id (UUID hex or null), parent_tool_call_id (call_id or null) — no parent_session_id (CONTEXT.md supersedes REQUIREMENTS.md)
+- _tc_id_map pre-generated before super() call to guarantee started/completed events share stable UUID
+- ai.agent override guarded by _debug_ctx so non-instrumented sessions pay zero overhead
+
 Phase 13 Plan 02 decisions (2026-02-23):
 - Buffer keyed by parent_tool_call_id (LLM call_id) so _onToolCallStarted can match using payload.call_id
 - clearTimeout must run before delete _pendingChildren to prevent double-fire on re-attachment
@@ -66,5 +71,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Phase 13 Plan 02 complete — Phase 14 ready to execute
+Stopped at: Phase 13 Plan 01 complete — Phase 13 fully complete, Phase 14 ready to execute
 Resume file: None
