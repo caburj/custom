@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 ## Current Position
 
 Phase: 13 of 15 (Python Instrumentation and Bus Event Handling)
-Plan: —
-Status: Ready to plan
-Last activity: 2026-02-23 — v1.4 roadmap created (Phases 13-15)
+Plan: 02 complete (of 2 in Phase 13)
+Status: Phase 13 complete — ready for Phase 14
+Last activity: 2026-02-23 — Phase 13 Plan 02 complete (JS split event handlers + pending-child buffer)
 
-Progress: [░░░░░░░░░░] 0% of v1.4
+Progress: [██░░░░░░░░] 20% of v1.4
 
 ## Milestones Shipped
 
@@ -35,6 +35,13 @@ Key v1.4 decisions locked in by research:
 - Sentinel key `__agent_colors__` in existing IDB `traces` store — avoids schema version bump that would wipe all traces
 - `sidebarNodes` computed getter with depth-first recursive JS helper — no recursive OWL components (OWL doesn't support template recursion)
 - `_pendingChildren` buffer in JS `_onNewTrace` — prevents child traces silently landing at root when bus events arrive out of order
+
+Phase 13 Plan 02 decisions (2026-02-23):
+- Buffer keyed by parent_tool_call_id (LLM call_id) so _onToolCallStarted can match using payload.call_id
+- clearTimeout must run before delete _pendingChildren to prevent double-fire on re-attachment
+- _pendingChildren is plain JS object (not reactive) — internal bookkeeping not rendered
+- Orphan traces promoted after 30s retain parent fields for potential future silent re-attachment
+- status field ('running'/'completed') on tool calls stored now for Phase 15 visual indicators
 
 ### Pending Todos
 
@@ -59,5 +66,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: v1.4 roadmap created — Phase 13 ready to plan
+Stopped at: Phase 13 Plan 02 complete — Phase 14 ready to execute
 Resume file: None

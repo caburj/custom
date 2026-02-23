@@ -58,7 +58,7 @@ Full details: `.planning/milestones/v1.3-ROADMAP.md`
 
 **Milestone Goal:** Visualize subagent hierarchies in the debugger — nest subagent traces under the tool call that spawned them, flatten the within-trace tree, and color-code agents.
 
-- [ ] **Phase 13: Python Instrumentation and Bus Event Handling** - Backend emits parent linkage in bus events; frontend buffers out-of-order child traces
+- [x] **Phase 13: Python Instrumentation and Bus Event Handling** - Backend emits parent linkage in bus events; frontend buffers out-of-order child traces (completed 2026-02-23)
 - [ ] **Phase 14: Data Model, IDB Schema, and Color Assignment** - Flat trace store with parent pointers; color assignment persisted to IDB
 - [ ] **Phase 15: Sidebar Rendering and Color Display** - Computed sidebarNodes tree; colored left borders, agent legend, and color chip in detail panel
 
@@ -73,7 +73,7 @@ Full details: `.planning/milestones/v1.3-ROADMAP.md`
   2. When a root session starts, the `new_trace` bus event payload includes `session_id` and `parent_session_id: null`
   3. A subagent `new_trace` event that arrives in the browser before its parent tool_call event is buffered and correctly attached to the parent trace once the parent tool_call event arrives — no trace is silently dropped or misplaced at root level
   4. Existing non-subagent sessions continue emitting events with no behavioral change
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 Plans:
 - [ ] 13-01-PLAN.md -- Python instrumentation: parent linkage in new_trace + tool call event splitting
 - [ ] 13-02-PLAN.md -- JS event handling: tool_call_started/completed migration + pending-child buffer
@@ -120,6 +120,6 @@ Phases execute in numeric order: 13 → 14 → 15
 | 10. IDB Layer and Write-Through | v1.3 | 1/1 | Complete | 2026-02-22 |
 | 11. Hydration and Trace Management | v1.3 | 2/2 | Complete | 2026-02-22 |
 | 12. Export and Import | v1.3 | 2/2 | Complete | 2026-02-22 |
-| 13. Python Instrumentation and Bus Event Handling | v1.4 | 0/2 | Planned | - |
+| 13. Python Instrumentation and Bus Event Handling | 2/2 | Complete   | 2026-02-23 | - |
 | 14. Data Model, IDB Schema, and Color Assignment | v1.4 | 0/? | Not started | - |
 | 15. Sidebar Rendering and Color Display | v1.4 | 0/? | Not started | - |

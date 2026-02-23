@@ -17,7 +17,7 @@
 - [ ] **TREE-02**: Tree supports arbitrary recursive nesting depth (subagents of subagents render correctly)
 - [ ] **TREE-03**: Within a single trace, iterations and tool calls render at the same indentation level (flat within trace)
 - [ ] **TREE-04**: Collapsing a parent trace hides all descendant traces, iterations, and tool calls
-- [ ] **TREE-05**: Frontend handles out-of-order bus events via pending-child buffer (child trace arriving before parent tool call is buffered and attached when parent arrives)
+- [x] **TREE-05**: Frontend handles out-of-order bus events via pending-child buffer (child trace arriving before parent tool call is buffered and attached when parent arrives)
 
 ### Color Coding
 
@@ -57,7 +57,7 @@
 | INST-01 | Phase 13 | Pending |
 | INST-02 | Phase 13 | Pending |
 | INST-03 | Phase 13 | Pending |
-| TREE-05 | Phase 13 | Pending |
+| TREE-05 | Phase 13 | Complete |
 | COLR-01 | Phase 14 | Pending |
 | COLR-02 | Phase 14 | Pending |
 | DATA-01 | Phase 14 | Pending |
