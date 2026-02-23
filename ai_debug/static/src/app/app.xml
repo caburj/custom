@@ -116,7 +116,6 @@
                                   t-att-class="{'expanded': node.iter.expanded}"
                                   t-on-click.stop="() => this.toggleExpand(node.trace.trace_id, node.id)">&#x203A;</span>
                             <span t-else="" class="ai-tree-chevron-placeholder"/>
-                            <span class="ai-tree-iter-icon">&#x21BA;</span>
                             <span class="ai-tree-label"
                                   t-on-click="() => this.selectItem(node.id, 'iteration')">
                                 Iteration <t t-esc="node.iter.iteration_index"/>
@@ -145,7 +144,6 @@
                              }"
                              t-att-data-node-id="node.id">
                             <span class="ai-tree-chevron-placeholder"/>
-                            <span class="ai-tree-tc-icon">&#x2192;</span>
                             <span class="ai-tree-label"
                                   t-on-click="() => this.selectItem(node.id, 'tool_call')">
                                 <t t-esc="node.tc.tool_name"/>
