@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 ## Current Position
 
 Phase: 15 of 15 (Sidebar Rendering)
-Plan: 01 in progress — paused at Task 3 (human-verify checkpoint)
-Status: Tasks 1-2 complete, awaiting visual verification before Task 3 approval
-Last activity: 2026-02-23 — Phase 15 Plan 01 Tasks 1-2 complete (sidebarNodes getter + flat template + SCSS guide lines)
+Plan: 01 complete
+Status: All tasks complete — visual verification approved, post-checkpoint fixes committed
+Last activity: 2026-02-23 — Phase 15 Plan 01 complete (sidebarNodes getter + flat template + SCSS guide lines + db.js parent linkage fix)
 
-Progress: [████████░░] 80% of v1.4
+Progress: [█████████░] 90% of v1.4
 
 ## Milestones Shipped
 
@@ -55,6 +55,8 @@ Phase 15 Plan 01 decisions (2026-02-23):
 - Checkboxes only on depth===0 trace rows — subagent traces excluded from bulk select/delete
 - allChecked and toggleSelectAll use rootTracesCount to exclude subagent traces from denominator
 - COLR-03/04/05 deferred — no color work in Phase 15 per CONTEXT.md
+- Iteration rows default expanded=true — subagent traces visible immediately without expand clicks
+- serializeTrace() must persist parent_trace_id, parent_tool_call_id, session_id — omitting them silently drops parent linkage on page refresh (fixed in a7ac163)
 
 ### Pending Todos
 
@@ -79,5 +81,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Phase 15 Plan 01 — paused at Task 3 checkpoint:human-verify (Tasks 1-2 committed)
+Stopped at: Completed Phase 15 Plan 01 (15-01-PLAN.md) — all tasks done, SUMMARY.md created
 Resume file: None

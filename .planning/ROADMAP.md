@@ -101,7 +101,7 @@ Plans:
   5. A compact color legend showing agent names and color swatches is visible in the sidebar header; the detail panel header shows a colored chip identifying which agent owns the selected node
 **Plans:** 1/1 plans complete
 Plans:
-- [ ] 15-01-PLAN.md -- sidebarNodes getter, template rewrite to single t-foreach, SCSS guide lines, flat within-trace layout (COLR-03/04/05 deferred to post-Phase 14)
+- [x] 15-01-PLAN.md -- sidebarNodes getter, template rewrite to single t-foreach, SCSS guide lines, flat within-trace layout (COLR-03/04/05 deferred to post-Phase 14)
 
 ## Progress
 
