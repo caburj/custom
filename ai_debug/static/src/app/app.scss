@@ -243,18 +243,25 @@
     padding-bottom: 4px;
 }
 
-// VS Code-style vertical guide lines for nested rows (depth > 0)
-.ai-tree-row.ai-tree-has-guide {
-    &::before {
-        content: '';
-        position: absolute;
-        left: calc(var(--ai-depth) * 20px - 6px);
-        top: 0;
-        bottom: 0;
-        width: 1px;
-        background-color: $o-gray-300;
-        opacity: 0.5;
-        pointer-events: none;
+// 5-level depth color palette for nested subagent traces.
+// Each depth gets a colored left border; depth > 0 also gets a subtle background
+// tint.  Standalone selectors (not nested in .ai-tree-row) keep specificity at
+// 0,1,0 so hover / selected / ancestor states naturally override the background.
+$ai-depth-colors: (
+    0: #3b82f6,  // blue  — root trace
+    1: #14b8a6,  // teal  — first subagent
+    2: #a855f7,  // purple
+    3: #f59e0b,  // amber
+    4: #f43f5e,  // rose  — deepest rendered level
+);
+
+@each $depth, $color in $ai-depth-colors {
+    .ai-depth-#{$depth} {
+        border-left: 3px solid $color;
+
+        @if $depth > 0 {
+            background-color: rgba($color, 0.04);
+        }
     }
 }
 
@@ -413,6 +420,13 @@
     flex-shrink: 0;
     cursor: pointer;
     margin: 0;
+}
+
+// Invisible spacer matching checkbox width — aligns nested traces with root traces
+.ai-tree-row-check-spacer {
+    display: inline-block;
+    width: 13px;
+    flex-shrink: 0;
 }
 
 // Header select-all checkbox
