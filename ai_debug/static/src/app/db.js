@@ -123,6 +123,29 @@ export async function deleteTrace(traceId) {
 }
 
 /**
+ * Delete multiple trace records from IndexedDB in a single transaction.
+ * More efficient than calling deleteTrace() N times (each opens its own transaction).
+ * Used by cascade delete to remove a root trace and all its descendants atomically.
+ */
+export async function deleteTraces(traceIds) {
+    if (!traceIds.length) return;
+    return idb.execute((db) => {
+        if (!db) return;
+        if (!db.objectStoreNames.contains(STORE)) return;
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE, "readwrite");
+            const store = tx.objectStore(STORE);
+            for (const id of traceIds) {
+                store.delete(id);
+            }
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+            tx.commit();
+        });
+    });
+}
+
+/**
  * Load all stored traces from IndexedDB.
  * Returns an array of plain serialized trace records.
  * Returns [] if IDB is unavailable or store is empty.

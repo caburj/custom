@@ -5,7 +5,7 @@ import { MainComponentsContainer } from "@web/core/main_components_container";
 import { LoopDetail } from "./detail/loop_detail";
 import { IterationDetail } from "./detail/iter_detail";
 import { ToolCallDetail } from "./detail/tc_detail";
-import { probeIDB, writeTrace, deleteTrace, loadAllTraces, serializeTrace } from "./db";
+import { probeIDB, writeTrace, deleteTraces, loadAllTraces, serializeTrace } from "./db";
 import { ImportPreviewDialog } from "./import_dialog";
 import { TextPopupDialog } from "./detail/text_popup";
 
@@ -556,6 +556,27 @@ export class AiDebugApp extends Component {
         }
     }
 
+    /**
+     * Recursively collect all descendant trace IDs of a given trace.
+     * A descendant is any trace whose parent_trace_id matches traceId,
+     * plus recursively their descendants (any depth).
+     *
+     * Used by deleteCheckedTraces to cascade deletion to all child subagent traces.
+     *
+     * @param {string} traceId - the root trace ID to collect descendants for
+     * @returns {string[]} array of descendant trace IDs (not including traceId itself)
+     */
+    _collectDescendantIds(traceId) {
+        const descendants = [];
+        for (const [id, trace] of this.traces) {
+            if (trace.parent_trace_id === traceId) {
+                descendants.push(id);
+                descendants.push(...this._collectDescendantIds(id));
+            }
+        }
+        return descendants;
+    }
+
     // ----------------------------------------------------------------
     // Iteration duration helpers
     // ----------------------------------------------------------------
@@ -666,23 +687,28 @@ export class AiDebugApp extends Component {
     deleteCheckedTraces() {
         const ids = [...this.state.checkedTraceIds];
         if (ids.length === 0) return;
+        // Collect all descendant trace IDs for cascade delete
+        const allIds = [...ids];
+        for (const id of ids) {
+            allIds.push(...this._collectDescendantIds(id));
+        }
+        // Deduplicate (a descendant could also be checked, or appear via multiple paths)
+        const uniqueIds = [...new Set(allIds)];
         // Clear checkbox selection first
         this.state.checkedTraceIds.clear();
-        // Clear detail panel selection if the viewed trace is being deleted
-        if (ids.includes(this.state.selectedId)) {
+        // Clear detail panel selection if the viewed item belongs to a deleted trace
+        if (uniqueIds.includes(this.state.selectedId) || uniqueIds.includes(this.selectedTraceId)) {
             this.state.selectedId = null;
             this.state.selectedType = null;
         }
         // Remove from reactive Map (triggers OWL re-render immediately)
-        for (const id of ids) {
+        for (const id of uniqueIds) {
             this.traces.delete(id);
         }
-        // Delete from IDB (fire-and-forget per item)
-        for (const id of ids) {
-            deleteTrace(id).catch((err) => {
-                console.warn("[ai_debug] IDB delete failed for", id, err);
-            });
-        }
+        // Delete from IDB in a single transaction (fire-and-forget)
+        deleteTraces(uniqueIds).catch((err) => {
+            console.warn("[ai_debug] IDB cascade delete failed:", err);
+        });
     }
 
     exportSelected() {
