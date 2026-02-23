@@ -11,7 +11,7 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 
 Phase: All phases complete through v1.3
 Status: v1.3 Local Persistence shipped
-Last activity: 2026-02-22 - Completed quick task 25: Implement Confirmation Info tab in AI Debugger
+Last activity: 2026-02-23 - Completed quick task 26: Fix IndexedDB NotFoundError after external DB deletion
 
 Progress: [██████████] 100% (v1.3)
 
@@ -47,9 +47,10 @@ None — milestone complete.
 | 23 | Refactor ToolCallDetail to single 4-tab Notebook with StateDiff guard | 2026-02-22 | af74663 | Verified | [23-refactor-tool-call-detail-to-use-tabs-ar](./quick/23-refactor-tool-call-detail-to-use-tabs-ar/) |
 | 24 | Remove StateDiff tabs and state capture logic | 2026-02-22 | b5b45d3 | Verified | [24-remove-state-diff-tabs-and-associated-lo](./quick/24-remove-state-diff-tabs-and-associated-lo/) |
 | 25 | Implement Confirmation Info tab in AI Debugger — backend detects tool_confirmation_request, frontend renders tab conditionally | 2026-02-22 | 99574e1 | Verified | [25-implement-confirmation-info-tab-in-ai-de](./quick/25-implement-confirmation-info-tab-in-ai-de/) |
+| 26 | Fix IndexedDB NotFoundError after external DB deletion — eager store registration + objectStoreNames guards | 2026-02-23 | 9774a91 | | [26-fix-indexeddb-error-when-database-is-del](./quick/26-fix-indexeddb-error-when-database-is-del/) |
 
 ## Session Continuity
 
-Last session: 2026-02-22
-Stopped at: Completed quick task 25 — implement Confirmation Info tab in AI Debugger
+Last session: 2026-02-23
+Stopped at: Completed quick task 26 — fix IndexedDB NotFoundError after external DB deletion
 Resume file: None
