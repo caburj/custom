@@ -83,39 +83,58 @@ export class AiDebugApp extends Component {
         this._needsScroll = false;
         this._flashId = null;
         this._lastArrivedId = null;
+        // Pending-child buffer for out-of-order subagent traces (TREE-05).
+        // Keyed by parent_tool_call_id (= LLM call_id). Each entry holds
+        // the child trace payload and a 30s promotion timer.
+        this._pendingChildren = {};
 
         // ----------------------------------------------------------------
         // Bus event handlers — NEVER touch this.state.selectedId (SIDE-05)
         // ----------------------------------------------------------------
 
         this._onNewTrace = (payload) => {
-            const iterations = reactive(new Map());
-            this.traces.set(payload.trace_id, {
-                trace_id: payload.trace_id,
-                agent_name: payload.agent_name || "Unknown Agent",
-                model_name: payload.model_name || "",
-                user_query: payload.user_query || "",
-                status: "running",
-                created_ts: Date.now(),
-                started_at: new Date(),
-                ended_at: null,
-                duration_ms: null,
-                expanded: true,   // new loops start expanded (locked decision)
-                iterations,
-                // Phase 7: full payload for detail panel
-                instructions: payload.instructions || "",
-                tools: payload.tools || [],
-                state_snapshot: payload.state_snapshot || {},
-            });
-            this._lastArrivedId = payload.trace_id;
-            this._flashId = payload.trace_id;
-            this._needsScroll = true;
-            // Auto-select first trace when nothing is selected (SESS-03 + CONTEXT.md)
-            if (this.state.selectedId === null) {
-                this.state.selectedId = payload.trace_id;
-                this.state.selectedType = "trace";
+            const { parent_trace_id, parent_tool_call_id } = payload;
+
+            // --- Child trace: check for parent before placing ---
+            if (parent_trace_id && parent_tool_call_id) {
+                const parentTrace = this.traces.get(parent_trace_id);
+                if (parentTrace) {
+                    // Parent trace exists — check if the tool call node exists
+                    let parentTcFound = false;
+                    for (const iter of parentTrace.iterations.values()) {
+                        if (iter.toolCalls.has(parent_tool_call_id)) {
+                            parentTcFound = true;
+                            break;
+                        }
+                        // Also check by call_id field (tool_call_started uses our UUID as key,
+                        // but parent_tool_call_id is the LLM call_id stored in the call_id field)
+                        for (const tc of iter.toolCalls.values()) {
+                            if (tc.call_id === parent_tool_call_id) {
+                                parentTcFound = true;
+                                break;
+                            }
+                        }
+                        if (parentTcFound) break;
+                    }
+                    if (parentTcFound) {
+                        // Parent tool call exists — place the child trace immediately
+                        this._placeTrace(payload);
+                        return;
+                    }
+                }
+
+                // Parent not found — buffer with 30s timeout
+                const timer = setTimeout(() => {
+                    // Promote orphan to root — place as a root trace but retain parent references
+                    this._placeTrace(payload);
+                    delete this._pendingChildren[parent_tool_call_id];
+                }, 30000);
+                this._pendingChildren[parent_tool_call_id] = { payload, timer };
+                return;
             }
-            // Auto-select above only fires when selectedId is null — SIDE-05 preserved
+
+            // --- Root trace: place directly ---
+            this._placeTrace(payload);
         };
 
         this._onIteration = (payload) => {
@@ -165,6 +184,14 @@ export class AiDebugApp extends Component {
                 confirmation_message: null,
                 status: "running",  // Visual indicator that tool is in progress
             });
+            // Check if any buffered child trace is waiting for this tool call
+            const buffered = this._pendingChildren[payload.call_id];
+            if (buffered) {
+                clearTimeout(buffered.timer);
+                delete this._pendingChildren[payload.call_id];
+                // Place the child trace — parent tool call now exists
+                this._placeTrace(buffered.payload);
+            }
             // NEVER touch this.state.selectedId here — SIDE-05
         };
 
@@ -274,6 +301,11 @@ export class AiDebugApp extends Component {
             this.busService.unsubscribe("tool_call_completed", this._onToolCallCompleted);
             this.busService.unsubscribe("loop_end", this._onLoopEnd);
             this.busService.deleteChannel("ai_debug");
+            // Clear any pending buffer timers to avoid orphan callbacks
+            for (const key of Object.keys(this._pendingChildren)) {
+                clearTimeout(this._pendingChildren[key].timer);
+            }
+            this._pendingChildren = {};
         });
 
         // ----------------------------------------------------------------
@@ -304,6 +336,42 @@ export class AiDebugApp extends Component {
                 this._flashId = null;
             }
         });
+    }
+
+    // ----------------------------------------------------------------
+    // Trace placement helper — unconditionally creates the trace entry
+    // Used by both the root path and the pending-child re-attachment path
+    // ----------------------------------------------------------------
+
+    _placeTrace(payload) {
+        const iterations = reactive(new Map());
+        this.traces.set(payload.trace_id, {
+            trace_id: payload.trace_id,
+            agent_name: payload.agent_name || "Unknown Agent",
+            model_name: payload.model_name || "",
+            user_query: payload.user_query || "",
+            status: "running",
+            created_ts: Date.now(),
+            started_at: new Date(),
+            ended_at: null,
+            duration_ms: null,
+            expanded: true,
+            iterations,
+            instructions: payload.instructions || "",
+            tools: payload.tools || [],
+            state_snapshot: payload.state_snapshot || {},
+            // Phase 13: parent linkage fields (null for root traces)
+            parent_trace_id: payload.parent_trace_id || null,
+            parent_tool_call_id: payload.parent_tool_call_id || null,
+            session_id: payload.session_id || null,
+        });
+        this._lastArrivedId = payload.trace_id;
+        this._flashId = payload.trace_id;
+        this._needsScroll = true;
+        if (this.state.selectedId === null) {
+            this.state.selectedId = payload.trace_id;
+            this.state.selectedType = "trace";
+        }
     }
 
     // ----------------------------------------------------------------
