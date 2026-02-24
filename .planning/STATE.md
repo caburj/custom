@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-24)
 Phase: Not started (defining requirements)
 Plan: —
 Status: Defining requirements
-Last activity: 2026-02-24 - Completed quick task 30: Fix indentation mode visual hierarchy (iter/tc row nesting)
+Last activity: 2026-02-24 - Completed quick task 31: Fix nested trace indentation under tool calls in indentation mode
 
 ## Milestones Shipped
 
@@ -51,7 +51,7 @@ None.
 | 28 | Fix trace title click expanding trace in sidebar | 2026-02-24 | 5bec7dc | | [28-fix-trace-title-click-expanding-trace-in](./quick/28-fix-trace-title-click-expanding-trace-in/) |
 | 29 | Add toolbar toggle for SVG guide lines vs indentation mode | 2026-02-24 | af138b6 | Verified | [29-add-toolbar-toggle-for-svg-guide-lines-v](./quick/29-add-toolbar-toggle-for-svg-guide-lines-v/) |
 | 30 | Fix indentation mode visual hierarchy (iter/tc row nesting) | 2026-02-24 | 8284199 | | [30-in-the-last-quick-task-toggle-between-ne](./quick/30-in-the-last-quick-task-toggle-between-ne/) |
-| 31 | Fix nested trace indentation under tool-call rows | 2026-02-24 | a1681f4 | | [31-fix-nested-trace-indentation-under-tool-](./quick/31-fix-nested-trace-indentation-under-tool-/) |
+| 31 | Fix nested trace indentation under tool calls in indentation mode | 2026-02-24 | 5169a94 | Verified | [31-fix-nested-trace-indentation-under-tool-](./quick/31-fix-nested-trace-indentation-under-tool-/) |
 
 ## Session Continuity
 
