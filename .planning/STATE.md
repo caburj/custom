@@ -5,26 +5,27 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.5 Live Metrics — Phase 16 Plan 01 complete, ready for Phase 17
+**Current focus:** v1.5 Live Metrics — Phase 17 Plan 01 complete, ready for Phase 17 Plan 02 or Phase 18
 
 ## Current Position
 
-Phase: 16 of 18 (Backend Token Extraction and Per-Iteration Timing)
+Phase: 17 of 18 (Frontend Reactive Store and IDB Persistence)
 Plan: 01 complete
 Status: In progress
-Last activity: 2026-02-24 — Phase 16 Plan 01 complete (token extraction + per-iteration timing)
+Last activity: 2026-02-24 — Phase 17 Plan 01 complete (reactive store token/timing wiring + IDB round-trip)
 
-Progress: [████████████████░░░] 83% (15/18 phases complete, Phase 16 in progress)
+Progress: [████████████████░░░] 88% (16/18 phases complete, Phase 17 in progress)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 26
-- v1.0-v1.4 across 15 phases, v1.5 Phase 16 Plan 01 complete
+- Total plans completed: 27
+- v1.0-v1.4 across 15 phases, v1.5 Phase 16 Plan 01 + Phase 17 Plan 01 complete
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
 | 16    | 01   | 3 min    | 2     | 3     |
+| 17    | 01   | 1 min    | 2     | 2     |
 
 *Updated after each plan completion*
 
@@ -42,6 +43,9 @@ Recent decisions affecting current work:
 - Token total uses raw provider value (not computed from input + output) — matches locked decision
 - Tokens field absent (not null) on errored iterations — absence signals failure
 - pop_last_completion_data() called as first action when iteration item arrives to prevent stale reads
+- normalizeTokens maps backend 'cached' field to store 'cache_read' (locked schema decision); cache_write always 0 — no backend field exists yet
+- hydrateTrace uses ?? operator (not normalizeTokens) for zero-defaulting pre-Phase 17 records — stored records already have cache_read key
+- getTraceTotals reads through reactive proxy chain for OWL re-render on token changes (SIDE-02 precondition satisfied)
 
 ### Pending Todos
 
@@ -72,5 +76,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Phase 16 Plan 01 complete — token extraction and per-iteration timing backend done
+Stopped at: Phase 17 Plan 01 complete — OWL reactive store token/timing wiring + IDB round-trip persistence done
 Resume file: None

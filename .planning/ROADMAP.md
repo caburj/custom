@@ -71,7 +71,7 @@ Full details: `.planning/milestones/v1.4-ROADMAP.md`
 **Milestone Goal:** Add real-time animated time and token counters to trace rows and detail panels, with per-iteration breakdown and normalized cross-provider token schema.
 
 - [x] **Phase 16: Backend Token Extraction and Per-Iteration Timing** — Instrument the provider layer to capture normalized token usage and per-iteration duration into bus events (completed 2026-02-24)
-- [ ] **Phase 17: Frontend Reactive Store and IDB Persistence** — Wire new bus event fields into the reactive trace store with computed total getters and symmetric IDB serialization
+- [x] **Phase 17: Frontend Reactive Store and IDB Persistence** — Wire new bus event fields into the reactive trace store with computed total getters and symmetric IDB serialization (completed 2026-02-24)
 - [ ] **Phase 18: Display Components and Animation** — Render compact sidebar metrics, IterationDetail chips, LoopDetail Metrics tab, and live elapsed ticker
 
 ## Phase Details
@@ -99,7 +99,7 @@ Plans:
   2. After a page refresh, hydrated iterations still have `tokens` and `duration_ms` (IDB round-trip preserved the data)
   3. The sidebar token/time counters increment visually as each new iteration event arrives during a live run
   4. An errored iteration that returns no tokens shows a safe display value (no NaN or crash)
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 Plans:
 - [ ] 17-01-PLAN.md -- Reactive store token/timing fields, normalizeTokens, getTraceTotals, IDB round-trip
 
@@ -134,5 +134,5 @@ Plans:
 | 14. Sidebar Tree Nesting | v1.4 | 1/1 | Complete | 2026-02-23 |
 | 15. Data Integrity Fixes | v1.4 | 1/1 | Complete | 2026-02-24 |
 | 16. Backend Token Extraction and Per-Iteration Timing | 1/1 | Complete    | 2026-02-24 | - |
-| 17. Frontend Reactive Store and IDB Persistence | v1.5 | 0/1 | Not started | - |
+| 17. Frontend Reactive Store and IDB Persistence | 1/1 | Complete   | 2026-02-24 | - |
 | 18. Display Components and Animation | v1.5 | 0/? | Not started | - |
