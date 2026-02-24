@@ -2,41 +2,35 @@
 
 ## What This Is
 
-A custom Odoo module that instruments the enterprise `ai` module's agentic loop to provide live visibility into every LLM call, tool execution, state change, and loop iteration. Delivered as a standalone OWL app at `/ai-debug` that respects the user's Odoo light/dark theme preference. Traces persist locally via IndexedDB across page refresh, with checkbox-based bulk delete, JSON export/import, and automatic ephemeral mode fallback when IDB is unavailable.
+A custom Odoo module that instruments the enterprise `ai` module's agentic loop to provide live visibility into every LLM call, tool execution, state change, and loop iteration — including nested subagent hierarchies. Delivered as a standalone OWL app at `/ai-debug` that respects the user's Odoo light/dark theme preference. Traces persist locally via IndexedDB across page refresh, with checkbox-based bulk delete, JSON export/import (with subagent cascade), and automatic ephemeral mode fallback when IDB is unavailable. Subagent traces nest under the tool call that spawned them with arbitrary depth and VS Code-style guide lines.
 
 ## Core Value
 
 Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
 
-## Current Milestone: v1.4 Subagent Support
-
-**Goal:** Visualize subagent hierarchies in the debugger — nest subagent traces under the tool call that spawned them, flatten the within-trace tree, and color-code agents.
-
-**Target features:**
-- Backend emits parent_trace_id + parent_tool_call_id in subagent new_trace events
-- Flat tree within a trace (iterations and tool calls at same indentation level)
-- Subagent traces indent under the parent tool call, with arbitrary nesting depth
-- Per-agent color assignment on first appearance, persisted to IDB
-
 ## Current State
 
-**Shipped v1.3** (2026-02-22) — Local Persistence
+**Shipped v1.4** (2026-02-24) — Subagent Support
 
 The module is a fully functional developer tool with:
 - Standalone OWL app at `/ai-debug` with Odoo-native light/dark theme support
 - Real-time bus.bus streaming with separate cursors for immediate event delivery
+- Subagent hierarchy nesting: child traces indent under parent tool call with arbitrary depth, flat within-trace layout, VS Code guide lines
+- Pending-child buffer handles out-of-order bus events (30s timeout with orphan promotion)
+- Split tool_call_started/completed events with stable UUID correlation
 - 3-level sidebar tree with expand/collapse, stable selection, reverse chronological ordering, animations
 - Type-aware detail panels with tabbed Notebook views, JSON tree rendering, state diff visualization
 - IndexedDB persistence with fire-and-forget writes — traces survive page refresh
-- Bulk hydration from IDB before first render (no flash of empty state)
-- Checkbox multi-select with select-all/indeterminate for bulk delete (UI + IDB)
-- JSON export of selected traces and import with all-or-nothing validation + preview dialog
+- Two-pass IDB hydration: first pass loads all traces, second pass promotes orphans to root
+- Root-only auto-select on page load (newest root trace by created_ts)
+- Checkbox multi-select (root traces only) with select-all/indeterminate for bulk delete (cascades to descendants)
+- JSON export of selected traces (cascades to subagent descendants) and import with all-or-nothing validation + preview dialog
 - Ephemeral mode degradation when IDB unavailable (amber badge indicator)
 - Conditional CSS bundle loading via `webclient_rendering_context()` — automatically adapts to user's theme preference
 - All SCSS uses Odoo `$o-*` variables — zero hardcoded colors
 
 **Tech stack:** Odoo OWL standalone app, bus.bus WebSocket, generator yield passthrough instrumentation, IndexedDB via `@web/core/utils/indexed_db`.
-**LOC:** ~2,500 (JS/XML/SCSS/Python)
+**LOC:** ~2,547 (JS/XML/SCSS/Python)
 **Module:** `ai_debug` — depends on `ai_app` and `bus`.
 
 ## Requirements
@@ -68,13 +62,18 @@ The module is a fully functional developer tool with:
 - ✓ Export selected traces as JSON file download — v1.3
 - ✓ Import previously exported JSON file to restore traces with validation — v1.3
 - ✓ Invalid imports rejected with user-facing error notification — v1.3
+- ✓ Backend instrumentation emits parent_trace_id and parent_tool_call_id for subagent sessions — v1.4
+- ✓ Sidebar tree flattened within a trace (iterations/tool calls at same level) — v1.4
+- ✓ Subagent traces nest under parent tool call with recursive depth — v1.4
+- ✓ Export/import cascades to subagent descendants preserving hierarchy — v1.4
+- ✓ Two-pass IDB hydration with orphan promotion — v1.4
+- ✓ Root-only auto-select on page load — v1.4
 
 ### Active
 
-- [ ] Backend instrumentation emits parent_trace_id and parent_tool_call_id for subagent sessions
-- [ ] Sidebar tree flattened within a trace (iterations/tool calls at same level)
-- [ ] Subagent traces nest under parent tool call with recursive depth
 - [ ] Per-agent color-coding assigned on first appearance and persisted to IDB
+- [ ] Agent color legend in sidebar header
+- [ ] Colored agent chip in detail panel header
 
 ### Out of Scope
 
@@ -89,19 +88,23 @@ The module is a fully functional developer tool with:
 - Server-side sync — export/import covers cross-machine sharing
 - Per-event normalized IDB schema — one denormalized record per trace is correct
 - Selective import picker — import all + delete unwanted is sufficient
+- Timeline/Gantt view of concurrent agents — agentic loop is synchronous
+- Sidebar filter by agent — destroys multi-agent context nesting is designed to show
+- Custom color picker per agent — hash-based deterministic assignment is sufficient
+- Auto-expand tree to selected item — breaks user's intentional collapse state
 
 ## Context
 
 **Source locations:**
-- Enterprise: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-update-records-adsc/ai/`
+- Enterprise: `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/`
 - Core: `/Users/joseph/clones/odoo/odoo/.worktrees/master/`
 
 **v2+ candidates:**
 - RPLY-01: User can edit captured trace messages and re-run against the LLM
 - EXPT-01: Traces exportable in OpenTelemetry (OTLP) format
 - EVAL-01: Automated LLM-as-judge scoring of captured traces
-- ~~NEST-01: Sidebar tree supports nested loops~~ → promoted to v1.4
 - TSEL-01: User can select specific traces for export (currently exports all checked)
+- NEST-02: Exact parent tool call matching via parent_call_id for parallel subagent disambiguation
 
 **Known tech debt:**
 - Payload size for RAG-enabled sessions unknown (needs empirical baseline)
@@ -109,6 +112,9 @@ The module is a fully functional developer tool with:
 - Per-tool state granularity deferred (currently batch-level before/after)
 - Minor UX: if selected item is a child of a deleted trace, detail panel shows fallback state rather than clearing selection
 - Degraded standalone mode: dialog service unavailable suppresses import error dialogs silently
+- _applyImport does not run orphan-promotion pass (unreachable via normal export flow)
+- CSS depth tint caps at 4 levels while JS tracks exact depth
+- ai_parent_tool_call_id depends on base enterprise class setting tools_context['tool_call_id'] — fragile coupling
 
 ## Constraints
 
@@ -144,6 +150,16 @@ The module is a fully functional developer tool with:
 | Dual delete: reactive Map + IDB (v1.3) | Delete must be consistent across both stores in same operation | ✓ Good — no zombie traces on refresh |
 | Raw JSON array export format (v1.3) | No metadata envelope — simple, importable by any tool | ✓ Good — clean round-trip |
 | All-or-nothing import validation (v1.3) | First invalid element rejects entire file — no partial corrupted imports | ✓ Good — safe import behavior |
+| Flat Map with parent pointers (v1.4) | Preserves all existing lookup, serialize, and selection functions | ✓ Good — no refactor needed |
+| sidebarNodes computed getter (v1.4) | Flat array + single t-foreach avoids recursive OWL component anti-pattern | ✓ Good — simple rendering |
+| _pendingChildren buffer (v1.4) | Prevents out-of-order child traces silently landing at root | ✓ Good — reliable hierarchy construction |
+| Split tool_call events (v1.4) | tool_call_started/completed enables live progress display | ✓ Good — immediate tool call visibility |
+| _tc_id_map pre-generated UUIDs (v1.4) | Guarantees started/completed events share stable UUID | ✓ Good — reliable event correlation |
+| Context threading via with_context() (v1.4) | env lineage propagates to all ORM calls within same env | ✓ Good — parent linkage crosses model boundaries |
+| Checkboxes only on root traces (v1.4) | Subagent traces are conceptually part of parent — separate selection confusing | ✓ Good — clean UX |
+| COLR descoped from v1.4 to v1.5 (v1.4) | Audit revealed scope gap; color-coding is additive, not core hierarchy work | ✓ Good — shipped on time |
+| Two-pass IDB hydration (v1.4) | Random IDB record ordering requires post-load validation of parent pointers | ✓ Good — orphans promoted correctly |
+| Export cascade via _collectDescendantIds (v1.4) | Same pattern as delete cascade — consistent, proven | ✓ Good — full hierarchy exported |
 
 ---
-*Last updated: 2026-02-23 after v1.4 milestone start*
+*Last updated: 2026-02-24 after v1.4 milestone*

@@ -2,19 +2,19 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-23)
+See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.4 Subagent Support — Phase 15
+**Current focus:** Planning next milestone
 
 ## Current Position
 
-Phase: 15-data-integrity-fixes
-Plan: 01 complete
-Status: All tasks complete — DATA-01/02/03 requirements satisfied, v1.4 milestone complete
-Last activity: 2026-02-24 - Completed Phase 15 Plan 01: export cascade, two-pass IDB hydration, root-only auto-select
+Phase: None — between milestones
+Plan: N/A
+Status: v1.4 Subagent Support shipped
+Last activity: 2026-02-24 - Completed v1.4 milestone archival
 
-Progress: [██████████] 100% of v1.4
+Progress: [██████████] v1.4 complete
 
 ## Milestones Shipped
 
@@ -22,44 +22,13 @@ Progress: [██████████] 100% of v1.4
 - v1.1 Live Tracer Standalone App (2026-02-22) — 4 phases, 10 plans
 - v1.2 Native Theming (2026-02-22) — 2 phases, 4 plans
 - v1.3 Local Persistence (2026-02-22) — 3 phases, 5 plans
+- v1.4 Subagent Support (2026-02-24) — 3 phases, 4 plans
 
 ## Accumulated Context
 
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
-
-Key v1.4 decisions locked in by research:
-- Flat Map with parent pointers (not nested trace objects) — preserves all existing lookup, serialize, and selection functions
-- `useState({})` for agentColors (not Map) — OWL tracks property reads on plain objects, not Map mutations
-- Sentinel key `__agent_colors__` in existing IDB `traces` store — avoids schema version bump that would wipe all traces
-- `sidebarNodes` computed getter with depth-first recursive JS helper — no recursive OWL components (OWL doesn't support template recursion)
-- `_pendingChildren` buffer in JS `_onNewTrace` — prevents child traces silently landing at root when bus events arrive out of order
-
-Phase 13 Plan 01 decisions (2026-02-23):
-- new_trace includes session_id (ORM int), parent_trace_id (UUID hex or null), parent_tool_call_id (call_id or null) — no parent_session_id (CONTEXT.md supersedes REQUIREMENTS.md)
-- _tc_id_map pre-generated before super() call to guarantee started/completed events share stable UUID
-- ai.agent override guarded by _debug_ctx so non-instrumented sessions pay zero overhead
-
-Phase 13 Plan 02 decisions (2026-02-23):
-- Buffer keyed by parent_tool_call_id (LLM call_id) so _onToolCallStarted can match using payload.call_id
-- clearTimeout must run before delete _pendingChildren to prevent double-fire on re-attachment
-- _pendingChildren is plain JS object (not reactive) — internal bookkeeping not rendered
-- Orphan traces promoted after 30s retain parent fields for potential future silent re-attachment
-- status field ('running'/'completed') on tool calls stored now for Phase 15 visual indicators
-
-Phase 15 Plan 01 decisions (2026-02-23):
-- sidebarNodes computed getter (flat array) + single t-foreach — avoids recursive OWL component anti-pattern
-- Child trace matched by tc.call_id (LLM call_id), not UUID key — parent_tool_call_id on child traces is the LLM call_id
-- Iteration and tool call rows share same depth as owning trace (flat-within-trace rule, TREE-03)
-- Checkboxes only on depth===0 trace rows — subagent traces excluded from bulk select/delete
-- allChecked and toggleSelectAll use rootTracesCount to exclude subagent traces from denominator
-- COLR-03/04/05 deferred — no color work in Phase 15 per CONTEXT.md
-- Iteration rows default expanded=true — subagent traces visible immediately without expand clicks
-- serializeTrace() must persist parent_trace_id, parent_tool_call_id, session_id — omitting them silently drops parent linkage on page refresh (fixed in a7ac163)
-- [Phase 15-data-integrity-fixes]: exportSelected() uses _collectDescendantIds() + Set dedup — same proven pattern as deleteCheckedTraces()
-- [Phase 15-data-integrity-fixes]: Two-pass IDB hydration: second pass nulls parent fields on orphan traces (parent_trace_id not in traces Map)
-- [Phase 15-data-integrity-fixes]: Auto-select picks newest root trace by created_ts — never a subagent child trace
 
 ### Pending Todos
 
@@ -86,5 +55,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 15-data-integrity-fixes-01-PLAN.md — all DATA requirements satisfied
+Stopped at: v1.4 milestone archived
 Resume file: None
