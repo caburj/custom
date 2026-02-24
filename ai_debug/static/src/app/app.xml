@@ -151,12 +151,14 @@
                                 <span class="ai-tree-label-dim">
                                     &#xB7; <t t-esc="node.iter.toolCalls.size"/> call<t t-if="node.iter.toolCalls.size !== 1">s</t>
                                 </span>
-                                <t t-set="duration" t-value="this.getIterationDuration(node.trace, node.id)"/>
-                                <t t-if="duration">
-                                    <span class="ai-tree-label-dim"> &#xB7; <t t-esc="duration"/></span>
+                                <t t-if="node.iter.duration_ms > 0">
+                                    <span class="ai-tree-label-dim"> &#xB7; <t t-esc="this.formatDuration(node.iter.duration_ms)"/></span>
                                 </t>
                                 <t t-elif="node.trace.status === 'running' and node.id === [...node.trace.iterations.keys()].pop()">
                                     <span class="ai-tree-label-dim"> &#xB7; <span class="ai-debug-pulse-dot tiny"/></span>
+                                </t>
+                                <t t-if="node.iter.tokens and (node.iter.tokens.input > 0 or node.iter.tokens.output > 0)">
+                                    <span class="ai-tree-label-dim"> &#xB7; <t t-esc="this.formatTokens(node.iter.tokens.input)"/>&#x2191; <t t-esc="this.formatTokens(node.iter.tokens.output)"/>&#x2193;</span>
                                 </t>
                                 <t t-if="node.iter.has_error"><span class="ai-tree-label-error"> &#xB7; error</span></t>
                             </span>
