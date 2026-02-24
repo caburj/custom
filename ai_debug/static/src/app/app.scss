@@ -437,6 +437,51 @@ $ai-indent-step: 16px;
     background-color: $o-gray-200;
     color: $o-gray-700;
     margin-left: 6px;
+
+    // ai-metric-chip--live: pulsing chip for live elapsed timer
+    &--live {
+        animation: ai-debug-pulse 1.5s ease-in-out infinite;
+    }
+}
+
+// Compact data-dense metrics table for LoopDetail Metrics tab
+.ai-metrics-table-wrapper {
+    overflow-x: auto;
+    padding: 12px 16px;
+}
+
+.ai-metrics-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+
+    th {
+        text-align: right;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: $o-gray-600;
+        padding: 4px 8px;
+        border-bottom: 1px solid $border-color;
+
+        &:first-child { text-align: left; }
+    }
+
+    td {
+        text-align: right;
+        padding: 3px 8px;
+        color: $o-gray-700;
+        border-bottom: 1px solid $o-gray-100;
+
+        &:first-child { text-align: left; color: $o-gray-500; }
+    }
+}
+
+.ai-metrics-totals-row td {
+    border-top: 2px solid $border-color;
+    border-bottom: none;
+    padding-top: 6px;
 }
 
 .ai-tree-label-dim {
