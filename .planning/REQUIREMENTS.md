@@ -23,9 +23,9 @@
 
 ### Data Integrity
 
-- [ ] **DATA-01**: `serializeTrace()` and `hydrateTrace()` preserve parent linkage fields (`parent_trace_id`, `parent_tool_call_id`) across IDB roundtrip
-- [ ] **DATA-02**: JSON export/import preserves subagent hierarchy — imported traces reconstruct parent-child nesting correctly
-- [ ] **DATA-03**: Two-pass IDB hydration: first pass loads all traces, second pass validates parent pointers (handles random IDB record ordering)
+- [x] **DATA-01**: `serializeTrace()` and `hydrateTrace()` preserve parent linkage fields (`parent_trace_id`, `parent_tool_call_id`) across IDB roundtrip
+- [x] **DATA-02**: JSON export/import preserves subagent hierarchy — imported traces reconstruct parent-child nesting correctly
+- [x] **DATA-03**: Two-pass IDB hydration: first pass loads all traces, second pass validates parent pointers (handles random IDB record ordering)
 
 ## Future Requirements
 
@@ -61,9 +61,9 @@
 | TREE-02 | Phase 14 | Complete |
 | TREE-03 | Phase 14 | Complete |
 | TREE-04 | Phase 14 | Complete |
-| DATA-01 | Phase 15 | Pending |
-| DATA-02 | Phase 15 | Pending |
-| DATA-03 | Phase 15 | Pending |
+| DATA-01 | Phase 15 | Complete |
+| DATA-02 | Phase 15 | Complete |
+| DATA-03 | Phase 15 | Complete |
 
 **Coverage:**
 - v1.4 requirements: 11 total
