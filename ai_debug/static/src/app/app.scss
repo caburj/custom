@@ -275,16 +275,34 @@ $ai-depth-colors: (
 }
 
 // Indentation nesting mode — replaces SVG guide lines with padding-left per depth
+// Within each trace, iterations indent one step past their trace row,
+// and tool calls indent two steps past their trace row.
+$ai-indent-step: 16px;
+
 .ai-indent-mode {
     .ai-tree-row {
-        // Base padding (depth 0) — smaller since no SVG to clear
+        // Base padding (depth 0 trace) — smaller since no SVG to clear
         padding-left: 8px;
     }
 
-    // Progressive indentation: 16px per depth level
+    // Sub-row offsets: iterations +1 step, tool calls +2 steps past trace
+    .ai-tree-iter-row {
+        padding-left: #{8 + 16}px;  // 24px
+    }
+    .ai-tree-tc-row {
+        padding-left: #{8 + 32}px;  // 40px
+    }
+
+    // Progressive depth indentation: each depth level adds 16px to all row types
     @for $d from 1 through 4 {
-        .ai-depth-#{$d} {
+        .ai-depth-#{$d}.ai-tree-trace-row {
             padding-left: #{8 + $d * 16}px;
+        }
+        .ai-depth-#{$d}.ai-tree-iter-row {
+            padding-left: #{8 + $d * 16 + 16}px;
+        }
+        .ai-depth-#{$d}.ai-tree-tc-row {
+            padding-left: #{8 + $d * 16 + 32}px;
         }
     }
 }
