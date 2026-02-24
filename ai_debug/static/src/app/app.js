@@ -68,8 +68,8 @@ export class AiDebugApp extends Component {
             checkedTraceIds: new Set(),  // Phase 11: checkbox selection for bulk delete
             sidebarWidth: 420,
             nestingMode: (() => {
-                try { return localStorage.getItem("ai_debug.nestingMode") || "lines"; }
-                catch { return "lines"; }
+                try { return localStorage.getItem("ai_debug.nestingMode") || "indent"; }
+                catch { return "indent"; }
             })(),
         });
 

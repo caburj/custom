@@ -310,6 +310,39 @@ $ai-indent-step: 16px;
             padding-left: #{8 + $d * 48 + 32}px;
         }
     }
+
+    // ai-indent-depth-line: Vertical depth guide lines — thin colored lines showing
+    // nesting hierarchy. Each depth level gets lines for all ancestor depths, creating
+    // a visual staircase. Uses box-shadow to stack multiple 1px vertical lines per row
+    // without extra DOM nodes.
+    @for $d from 1 through 4 {
+        $colors: (#3b82f6, #14b8a6, #a855f7, #f59e0b, #f43f5e);
+
+        .ai-depth-#{$d} {
+            position: relative;
+
+            &::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                width: 0;
+                pointer-events: none;
+                z-index: 1;
+                left: 0;
+                // Build box-shadow with one 1px vertical line per ancestor depth.
+                // Each shadow at x-offset = (ancestor_depth * 48)px from left edge.
+                // depth 1 -> teal at x=48; depth 2 adds purple at x=96; etc.
+                $shadows: ();
+                @for $a from 1 through $d {
+                    $x: $a * 48;
+                    $c: nth($colors, $a + 1);
+                    $shadows: append($shadows, #{$x}px 0 0 0 rgba($c, 0.3), comma);
+                }
+                box-shadow: $shadows;
+            }
+        }
+    }
 }
 
 // Chevron expand/collapse indicator
