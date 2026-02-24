@@ -1,8 +1,597 @@
 # Architecture Research
 
 **Domain:** Odoo standalone OWL app — AI agentic loop live tracer
-**Researched:** 2026-02-23 (v1.4 section added); 2026-02-22 (v1.3 and earlier)
+**Researched:** 2026-02-23 (v1.4 section added); 2026-02-22 (v1.3 and earlier); 2026-02-24 (v1.5)
 **Confidence:** HIGH (all findings derived from direct source reading)
+
+---
+
+# v1.5 Live Metrics Architecture
+
+> This section answers the research question for v1.5: How do animated token/timing counters integrate with the existing OWL reactive store + bus.bus streaming architecture? What new components, data flow changes, and integration points are needed?
+
+## The Integration Challenge
+
+The core question is where token data lives and how to get it from the LLM API response into the iteration bus event. This requires tracing the full data flow from HTTP response through the provider service layer to the bus event payload.
+
+**Key discovery from source reading:**
+
+In enterprise `_run_agentic_loop()` (ai_session.py line 413):
+
+```python
+response = provider.get_service(self.env, model).get_completions(...)
+# response = output of get_completions()
+ai_message = provider._format_from_llm(response)
+if tool_calls := ai_message.get('tool_calls'):
+    yield {'tool_calls': tool_calls, 'metadata': response}  # metadata = OUTPUT LIST
+else:
+    yield {'final_message': ..., 'metadata': response}      # metadata = OUTPUT LIST
+```
+
+`get_completions()` returns:
+- OpenAI: `response.get("output", [])` — the output items list. `usage` is logged and DISCARDED.
+- Google: `[content]` — the candidates content. `usageMetadata` is logged and DISCARDED.
+
+So `item.get('metadata')` (which becomes `raw_response` in the bus event and JS store) is the provider-formatted output list. **It contains NO token usage data.**
+
+Token data must be captured at the service layer before it is discarded, then threaded to the instrumentation layer.
+
+## System Overview (v1.5)
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  PYTHON LAYER                                                             │
+│                                                                           │
+│  ai_debug/models/ai_provider_patch.py  [NEW FILE]                        │
+│  ├── monkey-patches AIApiService._request at module load time            │
+│  ├── captures usage/usageMetadata from full HTTP response dict           │
+│  ├── normalizes to {input, output, total, cached, reasoning}             │
+│  └── stores in threading.local()._last_usage before returning            │
+│                                                                           │
+│  ai_debug/models/ai_session.py  [MODIFIED]                               │
+│  ├── _run_agentic_loop(): captures iter_start = time.monotonic()         │
+│  ├── after super() yields: reads threading.local()._last_usage           │
+│  ├── computes duration_ms = int((now - iter_start) * 1000)               │
+│  └── emits 'iteration' bus event with NEW tokens + duration_ms fields    │
+└──────────────────────┬───────────────────────────────────────────────────┘
+                       │ bus.bus ('ai_debug' channel)
+                       │ separate cursor, immediate NOTIFY
+                       ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  BUS EVENT: 'iteration' (EXTENDED schema)                                 │
+│                                                                           │
+│  {                                                                        │
+│    type, trace_id, iteration_id, iteration_index,                         │
+│    messages_sent, raw_response, has_tool_calls, is_final,                │
+│    tokens: {input, output, total, cached, reasoning},   ← NEW            │
+│    duration_ms: int,                                    ← NEW            │
+│  }                                                                        │
+└──────────────────────┬───────────────────────────────────────────────────┘
+                       │ WebSocket (bus_service)
+                       ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  JS REACTIVE STORE (useState(new Map()) in AiDebugApp)  [MODIFIED]       │
+│                                                                           │
+│  _onIteration handler:                                                    │
+│    stores tokens: payload.tokens || null    ← NEW field on iter object   │
+│    stores duration_ms: payload.duration_ms || null  ← NEW field          │
+│                                                                           │
+│  NEW getters on AiDebugApp:                                               │
+│    traceTokenTotals(trace) → {input, output, total} | null               │
+│    traceTimingTotal(trace) → number (ms)                                  │
+│                                                                           │
+│  db.js serializeTrace [MODIFIED]:                                         │
+│    adds tokens + duration_ms to iteration serialization                   │
+│                                                                           │
+│  app.js hydrateTrace [MODIFIED]:                                          │
+│    tokens + duration_ms pass through via spread (no special handling)     │
+└────────────┬───────────────────────────────┬─────────────────────────────┘
+             │                               │
+             ▼                               ▼
+┌───────────────────────────┐   ┌────────────────────────────────────────┐
+│  SIDEBAR (app.xml) [MOD]  │   │  DETAIL PANELS                          │
+│                           │   │                                         │
+│  Trace row:               │   │  LoopDetail [MODIFIED]:                 │
+│  NEW compact metrics line │   │    new "Metrics" Notebook tab           │
+│  below agent/model line   │   │    per-iteration table: #, dur, tokens  │
+│                           │   │    totals row at bottom                 │
+│  "1.2s · 3,450 tok"       │   │                                         │
+│  counts up as iterations  │   │  IterationDetail [MODIFIED]:            │
+│  arrive — animation via   │   │    token + duration chips in header     │
+│  OWL reactive re-render   │   │    (static, not animated)               │
+└───────────────────────────┘   └────────────────────────────────────────┘
+```
+
+## Token Extraction: The Service Layer Gap
+
+### Why raw_response Cannot Be Used for Tokens
+
+`raw_response` in the JS store = `item['metadata']` from Python = return value of `get_completions()`.
+
+OpenAI `get_completions()` return value is `response.get("output", [])` — the output items list. This list contains `[{type: 'message', ...}]` or `[{type: 'function_call', ...}]` entries. No `usage` key anywhere in this list.
+
+Google `get_completions()` return value is `[content]` — a list containing the candidates content dict (`{role: 'model', parts: [...]}`). No `usageMetadata` key.
+
+The usage data is logged at the service layer by the enterprise code but then dropped before the return value is formed.
+
+### The Thread-Local Capture Pattern
+
+The `AIApiService._request()` method is the single point where the full raw HTTP response dict (containing `usage` / `usageMetadata`) is available. Both `AIApiServiceOpenAI` and `AIApiServiceGoogle` inherit it. By patching `_request` at module load time in `ai_provider_patch.py`, we capture usage before `get_completions()` strips it down to the output list.
+
+Thread-locals are safe here: Odoo serves HTTP requests on worker threads and the agentic loop runs synchronously within a single request's thread. There is never concurrent usage from two different agentic loops on the same OS thread.
+
+```python
+# ai_debug/models/ai_provider_patch.py
+import threading
+from odoo.addons.ai.services.ai_api_service import AIApiService
+
+_last_usage = threading.local()
+
+_orig_request = AIApiService._request
+
+def _patched_request(self, method, endpoint, **kwargs):
+    result = _orig_request(self, method, endpoint, **kwargs)
+    if isinstance(result, dict):
+        if 'usage' in result:                    # OpenAI Responses API
+            u = result['usage']
+            _last_usage.data = {
+                'input': u.get('input_tokens', 0),
+                'output': u.get('output_tokens', 0),
+                'total': u.get('input_tokens', 0) + u.get('output_tokens', 0),
+                'cached': u.get('input_tokens_details', {}).get('cached_tokens'),
+                'reasoning': u.get('output_tokens_details', {}).get('reasoning_tokens'),
+            }
+        elif 'usageMetadata' in result:          # Google Gemini API
+            um = result['usageMetadata']
+            _last_usage.data = {
+                'input': um.get('promptTokenCount', 0),
+                'output': um.get('candidatesTokenCount', 0),
+                'total': um.get('totalTokenCount', 0),
+                'cached': um.get('cachedContentTokenCount'),
+                'reasoning': um.get('thoughtsTokenCount'),
+            }
+        else:
+            _last_usage.data = None
+    else:
+        _last_usage.data = None
+    return result
+
+AIApiService._request = _patched_request
+```
+
+In `ai_session.py` `_run_agentic_loop` override, after `super()` yields an iteration item, read and clear:
+
+```python
+from odoo.addons.ai_debug.models.ai_provider_patch import _last_usage
+
+def _ai_debug_read_usage(self):
+    """Read and clear the thread-local usage slot. Returns dict or None."""
+    try:
+        data = getattr(_last_usage, 'data', None)
+        _last_usage.data = None   # clear after reading
+        return data
+    except Exception:
+        return None
+```
+
+### Timing: Per-Iteration duration_ms
+
+The per-iteration timing measurement must span from the moment the previous `super()` yield returns (i.e., after tool calls finish and messages are appended) to the moment the current yield lands. This captures the real LLM call time plus tool execution overhead — the "iteration wall time" that developers care about.
+
+```python
+iter_start = time.monotonic()  # before the super() loop starts
+
+for item in super()._run_agentic_loop(...):
+    if 'tool_calls' in item or 'final_message' in item:
+        # LLM returned — capture time for this iteration
+        duration_ms = int((time.monotonic() - iter_start) * 1000)
+        iter_start = time.monotonic()  # reset for next iteration's tool calls
+        tokens = self._ai_debug_read_usage()
+        # ... existing iteration event payload + new fields ...
+        self._ai_debug_bus_send('iteration', {
+            ...,
+            'tokens': tokens,
+            'duration_ms': duration_ms,
+        })
+    yield item
+```
+
+Note: The existing `started_at = time.monotonic()` variable already exists for the total loop duration in `loop_end`. The new `iter_start` is a separate variable that resets per-iteration.
+
+## Integration Points (All Explicit)
+
+### Integration Point 1: `ai_provider_patch.py` (NEW FILE)
+
+**File:** `ai_debug/models/ai_provider_patch.py`
+**Dependencies:** `odoo.addons.ai.services.ai_api_service.AIApiService`
+**What it does:** Monkey-patches `AIApiService._request` at import time to write token usage into a thread-local before the method returns. Provides `_last_usage` thread-local for reading in `ai_session.py`.
+**Risk:** MEDIUM. Monkey-patching is fragile if the enterprise code renames or restructures `_request`. Scoped to one file with a clear comment. Must be imported early enough that it patches before any completions call.
+**Registration:** Must add `from . import ai_provider_patch` to `ai_debug/models/__init__.py`.
+
+### Integration Point 2: `ai_session.py` `_run_agentic_loop` (MODIFIED)
+
+**File:** `ai_debug/models/ai_session.py`
+**New behavior:**
+- Capture `iter_start = time.monotonic()` before the loop body (alongside existing `started_at`).
+- After each super() yield that carries an iteration: compute `duration_ms`, read `_last_usage.data`, reset both.
+- Add `tokens` and `duration_ms` to the `'iteration'` bus event payload dict.
+**Backward compatibility:** The `iteration` event gains two new keys. The JS handler reads them with `|| null` fallbacks. Old JS consumers (hypothetical) ignore unknown keys.
+
+### Integration Point 3: `_onIteration` Handler (MODIFIED)
+
+**File:** `ai_debug/static/src/app/app.js`
+**Change:** Two new fields on the iteration object stored in the reactive Map:
+
+```javascript
+// Existing fields... PLUS:
+tokens: payload.tokens || null,
+duration_ms: payload.duration_ms || null,
+```
+
+**Risk:** Zero. Additive. Existing code reads named fields it knows about; unknown fields are ignored.
+
+### Integration Point 4: `traceTokenTotals(trace)` Getter (NEW)
+
+**File:** `ai_debug/static/src/app/app.js`
+**Purpose:** Compute running token totals across all iterations in a trace. Used by the sidebar trace row to display the animated counter.
+**Reactivity:** Reads `trace.iterations` (a `reactive(new Map())`). OWL tracks this read. When `_onIteration` adds a new entry, OWL re-renders the sidebar, which re-calls this getter, which returns a higher total. This IS the counting-up animation — no `requestAnimationFrame` needed.
+
+```javascript
+traceTokenTotals(trace) {
+    let input = 0, output = 0, total = 0;
+    let hasData = false;
+    for (const iter of trace.iterations.values()) {
+        if (iter.tokens) {
+            input += iter.tokens.input || 0;
+            output += iter.tokens.output || 0;
+            total += iter.tokens.total || 0;
+            hasData = true;
+        }
+    }
+    return hasData ? { input, output, total } : null;
+}
+```
+
+### Integration Point 5: `traceTimingTotal(trace)` Getter (NEW)
+
+**File:** `ai_debug/static/src/app/app.js`
+**Purpose:** Sum `duration_ms` across all iterations for display in the sidebar trace row.
+
+```javascript
+traceTimingTotal(trace) {
+    let ms = 0;
+    for (const iter of trace.iterations.values()) {
+        if (iter.duration_ms != null) ms += iter.duration_ms;
+    }
+    return ms;
+}
+```
+
+### Integration Point 6: Sidebar Trace Row Compact Metrics (MODIFIED)
+
+**File:** `ai_debug/static/src/app/app.xml`
+**Where:** Inside the trace row `<span class="ai-tree-label">`, after the existing `ai-tree-meta-line` span.
+**Change:** Add a new metrics line that displays running totals. Since `traceTokenTotals` and `traceTimingTotal` are reactive getter calls, the line updates automatically with each new iteration.
+
+```xml
+<!-- After the existing agent/model meta line: -->
+<t t-set="tMs" t-value="this.traceTimingTotal(node.trace)"/>
+<t t-set="tTok" t-value="this.traceTokenTotals(node.trace)"/>
+<span t-if="tMs > 0 or tTok" class="ai-tree-metrics-line">
+    <t t-if="tMs > 0">
+        <span class="ai-tree-metric-time" t-esc="this._formatDuration(tMs)"/>
+    </t>
+    <t t-if="tTok">
+        <span t-if="tMs > 0" class="ai-tree-metric-sep"> · </span>
+        <span class="ai-tree-metric-tokens"
+              t-esc="tTok.total.toLocaleString() + ' tok'"/>
+    </t>
+</span>
+```
+
+**Row height impact:** The trace row currently contains two lines (query title + meta line). Adding a third line (metrics) increases row height. This affects `depthLineTotalHeight` and `depthLinePaths` which use `ROW_H_TRACE = 44`. Update `ROW_H_TRACE` to accommodate three lines (suggest 56px) and update the corresponding CSS.
+
+### Integration Point 7: `IterationDetail` Header Chips (MODIFIED)
+
+**Files:** `ai_debug/static/src/app/detail/iter_detail.js` + `iter_detail.xml`
+**Change:** Show duration and token counts in the detail panel header for the selected iteration.
+
+In `iter_detail.js`, add a `formatDuration(ms)` helper (mirrors `_formatDuration` in `app.js`; a shared utility module is an option but over-engineering for two consumers):
+
+```javascript
+formatDuration(ms) {
+    if (ms == null) return null;
+    if (ms < 1000) return `${Math.round(ms)}ms`;
+    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+    const mins = Math.floor(ms / 60000);
+    return `${mins}m ${Math.round((ms % 60000) / 1000)}s`;
+}
+```
+
+In `iter_detail.xml`, add chips in the `ai-detail-header` div:
+
+```xml
+<span t-if="props.iteration.duration_ms != null"
+      class="ai-detail-chip ai-detail-chip-time"
+      t-esc="this.formatDuration(props.iteration.duration_ms)"/>
+<span t-if="props.iteration.tokens"
+      class="ai-detail-chip ai-detail-chip-tokens">
+    <t t-esc="props.iteration.tokens.total.toLocaleString()"/> tok
+    <span class="ai-detail-chip-sub">
+        (<t t-esc="props.iteration.tokens.input"/> in ·
+         <t t-esc="props.iteration.tokens.output"/> out)
+    </span>
+</span>
+```
+
+### Integration Point 8: `LoopDetail` Metrics Tab (MODIFIED)
+
+**Files:** `ai_debug/static/src/app/detail/loop_detail.js` + `loop_detail.xml`
+**Change:** Add a "Metrics" slot to the existing Notebook.
+
+In `loop_detail.js`, add two methods:
+
+```javascript
+formatDuration(ms) { /* same as IterationDetail helper */ }
+
+get metricsData() {
+    const rows = [];
+    let totalMs = 0, totalIn = 0, totalOut = 0, totalTok = 0;
+    for (const iter of this.props.trace.iterations.values()) {
+        rows.push({
+            index: iter.iteration_index,
+            duration_ms: iter.duration_ms,
+            tokens: iter.tokens,
+        });
+        if (iter.duration_ms) totalMs += iter.duration_ms;
+        if (iter.tokens) {
+            totalIn += iter.tokens.input;
+            totalOut += iter.tokens.output;
+            totalTok += iter.tokens.total;
+        }
+    }
+    return { rows, totalMs, totalIn, totalOut, totalTok };
+}
+```
+
+In `loop_detail.xml`, add the Metrics slot to the Notebook:
+
+```xml
+<t t-set-slot="metrics" title="'Metrics'" isVisible="true">
+    <div class="ai-detail-section">
+        <t t-set="m" t-value="this.metricsData"/>
+        <table class="ai-metrics-table">
+            <thead>
+                <tr>
+                    <th>#</th><th>Duration</th>
+                    <th>Input</th><th>Output</th><th>Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                <t t-foreach="m.rows" t-as="row" t-key="row.index">
+                    <tr>
+                        <td t-esc="row.index"/>
+                        <td t-esc="row.duration_ms != null ? this.formatDuration(row.duration_ms) : '—'"/>
+                        <td t-esc="row.tokens ? row.tokens.input.toLocaleString() : '—'"/>
+                        <td t-esc="row.tokens ? row.tokens.output.toLocaleString() : '—'"/>
+                        <td t-esc="row.tokens ? row.tokens.total.toLocaleString() : '—'"/>
+                    </tr>
+                </t>
+            </tbody>
+            <tfoot>
+                <tr class="ai-metrics-totals-row">
+                    <td>Total</td>
+                    <td t-esc="this.formatDuration(m.totalMs)"/>
+                    <td t-esc="m.totalIn.toLocaleString()"/>
+                    <td t-esc="m.totalOut.toLocaleString()"/>
+                    <td t-esc="m.totalTok.toLocaleString()"/>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</t>
+```
+
+**Reactivity:** `props.trace.iterations` is a `reactive(new Map())`. The `metricsData` getter reads it via `.values()`. OWL tracks this. When a new iteration arrives for the selected trace, OWL re-renders `LoopDetail` and the table gains a new row. This works even during a live run.
+
+### Integration Point 9: `serializeTrace` in `db.js` (MODIFIED)
+
+**File:** `ai_debug/static/src/app/db.js`
+**Change:** Add `tokens` and `duration_ms` to the iteration record in `serializeTrace`:
+
+```javascript
+// In the toolCalls map entries:
+{
+    ...existing fields...,
+    tokens: iter.tokens || null,
+    duration_ms: iter.duration_ms != null ? iter.duration_ms : null,
+}
+```
+
+**IDB version bump:** NOT required. Fields are additive nullable. Old stored records that lack these fields will hydrate with `null` via the spread + `|| null` pattern. The `IndexedDB` utility version is unchanged.
+
+### Integration Point 10: `hydrateTrace` in `app.js` (MODIFIED — minimal)
+
+**File:** `ai_debug/static/src/app/app.js`
+**Change:** The existing `hydrateTrace` spreads the iteration object: `{...iter, ...reconstructions}`. Since `tokens` and `duration_ms` are included in `serializeTrace` output (step 9), they come through the spread automatically. No special reconstruction needed — both are plain JSON-compatible types (object + number).
+
+Verify the existing spread chain:
+```javascript
+iterations.set(iterId, {
+    ...iter,              // tokens and duration_ms land here from IDB record
+    receivedAt: iter.receivedAt ? new Date(iter.receivedAt) : null,
+    expanded: true,
+    toolCalls,
+});
+```
+
+No code change required if the spread is already in place. This is a VERIFICATION step, not a modification.
+
+### Integration Point 11: `app.scss` (MODIFIED)
+
+**File:** `ai_debug/static/src/app/app.scss`
+**Changes needed:**
+- `.ai-tree-metrics-line`: smaller font, muted color, monospace, flex layout
+- `.ai-tree-metric-time`: timestamp color (use `$o-info` or `$o-gray-600`)
+- `.ai-tree-metric-sep`: separator styling
+- `.ai-tree-metric-tokens`: token count color (use `$o-gray-600`)
+- `.ai-detail-chip`: pill-shaped badge in detail header
+- `.ai-detail-chip-time` / `.ai-detail-chip-tokens`: color variants
+- `.ai-detail-chip-sub`: smaller sub-text for input/output breakdown
+- `.ai-metrics-table`: table styling, borders, font size
+- `.ai-metrics-totals-row`: bold totals row with separator
+
+All use `$o-*` SCSS variables only — no hardcoded colors.
+
+Update `ROW_H_TRACE` constant in `app.js` if trace row height changes (currently 44px; three-line rows may need 56px). Must stay in sync with the CSS.
+
+---
+
+## New vs Modified Components
+
+| Component | Status | What changes |
+|-----------|--------|--------------|
+| `ai_debug/models/ai_provider_patch.py` | **NEW** | Thread-local `_request` patch for usage capture |
+| `ai_debug/models/__init__.py` | MODIFIED | Import `ai_provider_patch` |
+| `ai_debug/models/ai_session.py` | MODIFIED | Add `iter_start` timing + `_ai_debug_read_usage()` + new `tokens`/`duration_ms` fields on iteration bus event |
+| `ai_debug/static/src/app/app.js` | MODIFIED | `_onIteration`: store new fields; add `traceTokenTotals()` + `traceTimingTotal()` getters; update `ROW_H_TRACE` if needed |
+| `ai_debug/static/src/app/app.xml` | MODIFIED | Trace row: add compact metrics line |
+| `ai_debug/static/src/app/db.js` | MODIFIED | `serializeTrace`: add `tokens`/`duration_ms` to iteration records |
+| `ai_debug/static/src/app/detail/iter_detail.js` | MODIFIED | Add `formatDuration()` helper |
+| `ai_debug/static/src/app/detail/iter_detail.xml` | MODIFIED | Token + duration chips in header |
+| `ai_debug/static/src/app/detail/loop_detail.js` | MODIFIED | Add `metricsData` getter + `formatDuration()` helper |
+| `ai_debug/static/src/app/detail/loop_detail.xml` | MODIFIED | New "Metrics" Notebook tab |
+| `ai_debug/static/src/app/app.scss` | MODIFIED | New classes for metrics line + table + chips |
+
+**Unchanged files:** `main.js`, `tc_detail.js`, `tc_detail.xml`, `json_tree.js`, `json_tree.xml`, `import_dialog.js`, `debug_menu_button.js`, `app.dark.scss` (may need small additions if metrics need dark-specific color overrides, but likely handled by `$o-*` vars)
+
+---
+
+## Build Order (Dependency-Aware)
+
+| Step | File(s) | What | Dependencies | Risk |
+|------|---------|------|-------------|------|
+| 1 | `ai_provider_patch.py` | Thread-local `_request` patch + normalization helpers | None | MEDIUM — verify both providers trigger the patch |
+| 2 | `models/__init__.py` | Import `ai_provider_patch` | Step 1 | LOW |
+| 3 | `ai_session.py` | Add `iter_start` timing + `_ai_debug_read_usage()` + new iteration event fields | Step 1 (needs `_last_usage`) | LOW — additive fields |
+| 4 | `app.js` `_onIteration` | Store `tokens` + `duration_ms` on iteration object | Step 3 (server emits them) | LOW |
+| 5 | `app.js` new getters | `traceTokenTotals` + `traceTimingTotal` | Step 4 | LOW |
+| 6 | `db.js` | Add fields to `serializeTrace` iteration records | Step 4 | LOW |
+| 7 | `app.js` `hydrateTrace` | Verify pass-through (likely no code change) | Step 6 | LOW |
+| 8 | `app.xml` | Compact metrics line in trace row | Step 5 | LOW |
+| 9 | `iter_detail.js` + `iter_detail.xml` | `formatDuration` + chips in header | Step 4 | LOW |
+| 10 | `loop_detail.js` + `loop_detail.xml` | `metricsData` + Metrics tab | Step 5 | LOW |
+| 11 | `app.scss` | Style all new metric elements | Steps 8–10 | LOW |
+
+**Critical path:** Steps 1 → 3 → 4 → 5. Everything from step 8 onward is display work that can proceed in parallel once step 5 is complete.
+
+**Verification gate after step 3:** Confirm via browser DevTools that iteration bus events include `tokens` and `duration_ms` fields before proceeding to display work. The quickest check: select an iteration in the debugger → Raw Response tab → inspect the bus event payload in network traffic or `console.log` the iteration object in `_onIteration`.
+
+---
+
+## Architectural Patterns
+
+### Pattern 1: Reactive Counting-Up via OWL Re-Render
+
+**What:** Token and timing totals in the sidebar count up automatically with each new iteration because the getter reads from a `reactive(new Map())`. OWL tracks the read and re-renders when the Map mutates. No animation infrastructure needed.
+
+**When to use:** When updates arrive at human-perceptible intervals (LLM iterations: 1–30 seconds). Not suitable for sub-second high-frequency updates.
+
+**Trade-offs:** Numbers jump (not interpolate) on each iteration — this is correct behavior for metrics that genuinely step up once per LLM call. Zero additional complexity vs. the existing `getIterationDuration` pattern which already works this way.
+
+### Pattern 2: Thread-Local Usage Capture
+
+**What:** Monkey-patch `AIApiService._request` to write token data to `threading.local()` before the method returns the full HTTP response dict. Read and clear the slot in `_run_agentic_loop` immediately after `super()` yields. This bridges the service layer (where usage data exists) and the instrumentation layer (where bus events are emitted).
+
+**When to use:** When the target data is available in a lower layer that cannot be modified under the project's constraints (model inheritance only). Thread-locals are safe for synchronous per-request code in Odoo workers.
+
+**Trade-offs:** Monkey-patching is fragile if `_request` is renamed or split. Contained in one clearly commented file. The read-and-clear pattern prevents stale data from leaking between iterations.
+
+### Pattern 3: Additive Nullable Bus Event Schema Extension
+
+**What:** New `tokens` and `duration_ms` fields are added to the existing `iteration` event payload. JS handlers that predated the change ignore unknown keys. IDB records lacking the new fields hydrate correctly via `|| null` fallbacks.
+
+**When to use:** When adding data to existing event types with a single handler. Avoid introducing new event types unless fundamentally different data is being communicated.
+
+---
+
+## Anti-Patterns
+
+### Anti-Pattern 1: AnimatedCounter OWL Component
+
+**What people do:** Create a dedicated OWL component with `useEffect` + `requestAnimationFrame` that lerps from `prevValue` to `nextValue` over ~300ms when its prop changes.
+
+**Why it's wrong:** Adds ~50 lines of animation infrastructure for a use case where OWL's reactive re-render already produces a visible counting-up effect. LLM iterations arrive seconds apart; the numeric jump is perceptible and accurate. Smooth interpolation would show values that were never real.
+
+**Do this instead:** Let OWL re-renders drive the counter update. The `traceTokenTotals(trace)` pattern is sufficient.
+
+### Anti-Pattern 2: Token Extraction from raw_response on the JS Side
+
+**What people do:** Parse `props.iteration.raw_response` in JS to extract token counts.
+
+**Why it's wrong:** `raw_response` is the provider-formatted output list, not the full API response. OpenAI's output list and Google's candidates list contain NO usage data — that information was consumed and discarded by `get_completions()` before the output list was returned.
+
+**Do this instead:** Extract in Python via the `AIApiService._request` patch and include normalized `tokens` dict in the bus event payload.
+
+### Anti-Pattern 3: IDB Version Bump for Additive Fields
+
+**What people do:** Increment `DB_VERSION` in `db.js` and write an `onupgradeneeded` migration when adding new fields to iteration records.
+
+**Why it's wrong:** `tokens` and `duration_ms` are nullable fields that old records simply won't have. The existing `...iter` spread in `hydrateTrace` + `|| null` guards mean old records load correctly with null values. The UI displays "—" for missing data.
+
+**Do this instead:** Use `|| null` fallbacks. No migration needed. No version bump needed.
+
+### Anti-Pattern 4: Per-Iteration IDB Write
+
+**What people do:** Write the trace to IDB on every `iteration` event (not just on `loop_end`).
+
+**Why it's wrong:** The existing write-through pattern (write on `loop_end` only) is intentional — it avoids multiple writes for in-progress traces. The iteration data IS included in the final `writeTrace` call. Writing on every iteration would thrash IDB for long sessions.
+
+**Do this instead:** Continue the existing `_onLoopEnd` write-once pattern. The new `tokens` and `duration_ms` fields on iteration objects will be included in `serializeTrace` automatically when `loop_end` fires.
+
+---
+
+## Normalized Token Schema
+
+| Field | OpenAI `usage` source | Google `usageMetadata` source | Notes |
+|-------|----------------------|-------------------------------|-------|
+| `input` | `input_tokens` | `promptTokenCount` | Always present |
+| `output` | `output_tokens` | `candidatesTokenCount` | Always present |
+| `total` | computed `input + output` | `totalTokenCount` | Google provides directly; OpenAI computed |
+| `cached` | `input_tokens_details.cached_tokens` | `cachedContentTokenCount` | null if not cached |
+| `reasoning` | `output_tokens_details.reasoning_tokens` | `thoughtsTokenCount` | null for non-reasoning models |
+
+The `total` field is computed as `input + output` for OpenAI (to maintain consistency; the API does not provide a separate total). For Google, `totalTokenCount` is used directly as it may include internal tokens not in the sum.
+
+---
+
+## Scaling Considerations
+
+| Scale | Architecture Adjustments |
+|-------|--------------------------|
+| Short traces (1–5 iterations) | Current design is optimal |
+| Long traces (20–50 iterations) | `traceTokenTotals` iterates all iterations on every sidebar render — ~50 Map lookups is negligible |
+| Very long traces (100+ iterations) | Consider memoizing totals on `loop_end` if profiling reveals render cost. Not anticipated for current use. |
+| Multiple concurrent sessions | Thread-local is per-OS-thread; Odoo workers are thread-isolated. No contention. |
+| New LLM provider (not OpenAI/Google) | Patch detects `usage` vs `usageMetadata` keys. New providers need an additional key check in `_patched_request`. This is a one-line addition. |
+
+---
+
+## Sources
+
+All findings derived from direct source inspection on 2026-02-24:
+
+- `ai_debug/models/ai_session.py` (complete — 379 lines)
+- `ai_debug/static/src/app/app.js` (complete — 1005 lines)
+- `ai_debug/static/src/app/app.xml` (complete)
+- `ai_debug/static/src/app/db.js` (complete)
+- `ai_debug/static/src/app/detail/iter_detail.js` + `iter_detail.xml`
+- `ai_debug/static/src/app/detail/loop_detail.js` + `loop_detail.xml`
+- `enterprise/ai/models/ai_session.py` (`_run_agentic_loop` body — confirms metadata = output list)
+- `enterprise/ai/services/ai_api_service_openai.py` (confirms `usage` in full response, `output` returned)
+- `enterprise/ai/services/ai_api_service_google.py` (confirms `usageMetadata` in full response, `[content]` returned)
+- `enterprise/ai/services/ai_provider_openai.py` (`_format_from_llm` — confirms output list structure)
+- `.planning/PROJECT.md` (v1.5 requirements)
 
 ---
 
@@ -682,22 +1271,27 @@ User sets theme in Odoo Settings
 - Standalone OWL app at `/ai-debug` using `mountComponent` from `@web/env`
 - Channel access gated by `ir.websocket` override to internal users only
 
-The root component `AiDebugApp` owns all application state. Children receive props. Selection state is separate from trace data (prevents selection loss on bus events).
+The root component `AiDebugApp` owns all application state. Children receive props. Selection state is separate from trace data (SIDE-05 prevents selection loss on bus events).
 
 ---
 
 ## Sources
 
-**v1.4 sources (HIGH confidence — direct source reads, current date 2026-02-23):**
-- `ai_debug/models/ai_session.py` (complete — 334 lines)
-- `ai_debug/static/src/app/app.js` (complete — 627 lines)
-- `ai_debug/static/src/app/app.xml` (complete — 201 lines)
-- `ai_debug/static/src/app/db.js` (complete — 143 lines)
-- `enterprise/ai/models/ai_session.py` (complete — 478 lines)
-- `enterprise/ai/models/ai_agent.py` (complete — `_ai_tool_request_sub_agent` at line 1339)
-- `enterprise/ai/models/ir_actions_server.py` (complete — `_ai_tool_run`, tool name check)
-- `enterprise/ai/data/ir_actions_server_data.xml` (subagent tool record)
-- `.planning/PROJECT.md` (v1.4 requirements and decisions)
+**v1.5 sources (HIGH confidence — direct source reads, 2026-02-24):**
+- `ai_debug/models/ai_session.py` (complete — 379 lines)
+- `ai_debug/static/src/app/app.js` (complete — 1005 lines)
+- `ai_debug/static/src/app/app.xml` (complete)
+- `ai_debug/static/src/app/db.js` (complete)
+- `ai_debug/static/src/app/detail/iter_detail.js` + `iter_detail.xml`
+- `ai_debug/static/src/app/detail/loop_detail.js` + `loop_detail.xml`
+- `enterprise/ai/models/ai_session.py` (complete — confirms `metadata` = output list, not full response)
+- `enterprise/ai/services/ai_api_service_openai.py` (confirms `usage` in full response dict, `output` list returned)
+- `enterprise/ai/services/ai_api_service_google.py` (confirms `usageMetadata` in full response dict, `[content]` returned)
+- `enterprise/ai/services/ai_provider_openai.py` (`_format_from_llm` — confirms output list structure)
+- `.planning/PROJECT.md` (v1.5 requirements)
+
+**v1.4 sources (HIGH confidence — direct source reads, 2026-02-23):**
+- Same source files above plus `enterprise/ai/models/ai_agent.py` and `ir_actions_server.py`
 
 **v1.3 sources (HIGH confidence — direct source reads, 2026-02-22):**
 - Same source files above plus MDN IndexedDB API and OWL 2.x reactive proxy mechanics
@@ -710,5 +1304,5 @@ The root component `AiDebugApp` owns all application state. Children receive pro
 - `web_enterprise/static/src/scss/primary_variables.dark.scss`
 
 ---
-*Architecture research for: AI Debugger v1.4 — Subagent visualization*
-*Researched: 2026-02-23*
+*Architecture research for: AI Debugger v1.5 — Live metrics (token/timing)*
+*Researched: 2026-02-24*

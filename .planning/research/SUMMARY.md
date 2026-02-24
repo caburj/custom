@@ -1,190 +1,221 @@
 # Project Research Summary
 
-**Project:** AI Debugger v1.4 — Subagent Hierarchy Visualization
+**Project:** AI Debugger v1.5 — Live Metrics (animated counters, token normalization, per-iteration timing)
 **Domain:** Odoo standalone OWL app — AI agentic loop live tracer
-**Researched:** 2026-02-23
-**Confidence:** HIGH
+**Researched:** 2026-02-24
+**Confidence:** HIGH — all findings derived from direct source inspection of the enterprise `ai` module and `ai_debug` custom module
+
+---
 
 ## Executive Summary
 
-The v1.4 milestone adds subagent hierarchy visualization to the existing `ai_debug` OWL app. The app already ships with IndexedDB persistence (v1.3), native Odoo theming (v1.2), and a working bus-event-driven trace store (v1.1). V1.4 is a contained, additive change: two new nullable fields in the Python `new_trace` bus event, a flat-Map-with-parent-pointers data model in the JS store, a computed `sidebarNodes` getter replacing the three-level nested template, per-agent color assignment, and a new IDB sentinel key for color persistence. No new npm packages, Odoo modules, or Python libraries are required. All patterns are verified against the live codebase at the worktree paths.
+The v1.5 milestone adds live time and token metrics to an already-shipped, fully functional developer tool. The implementation is bounded and additive: no new npm packages, Python libraries, or Odoo module dependencies are required. The entire feature set is achievable with existing OWL primitives, `time.monotonic()`, and the bus event infrastructure already in place. The critical discovery from research is that **token usage data is stripped before the instrumentation layer can see it** — the `get_completions()` method in each provider service discards the raw HTTP envelope (containing `usage` / `usageMetadata`) and returns only the output list. This is the single highest-risk design constraint and must be addressed first via a thread-local capture pattern at the `AIApiService._request` level, implemented in a new `ai_provider_patch.py` file.
 
-The recommended approach is: (1) instrument the Python backend to inject `_ai_debug_parent_trace_id` and `_ai_debug_parent_tool_call_id` into `env.context` before calling `super()._handle_tool_calls()` — this causes the child session's `_run_agentic_loop` override to emit parent linkage in `new_trace` automatically; (2) keep `this.traces` as a flat `useState(new Map())` keyed by `trace_id`, with parent pointer fields on each trace object rather than nesting child traces inside parent objects; (3) derive the sidebar display tree in a computed `sidebarNodes` getter using a depth-first recursive JavaScript function (not recursive OWL components, which OWL does not support as template recursion); (4) store agent colors as a sentinel record in the existing `traces` IDB store (key `__agent_colors__`) to avoid a DB version bump.
+The recommended approach is a clean three-phase delivery: (1) backend token extraction via `ai_provider_patch.py` that monkey-patches `AIApiService._request` at module load time and writes normalized token counts into a thread-local, plus per-iteration timing from `time.monotonic()` in the `_run_agentic_loop` override; (2) frontend reactive store extension — new fields on the iteration object, computed getters for trace totals, and IDB persistence updated symmetrically; (3) display components — sidebar compact metrics line, `IterationDetail` header chips, and `LoopDetail` Metrics Notebook tab. The "counting up" animation in the sidebar requires no `requestAnimationFrame` infrastructure: OWL's reactive re-render, triggered by new iteration events at LLM-call frequency (1–30 seconds), naturally produces the count-up effect.
 
-The key risks are well-identified and each has a low-cost mitigation: bus event ordering (child `new_trace` can arrive before the parent's `tool_call` event — requires a `_pendingChildren` buffer in the JS event handler), reactivity pitfalls (agent colors must live in `useState({})`, not a plain Map), selection logic breakage (existing `getSelectedTrace` getters must be audited when the flat+nested rendering model replaces the three-level hierarchy), and IDB serialization gaps (parent pointer fields must be explicitly added to `serializeTrace()` or they are silently lost on export/import). None of these are blocking unknowns — they are prevention patterns, not research questions.
+The primary render performance risk is storing animation counter values in OWL reactive state. If an intermediate `displayed_tokens` field is added to reactive state and a rAF loop increments it, the `sidebarNodes` and `depthLinePaths` computed getters will recompute at 60fps causing sidebar jank. Research resolves this cleanly: store only the final reactive value and let OWL's own render cycle (triggered by new iteration events) provide the visual update. For the live elapsed timer in the detail panel header, use `setRecurringAnimationFrame` from `@web/core/utils/timing` with 1-second granularity and `useRef` + direct DOM mutation — no reactive state updates per frame.
+
+---
 
 ## Key Findings
 
 ### Recommended Stack
 
-No new dependencies are introduced in v1.4. The existing stack remains unchanged: OWL `mountComponent` for the standalone app, `bus_service` for event delivery, `@web/core/utils/indexed_db` for persistence, `downloadFile` from `@web/core/network/download` for export, and Odoo's SCSS/Bootstrap system for theming. The only backend component that changes is `ai_debug/models/ai_session.py` (Python instrumentation overrides).
+No new stack additions for v1.5. All capabilities are achievable with the existing Odoo OWL application infrastructure.
 
-**Core technologies:**
+**Core technologies in use (unchanged from v1.4):**
 
-- `ai_debug/models/ai_session.py` (`_inherit = 'ai.session'`): Python instrumentation layer — detects subagent tool calls in `_handle_tool_calls`, injects parent trace linkage via `self.with_context(...)` before `super()`, emits `new_trace` events with `parent_trace_id` and `parent_tool_call_id`; a `reserved_subagent_tc_id` is generated before `super()` and used in the subsequent `tool_call` event so the parent and child refer to the same identifier
-- `useState(new Map())` flat trace store in `AiDebugApp`: single reactive source of truth for all traces (root and subagent); child traces store `parent_trace_id` and `parent_tool_call_id` pointer fields, not nested inside parent objects; the rendering tree is derived from these pointers at render time
-- `useState({})` reactive plain object for `agentColors`: keyed by `agent_name`; `useState({})` is required (not a plain Map) because OWL tracks property reads on `useState`-wrapped objects and triggers re-renders when new agent names are added
-- `@web/core/utils/indexed_db` (`IndexedDB` class): persists serialized trace records; agent colors stored as a sentinel record keyed `__agent_colors__` in the existing `traces` object store (no schema version bump needed, avoids the `onupgradeneeded` failure mode)
-- Computed `sidebarNodes` getter in `app.js`: produces a flat, ordered array of display node objects with `{type, id, depth, data}`; the template iterates this single array with one `t-foreach`; depth-based `padding-left` provides visual indentation; no recursive OWL components
-- 8-slot hardcoded hex color palette (One Dark Pro-derived): assigned on first `new_trace` per agent name; values are static hex strings verified to work on both dark (`#1B1D26`) and light (`#F9FAFB`) Odoo backgrounds as 3px left-border accents
+- **OWL 2 reactive system** (`useState`, `useEffect`, `useRef`) — reactive Map-based store drives all display updates; OWL's read-tracking is the counting-up mechanism for sidebar totals
+- **`setRecurringAnimationFrame`** from `@web/core/utils/timing` — already in the Odoo bundle; correct choice for the live elapsed ticker (pauses when tab is backgrounded, unlike `setInterval`)
+- **`requestAnimationFrame` + `useRef` direct DOM mutation** — recommended pattern for the live elapsed counter in the detail panel; avoids OWL reactive re-render at 60fps
+- **`time.monotonic()`** — Python standard library; already called at loop start in `ai_session.py`; extend to capture per-iteration timing
+- **`threading.local()`** — Python standard library; thread-safe side channel for passing token usage from the service layer to the instrumentation layer without touching enterprise files
 
-**What not to use:** recursive OWL components for tree rendering (OWL templates cannot recurse — causes double-render cascades and lifecycle ordering bugs); nested Map for child traces (breaks all existing lookup, serialize, and selection functions); `reactive()` without a render observer for color storage; IDB version bump for agent colors (use sentinel key instead to avoid wiping existing traces).
+**What NOT to use:**
+
+- External counter animation libraries (countUp.js, animate.js) — not in Odoo's asset pipeline; 20 lines of rAF code achieves the same result
+- `CSS @property` + `counter()` — Firefox support gap (required Firefox 128+); limited to `::after` pseudo-element content; cannot format numbers with inline suffixes or comma separators
+- `setInterval` for the elapsed ticker — fires when tab is backgrounded
+- Updating `useState` on every rAF frame — triggers OWL re-render at 60fps; sidebar with dozens of nodes causes visible jank
+- Extracting token counts in JavaScript from `raw_response` — `raw_response` contains the provider output list, not the HTTP envelope; `usage` and `usageMetadata` are stripped before it is set
 
 ### Expected Features
 
-**Must have (table stakes — v1.4 launch):**
-- Subagent traces nest visually under the tool call that spawned them — causality is visible in the sidebar tree; every LLM observability tool (LangSmith, LangFuse, Arize Phoenix) implements this; flat listings lose causality
-- Arbitrary recursive nesting depth — grandchildren and beyond render correctly; no hardcoded depth limit; the `sidebarNodes` getter's recursive `renderTrace` helper handles any depth
-- Flat tree within each trace — iterations and tool calls appear at the same indentation level (not iterations > tool calls); with subagent nesting adding depth, the old 3-level within-trace hierarchy makes tool calls appear at 6 levels deep on standard monitors
-- Per-agent color strip — 3px left border on trace rows in the agent's assigned color; fastest visual differentiator when scanning a multi-agent sidebar
-- Color persisted across page refreshes — sentinel key in IDB preserves agent-to-color mapping across sessions
-- Dark and light mode compatibility — hardcoded hex palette verified for both Odoo themes
-- Collapsed parent hides all descendants — existing `trace.expanded` flag gates child trace rendering; unchanged mechanism
+**Must have (table stakes) — all P1:**
+- Normalized token extraction from OpenAI and Google provider responses into a common `{input, output, total, cached, reasoning}` schema
+- Per-iteration timing instrumentation (`duration_ms` in the `iteration` bus event; Python server-side, not JS `receivedAt` differences)
+- Trace-level token totals computed from per-iteration data (never a separate stored accumulator)
+- Trace-level total duration (already in `loop_end.duration_ms`; needs surfacing in sidebar row)
+- Compact sidebar row counters showing time and tokens inline (`"1.2s · 3,450 tok"` format)
+- `IterationDetail` Metrics tab with full per-iteration breakdown (input, output, cached, reasoning tokens + duration)
+- `LoopDetail` trace-level totals section (aggregate tokens + total duration)
+- Cached-token annotation — OpenAI `input_tokens_details.cached_tokens`, Google `usageMetadata.cachedContentTokenCount`
+- Animated counting-up visual effect on sidebar counters as new iterations arrive
 
-**Should have (differentiators, add after validation):**
-- Agent legend in sidebar header — color swatches + agent names, read-only; add when 4+ agents cause orientation confusion
-- Agent color chip in detail panel header — small colored badge next to agent name; add when deep hierarchies lose context
+**Should have — P2:**
+- Reasoning-token annotation — relevant only on o-series and Gemini 2.5+ thinking models; data is free once extraction exists
 
-**Defer (v2+):**
-- Search/filter sidebar by agent — explicitly deferred per PROJECT.md; breaks multi-agent context by hiding child traces of filtered-out agents
-- Custom color picker per agent — deterministic hash + IDB is sufficient; picker adds UI complexity for marginal gain
-- OpenTelemetry export with parent/child span relationships — v1.4 is a prerequisite; add in v2+
-- Timeline/Gantt view — Odoo's agentic loop is synchronous; no concurrency to visualize
+**Defer (post-v1.5 / v2+):**
+- Subagent token roll-up in parent trace total — each trace shows only its own iterations independently; roll-up adds cross-trace accounting complexity with marginal value
+- Cost-in-currency display — provider pricing changes constantly; per-tier rates vary; not reliable to maintain in code
+- Historical cost aggregation across sessions — requires pricing data, aggregate IDB queries, currency handling
+- OpenTelemetry OTLP export with token/duration attributes (listed as EXPT-01 in PROJECT.md v2+ list)
 
 ### Architecture Approach
 
-The architecture follows the OpenTelemetry flat-span model: every trace (root or subagent) lives at the top level of `this.traces`, carries nullable `parent_trace_id` and `parent_tool_call_id` pointer fields, and the display hierarchy is computed from those pointers at render time in the `sidebarNodes` getter. This preserves all existing lookup functions, IDB write patterns, export/import logic, and selection state management with zero changes to their core logic. The only structural change is replacing the three-level nested `t-foreach` template with a single `t-foreach` over the computed node array, and removing the `iteration.expanded` toggle (iterations are always shown when their trace is expanded, at the same depth level as tool calls).
+The v1.5 architecture introduces one new Python file (`ai_provider_patch.py`) and makes additive modifications to ten existing files. The data flow is: `AIApiService._request` (patched at module load) writes normalized token dict to `threading.local()` before returning → `ai_session._run_agentic_loop` reads the thread-local after each super() yield and adds `tokens` + `duration_ms` to the `iteration` bus event → `_onIteration` in `app.js` stores two new fields on the iteration object in the reactive Map → `traceTokenTotals()` and `traceTimingTotal()` computed getters recompute when new iterations arrive → OWL re-renders the sidebar row, producing the count-up effect automatically.
 
-**Major components:**
+**Major components and their v1.5 changes:**
 
-1. `ai_debug/models/ai_session.py` (MODIFIED) — `_handle_tool_calls`: scans tool_calls before `super()`, detects subagent tool by `"ai_request_subagent"` substring, generates `reserved_subagent_tc_id`, injects `self.with_context(_ai_debug_parent_trace_id, _ai_debug_parent_tool_call_id)`; `_run_agentic_loop`: reads context fields, emits both in `new_trace` (null for root sessions)
-2. `app.js` (MODIFIED) — adds `agentColors = useState({})`, `_pendingChildren = new Map()` buffer, `sidebarNodes` computed getter with depth-first recursive `renderTrace` helper, updated `_onNewTrace` (stores parent fields, assigns color, buffers if parent tool call not yet seen), updated `_onToolCall` (drains pending-child buffer after insert), updated `onWillStart` (loads colors from IDB before traces)
-3. `app.xml` (MODIFIED) — single `t-foreach` over `sidebarNodes`; depth-based `padding-left: calc(node.depth * 12px + 8px)`; agent color swatch `<span>` on trace rows; `iteration.expanded` toggle and `toggleExpand` calls removed
-4. `db.js` (MODIFIED) — `serializeTrace` and `hydrateTrace` gain `parent_trace_id`, `parent_tool_call_id`, `agent_color` fields; sentinel-key `writeAgentColors` and `loadAgentColors` functions added
-5. `app.scss` (MODIFIED) — `.ai-agent-color-swatch` styling; CSS custom property for depth indentation
+1. **`ai_provider_patch.py` (NEW)** — monkey-patches `AIApiService._request`; normalizes OpenAI `usage` and Google `usageMetadata` into a common `{input, output, total, cached, reasoning}` schema; stores in `threading.local()._last_usage`; imported in `models/__init__.py`
+2. **`ai_session.py` (MODIFIED)** — reads thread-local after each super() yield via `_ai_debug_read_usage()`; captures `iter_start = time.monotonic()` before the loop and resets per iteration; emits `tokens` and `duration_ms` on each `iteration` event alongside existing fields
+3. **`app.js` reactive store (MODIFIED)** — `_onIteration` stores `tokens` and `duration_ms` on the iteration object; `traceTokenTotals(trace)` and `traceTimingTotal(trace)` new getters provide computed aggregates; `ROW_H_TRACE` constant updated if trace row gains a third line
+4. **`app.xml` sidebar (MODIFIED)** — compact metrics line (`"1.2s · 3,450 tok"`) below the existing agent/model meta line on trace rows; driven by getter calls; reactive via OWL re-render
+5. **`db.js` `serializeTrace` (MODIFIED)** — adds `tokens` and `duration_ms` to iteration record serialization
+6. **`app.js` `hydrateTrace` (MODIFIED — likely no code change)** — new fields pass through via existing spread; verification only
+7. **Detail panels (MODIFIED)** — `IterationDetail` gains `formatDuration()` helper and header chips for duration + token summary; `LoopDetail` gains `metricsData` getter and a new "Metrics" Notebook tab with per-iteration table and totals row
+8. **`app.scss` (MODIFIED)** — new CSS classes for metrics line, detail chips, and metrics table; all using `$o-*` SCSS variables
 
-No new files are required for v1.4.
-
-**Build order (dependency-aware):**
-Steps 1 (Python) and 2 (IDB schema) are fully parallel. Step 3 (JS store + color) depends on step 1 for live data and step 2 for IDB. Step 4 (`sidebarNodes` getter) depends on step 3. Step 5 (template refactor) depends on step 4. Step 6 (SCSS) depends on step 5.
+**Key architectural pattern:** The counting-up effect requires no animation infrastructure. It is OWL's own reactive re-render triggered by new `iteration` bus events. The sidebar `sidebarNodes` getter reads `trace.iterations` (a reactive Map); when `_onIteration` adds a new entry, OWL re-renders the sidebar tree, which re-calls `traceTokenTotals()`, which returns the higher accumulated total. At LLM iteration frequency (1–30 seconds), this re-render is invisible cost. The only place a rAF-based ticker is needed is the live elapsed time display in the detail panel header while a trace is actively running.
 
 ### Critical Pitfalls
 
-1. **Child `new_trace` arrives before parent `tool_call`** — bus events are committed via separate database cursors with no ordering guarantee between them. Without a buffer, subagent traces silently land at root level. Prevention: implement `_pendingChildren = new Map()` in `setup()`; buffer child payloads when `parent_tool_call_id` is not yet in any trace; drain buffer in `_onToolCall` after inserting the tool call. Recovery if missed: add the buffer after the fact — medium cost.
+1. **Token data is stripped before the instrumentation layer can access it** — `get_completions()` returns only the output list; `usage`/`usageMetadata` are logged and discarded before the return. `raw_response` in the JS store has no token fields. Solution: patch `AIApiService._request` in `ai_provider_patch.py` to capture usage into `threading.local()` before the method returns. Never parse `raw_response` in JS for token data.
 
-2. **Nested subagent traces stored inside parent trace objects** — breaks every existing function that assumes `this.traces` is a flat Map keyed by `trace_id`: `getSelectedTrace`, `deleteCheckedTraces`, `exportSelected`, `serializeTrace`, `hydrateTrace`. Prevention: decide the flat model before writing any code. Recovery if missed: full data model refactor — high cost.
+2. **OpenAI and Google use structurally different token field names** — OpenAI: `usage.input_tokens` / `usage.output_tokens` with nested `input_tokens_details.cached_tokens`; Google: `usageMetadata.promptTokenCount` / `usageMetadata.candidatesTokenCount` with flat `cachedContentTokenCount`. A normalizer that only handles one provider silently returns zeros for the other with no error. Solution: explicit branches for both envelope keys in a single Python normalizer; unit-test with fixture dicts for both providers before considering extraction done.
 
-3. **`serializeTrace()` missing parent linkage fields** — the function explicitly enumerates fields; new fields on trace objects are silently dropped unless added to `serializeTrace()`. Hierarchy is lost on export/import. Prevention: audit `serializeTrace` and `hydrateTrace` together when adding any new field. Recovery: add fields and re-write IDB records on next `loop_end` — low cost.
+3. **Storing animation counter values in OWL reactive state causes render storms** — any value stored in the reactive trace/iteration objects that changes at 60fps triggers `sidebarNodes` and `depthLinePaths` recomputation at 60fps, causing visible sidebar jank. Solution: store only final values in reactive state (changed at LLM-call frequency); animate via CSS class toggle (`classList` + `void el.offsetWidth` reflow), which is the existing `ai-tree-flash` pattern; use `useRef` + direct DOM mutation for the live elapsed timer.
 
-4. **Agent colors stored in a plain (non-reactive) Map** — Map mutations are invisible to OWL; new agent color assignments don't trigger re-renders; sidebar rows appear colorless until the next unrelated event. Prevention: `this.agentColors = useState({})` (plain object, string keys), not `new Map()`. Recovery: change storage and wipe existing color assignments — low cost.
+4. **`serializeTrace()` / `hydrateTrace()` asymmetry silently drops new fields** — both functions explicitly enumerate iteration fields; adding new fields to `_onIteration` without updating both serializers means tokens are present during a live run but disappear after page refresh (no error). Solution: always edit both functions in the same commit; add a version comment block listing iteration fields by version number.
 
-5. **Selection logic breaks with flat+nested rendering** — the existing selection getters (`getSelectedIteration`, `getSelectedToolCall`, `selectedTraceId`) were written for flat traces only. Subagent traces are also in `this.traces` so getters still find them, but `getRootTraceId()` must be added for cases that need the root-level trace. Prevention: audit all selection getters when refactoring the template; add `getRootTraceId(traceId)` that walks `parent_trace_id` to the root. Recovery: incremental getter fixes — low-to-medium cost.
+5. **Do not bump `DB_VERSION`** — bumping from `1` to `2` triggers `onupgradeneeded` which destroys all stored developer trace history. Adding JSON fields to the existing blob does NOT change the IDB schema. Only bump if a new IDB object store is added or a key-path changes.
+
+---
 
 ## Implications for Roadmap
 
-Based on research, the build order has clear dependencies. Python instrumentation is the independent starting point; IDB schema additions are parallel to Python; JS store updates depend on Python being in place for live data; the `sidebarNodes` getter depends on store changes; the template refactor depends on the getter; SCSS is last.
+Based on the dependency graph from FEATURES.md and the explicit build order from ARCHITECTURE.md, v1.5 delivers cleanly in three sequential phases. Each phase has a clear verification gate before the next begins.
 
-### Phase 1: Python Instrumentation + JS Bus Event Handling
+### Phase 1: Backend Token Extraction and Per-Iteration Timing
 
-**Rationale:** Every frontend feature depends on the backend emitting `parent_trace_id` and `parent_tool_call_id`. This is the unlock. Implementing the `_pendingChildren` buffer in JS at the same time prevents the bus ordering race from being discovered as a hard-to-reproduce bug. These two pieces are the first integration point to establish and verify before touching the store or rendering.
+**Rationale:** Every display feature depends on receiving non-zero `tokens` and `duration_ms` fields in the `iteration` bus event. Zero token data means no UI feature can be validated. The interception point is the hardest part of the milestone — non-obvious and easy to get wrong in ways that silently produce zeros. This must be verified end-to-end (real API call shows `tokens` field in DevTools) before frontend work begins.
 
-**Delivers:** `_handle_tool_calls` override detects subagent tool, injects context, uses `reserved_subagent_tc_id`; `_run_agentic_loop` override reads and emits `parent_trace_id` + `parent_tool_call_id` (null for root); `_onNewTrace` buffers children when parent tool call not yet seen; `_onToolCall` drains buffer after insert; `_onLoopEnd` unchanged; backward compatible (existing non-subagent sessions emit null for both fields).
+**Delivers:** `iteration` bus events include normalized `tokens: {input, output, total, cached, reasoning}` and `duration_ms` fields. Both OpenAI and Google providers emit non-zero token data on real API calls.
 
-**Addresses:** Subagent trace nesting (table stake #1), arbitrary recursive depth (table stake #2).
+**Implements:**
+- New `ai_debug/models/ai_provider_patch.py` with `threading.local()` capture and dual-provider normalization
+- `models/__init__.py` import of `ai_provider_patch`
+- `ai_session.py` `_run_agentic_loop` modification: `iter_start` timing + `_ai_debug_read_usage()` + new `tokens`/`duration_ms` fields on iteration event
 
-**Avoids:** Pitfall 1 (pending-child buffer), Pitfall 3 (context injection must precede `super()` call — verified pattern from ARCHITECTURE.md).
+**Avoids:** Pitfall 1 (wrong extraction point), Pitfall 2 (single-provider normalization), Pitfall 3 from PITFALLS.md (JS `receivedAt` inaccuracy for the featured timing metric)
 
-### Phase 2: Data Model, IDB Schema, Color Assignment
+**Verification gate:** Open DevTools Network tab or add `console.log` in `_onIteration`; confirm iteration object has `tokens.total > 0` and `duration_ms > 0` for both an OpenAI and a Google model before proceeding.
 
-**Rationale:** IDB changes are independent of live Python events and can proceed in parallel with Phase 1. The flat-Map-with-parent-pointers decision must be locked in before rendering work begins — switching from nested to flat after template code is written is a major refactor. Agent color assignment and IDB persistence for colors are low-complexity and belong here with the data model.
+**Research flag:** None — exact code for `ai_provider_patch.py`, the normalization function, and the `ai_session.py` changes are all fully specified in ARCHITECTURE.md Integration Points 1-3. No deeper research needed.
 
-**Delivers:** `parent_trace_id`, `parent_tool_call_id`, `agent_color` fields on trace objects; `serializeTrace` and `hydrateTrace` updated for all three fields; `agentColors = useState({})` reactive store; `_assignAgentColor` method; sentinel-key `writeAgentColors` / `loadAgentColors` in `db.js`; two-pass hydration (load all traces first, then validate parent pointers); `onWillStart` loads colors before traces.
+---
 
-**Uses:** `@web/core/utils/indexed_db` (existing); sentinel key pattern (no version bump); `useState({})` for color reactivity.
+### Phase 2: Frontend Reactive Store and IDB Persistence
 
-**Implements:** Flat trace store with parent pointers, IDB persistence for colors (ARCHITECTURE.md Q2, Q4).
+**Rationale:** Connect the new bus event fields to the JS reactive store and IDB. The IDB serialization must happen in this phase — not deferred to Phase 3 — to prevent the hydration mismatch pitfall where the live run looks correct but everything shows null after page refresh (the most common silent failure mode for this type of additive change). Computed getters for trace-level totals are the data contract that Phase 3 display components consume.
 
-**Avoids:** Pitfall 2 (flat model decided upfront), Pitfall 4 (colors in `useState`), Pitfall 5 (colors in `useState({})`, not plain Map), Pitfall 6 (sentinel key, no version bump needed), Pitfall 7 (two-pass hydration), Pitfall 8 (linkage fields in `serializeTrace`), Pitfall 9 (colors keyed by `agent_name`).
+**Delivers:** Iteration objects in the reactive Map include `tokens` and `duration_ms`. `traceTokenTotals(trace)` and `traceTimingTotal(trace)` computed getters are available in `app.js`. New fields persist through IDB round-trip: tokens survive `serializeTrace` → IDB write → page refresh → `hydrateTrace`.
 
-### Phase 3: Sidebar Rendering Refactor
+**Implements:**
+- `app.js` `_onIteration`: store `tokens` + `duration_ms` on iteration object
+- `app.js` new getters: `traceTokenTotals()` + `traceTimingTotal()`
+- `db.js` `serializeTrace`: add `tokens` and `duration_ms` to iteration records
+- `app.js` `hydrateTrace`: verify pass-through via spread (likely no code change)
+- Null guards in all JS token arithmetic (`|| 0`); `—` display pattern for error iterations with `has_error: true`
 
-**Rationale:** Depends on Phase 1 (parent pointers in live events) and Phase 2 (parent pointers in store). The `sidebarNodes` computed getter and template refactor are a single coherent change — the getter defines the data contract the template consumes, so they must be implemented together. Selection logic audit is a required step within this phase; skipping it produces incorrect ancestor highlighting for items inside subagent traces.
+**Avoids:** Pitfall 6 (serialization/hydration asymmetry — both functions updated in same commit), Pitfall 7 (DB_VERSION unchanged), Pitfall 9 (trace total computed from iterations, never stored as accumulator), Pitfall 10 (NaN from error iterations — null guard in sum)
 
-**Delivers:** `sidebarNodes` getter with depth-first `renderTrace` recursive helper producing flat ordered node array; single `t-foreach` template over `sidebarNodes`; depth-based `padding-left` indentation; agent color swatch on trace rows; `iteration.expanded` toggle removed; `getRootTraceId(traceId)` helper; all selection getters audited.
+**Verification gate:** Run a trace, confirm live tokens appear; reload page, confirm tokens survive in the hydrated trace across both sidebar and detail view; run a trace that errors, confirm `—` appears rather than NaN.
 
-**Avoids:** Pitfall 4 (selection logic audit), Pitfall 10 (flat iterative rendering, not recursive OWL components).
+**Research flag:** None — all integration points specified with exact code in ARCHITECTURE.md Integration Points 3-5 and 9-10.
 
-### Phase 4: Export/Import Verification and SCSS Polish
+---
 
-**Rationale:** Export/import is the final integration point that exercises the full data lifecycle (Python events -> JS store -> IDB -> serialize -> export -> import -> hydrate -> render). SCSS is last because it has no code dependencies — only element class names from Phase 3. Running the "looks done but isn't" checklist from PITFALLS.md as a structured step before closing the milestone catches silent failures.
+### Phase 3: Display Components, Animation, and Styling
 
-**Delivers:** Export confirmed to include parent linkage fields; import reconstructs nesting correctly (two-pass after load); `.ai-agent-color-swatch` SCSS styling; CSS custom property for depth indentation; PITFALLS.md verification checklist completed and passing.
+**Rationale:** All display work is unblocked once Phase 2 getters exist. Animation strategy must be locked in before writing any counter code: the sidebar count-up is achieved via OWL reactive re-render (no rAF needed); the live elapsed ticker uses `setRecurringAnimationFrame` + `useRef` DOM mutation; sidebar chips use the existing `classList` + `void el.offsetWidth` CSS animation pattern. These decisions eliminate all render-performance risks identified in PITFALLS.md.
 
-**Avoids:** Pitfall 8 (export missing linkage fields — verify by inspecting exported JSON).
+**Delivers:** Sidebar trace rows show `"1.2s · 3,450 tok"` compact metric line counting up with each iteration. `IterationDetail` shows duration + token chips in the header. `LoopDetail` shows a new "Metrics" Notebook tab with per-iteration table and totals row. Live elapsed timer shows in the detail panel header for running traces.
+
+**Implements:**
+- `app.xml`: compact metrics line in trace row using `traceTimingTotal` + `traceTokenTotals` getters (reactive re-render = count-up)
+- `iter_detail.js` + `iter_detail.xml`: `formatDuration()` helper + duration and token chips in detail header
+- `loop_detail.js` + `loop_detail.xml`: `metricsData` getter + Metrics Notebook tab with per-iteration table
+- `app.scss`: `.ai-tree-metrics-line`, `.ai-detail-chip`, `.ai-metrics-table` and related classes using `$o-*` SCSS variables only
+- `ROW_H_TRACE` constant update in `app.js` if trace row gains a third line (44px → 56px); `depthLinePaths` geometry stays in sync
+- Live elapsed ticker in `LoopDetail` using `setRecurringAnimationFrame` at 1-second granularity, started in `onMounted` when `trace.status === "running"`, stopped in `onWillUnmount`
+- CSS animation class trigger via `onPatched` + `classList` (same pattern as existing `ai-tree-flash` animation) for sidebar chip visual flash on each new iteration
+
+**Avoids:** Pitfall 4 (reactive state animation — OWL re-render at event frequency, not rAF), Pitfall 5 (counter jitter — no animation resets to 0; values only increase), Pitfall 8 (RAF vs. OWL DOM conflict — one owner per DOM node)
+
+**Research flag:** None — animation strategy is fully specified using verified patterns from existing `onPatched` + `classList` animation and `setRecurringAnimationFrame` usage in Odoo core.
+
+---
 
 ### Phase Ordering Rationale
 
-- Python instrumentation must come first because there is no parent linkage to observe without it. The pending-child buffer must exist before any subagent can trigger the race condition.
-- Data model decisions (flat Map) must be made before any rendering code — the nested-Map anti-pattern discovered late is the highest-recovery-cost mistake in PITFALLS.md (full refactor).
-- The `sidebarNodes` getter bundles the tree computation and template refactor — splitting them creates an intermediate broken state where the getter exists but the template still uses the old nested `t-foreach`.
-- Export/import verification is last because it exercises the complete stack and is the best integration test for all earlier phases working together.
+- **Phase 1 must complete before Phase 2** — no token data on the bus means no iteration object field to store, and there is nothing to validate the extraction is correct.
+- **Phase 2 must complete before Phase 3** — display components read from the store; building templates before the getters exist produces false null/zero displays that look identical to real failures.
+- **IDB persistence belongs in Phase 2, not Phase 3** — deferring `serializeTrace` creates a gap where the live run looks correct but hydration fails silently; this is the most common form of confidence trap for additive field work.
+- **Phase 3 components are independent of each other** — sidebar metrics line, `IterationDetail` chips, and `LoopDetail` Metrics tab can be implemented in any order once Phase 2 is complete.
+- **No `DB_VERSION` bump across any phase** — the IDB schema does not change for additive JSON fields; confirm in code review that `DB_VERSION` remains `1`.
 
 ### Research Flags
 
-No additional `/gsd:research-phase` is needed for any phase. All patterns are verified from direct source reading. No external APIs, undocumented integrations, or speculative assumptions remain.
+All three phases use fully specified, verified patterns. No phase requires a `gsd:research-phase` invocation.
 
 **Standard patterns (skip research-phase):**
-- **Phase 1 (Python instrumentation):** `env.context` injection before `super()` is a standard Odoo override pattern. `_handle_tool_calls` and `_run_agentic_loop` override structure verified directly from `ai_debug/models/ai_session.py`. `parent_session_id` field existence verified from `enterprise/ai/models/ai_session.py` line 62. No unknowns.
-- **Phase 2 (data model + IDB + colors):** Flat Map with parent pointers is the established OpenTelemetry span model. `useState({})` reactivity for plain objects is verified from existing codebase patterns. Sentinel key approach avoids the `onupgradeneeded` version bump entirely. Two-pass hydration is standard load-then-link. No unknowns.
-- **Phase 3 (rendering):** `sidebarNodes` flat-array pattern eliminates template recursion concerns. CSS depth-indentation is trivial. Selection getter audit is procedural.
-- **Phase 4 (verification + SCSS):** No new patterns. Checklist-driven.
+- **Phase 1:** Thread-local `_request` patch with normalization, both provider field name mappings, and `_run_agentic_loop` timing modifications are all fully specified with exact code in ARCHITECTURE.md.
+- **Phase 2:** All integration points have exact code. Hydration spread behavior confirmed from source. IDB no-bump reasoning verified from `IndexedDB` class `_checkVersion()` implementation.
+- **Phase 3:** OWL reactive re-render as count-up mechanism is verified from the reactive Map + getter pattern. `setRecurringAnimationFrame` usage is confirmed from `@web/core/utils/timing` source. CSS animation class toggle is the existing `ai-tree-flash` pattern.
 
-One empirical check needed during implementation (not a research gap):
-- **IDB sentinel key shape compatibility:** The `loadAllTraces()` function does `getAll()` and processes every record. The sentinel record (key `__agent_colors__`, no `trace_id` field) must be filtered out before `hydrateTrace()` is called on it. Add a `if (!record.trace_id) continue` guard in the hydration loop.
+---
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All technologies verified by direct source reading of the live codebase. No external dependencies introduced. Every import path confirmed reachable from `ai_debug.assets`. |
-| Features | HIGH | Table stakes derived from PROJECT.md requirements (HIGH) and LangSmith/LangFuse/Arize patterns (MEDIUM for UI conventions; HIGH for the underlying principle that subagent causality must be visible). Differentiators and anti-features clearly reasoned from existing architecture. |
-| Architecture | HIGH | `sidebarNodes` getter, flat-Map-with-parent-pointers, `env.context` injection — all derived from direct source reading and reasoned against the full 627-line `app.js`, 201-line `app.xml`, and 143-line `db.js`. Anti-patterns derived from code analysis, not speculation. |
-| Pitfalls | HIGH | Bus event ordering race is empirically grounded (separate cursors, no ordering guarantee — verified from `_ai_debug_bus_send` implementation). OWL reactivity pitfalls verified from existing code patterns and PROJECT.md key decisions. IDB version semantics verified from Odoo `IndexedDB` class source (`_checkVersion()` deletes and recreates on version change). |
+| Stack | HIGH | All patterns verified against enterprise + custom source. No new dependencies. Every import path confirmed. |
+| Features | HIGH | Token field locations confirmed directly from provider service source files (logger calls show exact field names). Feature scope is bounded by PROJECT.md. |
+| Architecture | HIGH | Full data flow traced end-to-end from HTTP response to IDB. All integration points have exact code. Build order dependency graph is explicit with risk ratings per step. |
+| Pitfalls | HIGH | All pitfalls grounded in direct source reading. Root causes confirmed (not inferred). Warning signs and recovery steps specified for each pitfall. |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **`parent_call_id` exact disambiguation for parallel subagents:** When one agent iteration calls multiple subagent tools in the same iteration, matching each child trace to its exact spawning tool call requires threading the LLM's `call_id` through `env.context`. Deferred to v1.4.1 per STACK.md recommendation. The common case (one subagent call per iteration) works correctly with the `parent_session_id` mapping approach. Accept this limitation for v1.4.
+- **`ROW_H_TRACE` value for three-line trace rows:** ARCHITECTURE.md suggests 56px (up from 44px). The exact value should be verified visually with the actual rendered three-line layout at implementation time. Easy to adjust; the only concern is keeping it in sync between `app.js` constant and the CSS.
 
-- **IDB sentinel key shape filter in `loadAllTraces()`:** The sentinel record (key `__agent_colors__`) has no `trace_id` field. The hydration loop must filter it out before calling `hydrateTrace()`. This is a one-line guard, not a design issue.
+- **`AnimatedCounter` component vs. inline `onPatched` approach:** STACK.md documents both a reusable `AnimatedCounter` OWL component (with `useEffect` + rAF) and an inline `onPatched` CSS class-toggle approach. The inline approach (same pattern as `ai-tree-flash`) is simpler and already proven. Recommend locking in the inline approach at implementation start to avoid over-engineering.
 
-- **Color palette contrast on Odoo's actual dark theme:** The 8-slot One Dark Pro palette is documented as having good contrast on dark and light IDE backgrounds but should be spot-checked against Odoo's `$o-gray-100 = #1B1D26` (dark background) and `#F9FAFB` (light background) at implementation time. The 3px border accent requires only 3:1 contrast (WCAG AA for decorative elements) — all 8 slots are expected to pass easily.
-
-## Sources
-
-### Primary (HIGH confidence — direct source reads at worktree paths)
-
-- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/models/ai_session.py` — full instrumentation override (334 lines); `_run_agentic_loop`, `_handle_tool_calls`, `_ai_debug_bus_send`, `_ai_debug_state_snapshot`
-- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/app.js` — reactive store, bus handlers, hydration, selection getters (627 lines)
-- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/app.xml` — sidebar template, 3-level nested `t-foreach` (201 lines)
-- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/db.js` — IDB schema, `serializeTrace`, `hydrateTrace`, `writeTrace`, `loadAllTraces` (143 lines)
-- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/models/ai_session.py` — upstream agentic loop, `_handle_tool_calls` subagent forward, `parent_session_id` field at line 62 (478 lines)
-- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/models/ai_agent.py` — `_ai_tool_request_sub_agent` at line 1339, `make_tool_name`, `parent_session_id` set in create dict at line 1365
-- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/data/ir_actions_server_data.xml` — subagent tool record confirming name "AI: Request Sub-Agent" → `ai_request_sub_agent_{id}`
-- `/Users/joseph/clones/odoo/odoo/.worktrees/master/addons/web/static/src/core/utils/indexed_db.js` — `IndexedDB` class: `read`, `write`, `getAllKeys`, `invalidate`, `execute`, `_checkVersion` (version bump deletes and recreates DB)
-- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/.planning/PROJECT.md` — v1.4 requirements, key decisions, constraints
-
-### Secondary (MEDIUM confidence — training data as of August 2025)
-
-- LangSmith multi-agent run tree — nested child runs under spawning parent; causality via indentation; color coding per run type
-- LangFuse span model — color as type/identity signal (not status); OpenTelemetry-compatible flat span storage with `parent_id`
-- Arize Phoenix agent trace model — flat span storage with `parent_id` pointer; recursive rendering with no hardcoded depth limit
-- OpenTelemetry tracing specification — `parent_span_id` as canonical way to express span causality; flat span model
-- One Dark Pro palette — 8 colors, battle-tested contrast on dark/light IDE backgrounds used across VS Code, Atom, and many terminals
-- WCAG 2.1 — AA minimum 4.5:1 for text, 3:1 for decorative elements (applies to 3px border accent use case)
+- **Anthropic/Claude provider:** Only OpenAI and Google providers are present in the enterprise `ai` module. The normalization function handles both. If Anthropic is added to the enterprise module in the future, a third branch is needed in `ai_provider_patch.py`. Not a v1.5 concern.
 
 ---
 
-*Research completed: 2026-02-23*
+## Sources
+
+### Primary (HIGH confidence — direct source inspection at worktree paths)
+
+- `ai_debug/models/ai_session.py` — existing iteration event structure, `raw_response: item.get('metadata')` at line 206, `_debug_ctx` mutable dict pattern, `loop_end` `duration_ms` timing, `started_at = time.monotonic()` variable
+- `ai_debug/static/src/app/app.js` — OWL reactive architecture, `sidebarNodes` computed getter chain (lines 628-702), `depthLinePaths` reads `sidebarNodes` (line 551), `getIterationDuration()` using `receivedAt` diffs (lines 729-751), `onPatched` DOM pattern with `classList` and `useRef` (lines 342-366)
+- `ai_debug/static/src/app/db.js` — IDB schema, `DB_VERSION = 1`, `serializeTrace` manual field enumeration (lines 37-89), `hydrateTrace` spread pattern (lines 24-47)
+- `ai_debug/static/src/app/app.scss` — existing `@keyframes ai-tree-flash` animation pattern (lines 529-537); confirms CSS animation class-toggle approach
+- `ai/services/ai_api_service_openai.py` lines 86-94 — OpenAI `usage` field structure (`input_tokens`, `output_tokens`, `input_tokens_details`, `output_tokens_details`); confirms `usage` is logged then only `output` list is returned
+- `ai/services/ai_api_service_google.py` lines 75-83 — Google `usageMetadata` field structure (`promptTokenCount`, `candidatesTokenCount`, `cachedContentTokenCount`, `thoughtsTokenCount`); confirms `usageMetadata` is logged then only `[content]` is returned
+- `ai/models/ai_session.py` lines 413-435 — `_run_agentic_loop` yield structure confirming `metadata = response = output list` (not raw HTTP envelope)
+- `odoo/addons/web/static/src/core/utils/timing.js` lines 101-116 — `setRecurringAnimationFrame` implementation confirmed present in bundle
+
+### Secondary (MEDIUM confidence — training knowledge confirmed by codebase patterns)
+
+- OWL 2 `useEffect` reactive model — training knowledge; HIGH confidence by prevalence in Odoo core OWL components and existing `ai_debug` `app.js` patterns
+- `threading.local()` thread-safety for Odoo HTTP workers — training knowledge; HIGH confidence given synchronous request-per-thread Odoo server model
+
+---
+
+*Research completed: 2026-02-24*
 *Ready for roadmap: yes*
