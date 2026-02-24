@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, useRef, onMounted, onWillUnmount, onPatched } from "@odoo/owl";
+import { Component } from "@odoo/owl";
 import { Notebook } from "@web/core/notebook/notebook";
 import { CopyButton } from "@web/core/copy_button/copy_button";
 import { useService } from "@web/core/utils/hooks";
@@ -22,28 +22,6 @@ export class LoopDetail extends Component {
         }
         this.formatTokens = formatTokens;
         this.formatDuration = formatDuration;
-        this.timerRef = useRef("liveTimer");
-        this._timerInterval = null;
-
-        onMounted(() => {
-            if (this.props.trace && this.props.trace.status === "running") {
-                this._startTimer();
-            }
-        });
-
-        onWillUnmount(() => {
-            this._stopTimer();
-        });
-
-        // Watch for status transition: running → complete
-        onPatched(() => {
-            if (!this.props.trace) return;
-            if (this.props.trace.status !== "running") {
-                this._stopTimer();
-            } else if (!this._timerInterval) {
-                this._startTimer();
-            }
-        });
     }
 
     openTextPopup(title, content, language) {
@@ -91,22 +69,4 @@ export class LoopDetail extends Component {
         return { total_input, total_output, total_cached, total_reasoning, total_duration_ms };
     }
 
-    _startTimer() {
-        // Immediately set initial value
-        this._updateTimerDisplay();
-        this._timerInterval = setInterval(() => this._updateTimerDisplay(), 1000);
-    }
-
-    _updateTimerDisplay() {
-        if (!this.timerRef.el || !this.props.trace.started_at) return;
-        const elapsed = Date.now() - this.props.trace.started_at.getTime();
-        this.timerRef.el.textContent = formatDuration(elapsed);
-    }
-
-    _stopTimer() {
-        if (this._timerInterval) {
-            clearInterval(this._timerInterval);
-            this._timerInterval = null;
-        }
-    }
 }
