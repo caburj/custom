@@ -131,6 +131,6 @@ Plans:
 | 13. Python Instrumentation and Bus Event Handling | v1.4 | 2/2 | Complete | 2026-02-23 |
 | 14. Sidebar Tree Nesting | v1.4 | 1/1 | Complete | 2026-02-23 |
 | 15. Data Integrity Fixes | v1.4 | 1/1 | Complete | 2026-02-24 |
-| 16. Backend Token Extraction and Per-Iteration Timing | 1/1 | Complete   | 2026-02-24 | - |
+| 16. Backend Token Extraction and Per-Iteration Timing | 1/1 | Complete    | 2026-02-24 | - |
 | 17. Frontend Reactive Store and IDB Persistence | v1.5 | 0/? | Not started | - |
 | 18. Display Components and Animation | v1.5 | 0/? | Not started | - |
