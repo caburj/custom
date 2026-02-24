@@ -32,7 +32,6 @@ export async function probeIDB() {
  * produces a well-defined schema for Phase 11 hydration and Phase 12 export).
  *
  * Note: expanded (UI-only state) is intentionally excluded.
- * Note: Date objects are preserved as-is — IDB structured clone handles them.
  */
 export function serializeTrace(trace) {
     return {
@@ -43,8 +42,6 @@ export function serializeTrace(trace) {
         model_name: trace.model_name,
         user_query: trace.user_query,
         status: trace.status,
-        started_at: trace.started_at,
-        ended_at: trace.ended_at,
         duration_ms: trace.duration_ms,
         instructions: trace.instructions,
         tools: trace.tools,
@@ -60,7 +57,6 @@ export function serializeTrace(trace) {
                 trace_id: iter.trace_id,
                 iteration_index: iter.iteration_index,
                 has_error: iter.has_error,
-                receivedAt: iter.receivedAt,
                 is_final: iter.is_final,
                 error: iter.error,
                 messages_sent: iter.messages_sent,
@@ -156,9 +152,8 @@ export async function deleteTraces(traceIds) {
  * Returns an array of plain serialized trace records.
  * Returns [] if IDB is unavailable or store is empty.
  *
- * Note: records contain iterations as [iterId, iterRecord] pair arrays
- * and dates as ISO strings — hydrateTrace() in app.js reconstructs the
- * reactive Maps and Date objects.
+ * Note: records contain iterations as [iterId, iterRecord] pair arrays —
+ * hydrateTrace() in app.js reconstructs the reactive Maps.
  */
 export async function loadAllTraces() {
     return idb.execute((db) => {
