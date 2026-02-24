@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.5 Visual Type Hierarchy
+**Current focus:** v1.5 Live Metrics
 
 ## Current Position
 
 Phase: Not started (defining requirements)
 Plan: —
 Status: Defining requirements
-Last activity: 2026-02-24 - Completed quick task 32: Make indented view the default and add CSS vertical depth guide lines
+Last activity: 2026-02-24 — Milestone v1.5 started
 
 ## Milestones Shipped
 
@@ -57,5 +57,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Quick task 32 — make indented view default + CSS vertical depth guide lines
+Stopped at: Starting v1.5 Live Metrics milestone
 Resume file: None
