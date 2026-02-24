@@ -9,8 +9,7 @@
             <span class="ai-detail-name" t-esc="props.trace.agent_name"/>
             <span class="ai-detail-meta" t-esc="props.trace.model_name"/>
             <span t-if="props.trace.status === 'running'"
-                  class="ai-metric-chip ai-metric-chip--live"
-                  t-ref="liveTimer">0s</span>
+                  class="ai-metric-chip ai-metric-chip--live">running</span>
             <span t-elif="props.trace.duration_ms"
                   class="ai-metric-chip">
                 <t t-esc="this.formatDuration(props.trace.duration_ms)"/>
