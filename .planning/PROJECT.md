@@ -8,6 +8,16 @@ A custom Odoo module that instruments the enterprise `ai` module's agentic loop 
 
 Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
 
+## Current Milestone: v1.5 Visual Type Hierarchy
+
+**Goal:** Add visual distinction between trace, iteration, and tool call rows in the flat sidebar — iterations recede as scaffolding, tool calls pop as primary content.
+
+**Target features:**
+- Iteration rows styled as receding scaffolding (muted text, subtle gray background, top border)
+- Tool call rows as primary content (default text, transparent background, full contrast)
+- Type distinction works correctly layered with depth tinting, selected, hover, and ancestor states
+- Both light and dark modes
+
 ## Current State
 
 **Shipped v1.4** (2026-02-24) — Subagent Support
@@ -71,9 +81,10 @@ The module is a fully functional developer tool with:
 
 ### Active
 
-- [ ] Per-agent color-coding assigned on first appearance and persisted to IDB
-- [ ] Agent color legend in sidebar header
-- [ ] Colored agent chip in detail panel header
+- [ ] Iteration rows styled as receding scaffolding (muted text, gray background, top border)
+- [ ] Tool call rows as primary content (full-contrast text, transparent background)
+- [ ] Type distinction layers correctly with depth tinting, selected, hover, and ancestor states
+- [ ] Both light and dark modes render correctly
 
 ### Out of Scope
 
@@ -162,4 +173,4 @@ The module is a fully functional developer tool with:
 | Export cascade via _collectDescendantIds (v1.4) | Same pattern as delete cascade — consistent, proven | ✓ Good — full hierarchy exported |
 
 ---
-*Last updated: 2026-02-24 after v1.4 milestone*
+*Last updated: 2026-02-24 after v1.5 milestone start*

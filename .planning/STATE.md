@@ -5,16 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** Planning next milestone
+**Current focus:** v1.5 Visual Type Hierarchy
 
 ## Current Position
 
-Phase: None — between milestones
-Plan: N/A
-Status: v1.4 Subagent Support shipped
-Last activity: 2026-02-24 - Completed v1.4 milestone archival
-
-Progress: [██████████] v1.4 complete
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-24 — Milestone v1.5 started
 
 ## Milestones Shipped
 
