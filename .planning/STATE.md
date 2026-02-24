@@ -78,9 +78,10 @@ None.
 | 25 | Implement Confirmation Info tab in AI Debugger | 2026-02-22 | 99574e1 | Verified | [25-implement-confirmation-info-tab-in-ai-de](./quick/25-implement-confirmation-info-tab-in-ai-de/) |
 | 26 | Fix IndexedDB NotFoundError after external DB deletion | 2026-02-23 | 9774a91 | | [26-fix-indexeddb-error-when-database-is-del](./quick/26-fix-indexeddb-error-when-database-is-del/) |
 | 27 | Cascade delete descendant traces on bulk delete | 2026-02-23 | 93bd1bc | Verified | [27-when-deleting-a-trace-all-descendant-tra](./quick/27-when-deleting-a-trace-all-descendant-tra/) |
+| 28 | Fix trace title click expanding trace in sidebar | 2026-02-24 | 5bec7dc | | [28-fix-trace-title-click-expanding-trace-in](./quick/28-fix-trace-title-click-expanding-trace-in/) |
 
 ## Session Continuity
 
-Last session: 2026-02-23
-Stopped at: Completed Quick Task 27 — cascade delete for subagent traces
+Last session: 2026-02-24
+Stopped at: Completed Quick Task 28 — fix trace title click expanding trace
 Resume file: None
