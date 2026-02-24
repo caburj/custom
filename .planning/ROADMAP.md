@@ -70,7 +70,7 @@ Full details: `.planning/milestones/v1.4-ROADMAP.md`
 
 **Milestone Goal:** Add real-time animated time and token counters to trace rows and detail panels, with per-iteration breakdown and normalized cross-provider token schema.
 
-- [ ] **Phase 16: Backend Token Extraction and Per-Iteration Timing** — Instrument the provider layer to capture normalized token usage and per-iteration duration into bus events
+- [x] **Phase 16: Backend Token Extraction and Per-Iteration Timing** — Instrument the provider layer to capture normalized token usage and per-iteration duration into bus events (completed 2026-02-24)
 - [ ] **Phase 17: Frontend Reactive Store and IDB Persistence** — Wire new bus event fields into the reactive trace store with computed total getters and symmetric IDB serialization
 - [ ] **Phase 18: Display Components and Animation** — Render compact sidebar metrics, IterationDetail chips, LoopDetail Metrics tab, and live elapsed ticker
 
@@ -86,7 +86,7 @@ Full details: `.planning/milestones/v1.4-ROADMAP.md`
   3. Every iteration event has `duration_ms > 0` (server-measured, not JS receivedAt delta)
   4. Iterations with no token data have all token fields default to 0, not null or undefined
   5. Trace-level total duration is available from the existing `loop_end.duration_ms` field
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 Plans:
 - [ ] 16-01-PLAN.md -- Provider patch, token extraction, and iteration timing
 
@@ -131,6 +131,6 @@ Plans:
 | 13. Python Instrumentation and Bus Event Handling | v1.4 | 2/2 | Complete | 2026-02-23 |
 | 14. Sidebar Tree Nesting | v1.4 | 1/1 | Complete | 2026-02-23 |
 | 15. Data Integrity Fixes | v1.4 | 1/1 | Complete | 2026-02-24 |
-| 16. Backend Token Extraction and Per-Iteration Timing | v1.5 | 0/? | Not started | - |
+| 16. Backend Token Extraction and Per-Iteration Timing | 1/1 | Complete   | 2026-02-24 | - |
 | 17. Frontend Reactive Store and IDB Persistence | v1.5 | 0/? | Not started | - |
 | 18. Display Components and Animation | v1.5 | 0/? | Not started | - |
