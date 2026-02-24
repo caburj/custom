@@ -49,9 +49,10 @@ None.
 | 26 | Fix IndexedDB NotFoundError after external DB deletion | 2026-02-23 | 9774a91 | | [26-fix-indexeddb-error-when-database-is-del](./quick/26-fix-indexeddb-error-when-database-is-del/) |
 | 27 | Cascade delete descendant traces on bulk delete | 2026-02-23 | 93bd1bc | Verified | [27-when-deleting-a-trace-all-descendant-tra](./quick/27-when-deleting-a-trace-all-descendant-tra/) |
 | 28 | Fix trace title click expanding trace in sidebar | 2026-02-24 | 5bec7dc | | [28-fix-trace-title-click-expanding-trace-in](./quick/28-fix-trace-title-click-expanding-trace-in/) |
+| 29 | Add toolbar toggle for SVG guide lines vs indentation mode | 2026-02-24 | 4ca1ee6 | | [29-add-toolbar-toggle-for-svg-guide-lines-v](./quick/29-add-toolbar-toggle-for-svg-guide-lines-v/) |
 
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: v1.4 milestone archived
+Stopped at: Quick task 29 — toolbar toggle for nesting mode
 Resume file: None
