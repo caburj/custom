@@ -9,15 +9,15 @@ Requirements for v1.5 Live Metrics. Each maps to roadmap phases.
 
 ### Token Extraction
 
-- [ ] **TOKN-01**: Backend extracts normalized token usage from OpenAI API responses (input, output, total, cached, reasoning)
-- [ ] **TOKN-02**: Backend extracts normalized token usage from Google API responses (input, output, total, cached, reasoning)
-- [ ] **TOKN-03**: Iteration bus events include a `tokens` field with the normalized schema `{input, output, total, cached, reasoning}`
-- [ ] **TOKN-04**: Missing token fields default to 0 so JS rendering is provider-agnostic
+- [x] **TOKN-01**: Backend extracts normalized token usage from OpenAI API responses (input, output, total, cached, reasoning)
+- [x] **TOKN-02**: Backend extracts normalized token usage from Google API responses (input, output, total, cached, reasoning)
+- [x] **TOKN-03**: Iteration bus events include a `tokens` field with the normalized schema `{input, output, total, cached, reasoning}`
+- [x] **TOKN-04**: Missing token fields default to 0 so JS rendering is provider-agnostic
 
 ### Timing
 
-- [ ] **TIME-01**: Backend captures per-iteration duration via `time.monotonic()` and emits `duration_ms` on iteration bus events
-- [ ] **TIME-02**: Trace-level total duration surfaced from existing `loop_end.duration_ms`
+- [x] **TIME-01**: Backend captures per-iteration duration via `time.monotonic()` and emits `duration_ms` on iteration bus events
+- [x] **TIME-02**: Trace-level total duration surfaced from existing `loop_end.duration_ms`
 
 ### Sidebar Display
 
@@ -64,12 +64,12 @@ Requirements for v1.5 Live Metrics. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TOKN-01 | Phase 16 | Pending |
-| TOKN-02 | Phase 16 | Pending |
-| TOKN-03 | Phase 16 | Pending |
-| TOKN-04 | Phase 16 | Pending |
-| TIME-01 | Phase 16 | Pending |
-| TIME-02 | Phase 16 | Pending |
+| TOKN-01 | Phase 16 | Complete |
+| TOKN-02 | Phase 16 | Complete |
+| TOKN-03 | Phase 16 | Complete |
+| TOKN-04 | Phase 16 | Complete |
+| TIME-01 | Phase 16 | Complete |
+| TIME-02 | Phase 16 | Complete |
 | SIDE-01 | Phase 18 | Pending |
 | SIDE-02 | Phase 17 | Pending |
 | DETL-01 | Phase 18 | Pending |

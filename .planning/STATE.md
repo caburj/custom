@@ -5,22 +5,26 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.5 Live Metrics — Phase 16 ready to plan
+**Current focus:** v1.5 Live Metrics — Phase 16 Plan 01 complete, ready for Phase 17
 
 ## Current Position
 
 Phase: 16 of 18 (Backend Token Extraction and Per-Iteration Timing)
-Plan: —
-Status: Ready to plan
-Last activity: 2026-02-24 — v1.5 roadmap created (phases 16-18)
+Plan: 01 complete
+Status: In progress
+Last activity: 2026-02-24 — Phase 16 Plan 01 complete (token extraction + per-iteration timing)
 
-Progress: [████████████████░░░] 83% (15/18 phases complete)
+Progress: [████████████████░░░] 83% (15/18 phases complete, Phase 16 in progress)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 25
-- v1.0-v1.4 across 15 phases
+- Total plans completed: 26
+- v1.0-v1.4 across 15 phases, v1.5 Phase 16 Plan 01 complete
+
+| Phase | Plan | Duration | Tasks | Files |
+|-------|------|----------|-------|-------|
+| 16    | 01   | 3 min    | 2     | 3     |
 
 *Updated after each plan completion*
 
@@ -35,6 +39,9 @@ Recent decisions affecting current work:
 - Do NOT bump `DB_VERSION` — additive JSON fields on the iteration blob do not require an IDB schema migration
 - Count-up animation requires no rAF infrastructure — OWL reactive re-render at LLM-call frequency (1-30s) provides the visual effect naturally
 - Live elapsed ticker in detail panel: use `setRecurringAnimationFrame` + `useRef` DOM mutation (not reactive state) to avoid 60fps OWL re-render
+- Token total uses raw provider value (not computed from input + output) — matches locked decision
+- Tokens field absent (not null) on errored iterations — absence signals failure
+- pop_last_completion_data() called as first action when iteration item arrives to prevent stale reads
 
 ### Pending Todos
 
@@ -65,5 +72,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: v1.5 roadmap created — ready to plan Phase 16
+Stopped at: Phase 16 Plan 01 complete — token extraction and per-iteration timing backend done
 Resume file: None
