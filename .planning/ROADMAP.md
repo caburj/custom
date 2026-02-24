@@ -112,7 +112,10 @@ Plans:
   2. IterationDetail header shows duration and token count chips for that iteration
   3. LoopDetail Metrics tab shows a per-iteration table (input, output, cached, reasoning tokens + duration) with a totals row
   4. While a trace is actively running, the detail panel header shows a live elapsed timer updating at 1-second intervals
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 18-01-PLAN.md -- Formatting utility, sidebar metrics line, and IterationDetail chips
+- [ ] 18-02-PLAN.md -- LoopDetail Metrics tab and live elapsed timer
 
 ## Progress
 
@@ -135,4 +138,4 @@ Plans:
 | 15. Data Integrity Fixes | v1.4 | 1/1 | Complete | 2026-02-24 |
 | 16. Backend Token Extraction and Per-Iteration Timing | 1/1 | Complete    | 2026-02-24 | - |
 | 17. Frontend Reactive Store and IDB Persistence | 1/1 | Complete    | 2026-02-24 | - |
-| 18. Display Components and Animation | v1.5 | 0/? | Not started | - |
+| 18. Display Components and Animation | v1.5 | 0/2 | Not started | - |
