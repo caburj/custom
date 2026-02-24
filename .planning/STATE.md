@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-24)
 Phase: 18 of 18 (all phases complete)
 Plan: All complete
 Status: v1.5 milestone shipped
-Last activity: 2026-02-24 - Completed v1.5 Live Metrics milestone
+Last activity: 2026-02-24 - Completed quick task 36: Remove client-side JS-derived duration values from ai-debug UI
 
 Progress: [████████████████████] 100% (18/18 phases complete, 6 milestones shipped)
 
@@ -63,7 +63,7 @@ None.
 | 33 | Inline sidebar trace metrics into agent/model meta line | 2026-02-24 | 752369c | | [33-in-the-sidebar-inline-the-metrics-to-the](./quick/33-in-the-sidebar-inline-the-metrics-to-the/) |
 | 34 | Change token display to directional up/down arrows | 2026-02-24 | 576ebb7 | | [34-change-token-display-format-to-use-up-do](./quick/34-change-token-display-format-to-use-up-do/) |
 | 35 | Show actual iteration duration and in/out tokens in sidebar | 2026-02-24 | 4e8f602 | Verified | [35-show-actual-iteration-duration-and-in-ou](./quick/35-show-actual-iteration-duration-and-in-ou/) |
-| 36 | Remove client-side JS-derived duration values | 2026-02-24 | 5871a55 | | [36-remove-client-side-js-derived-duration-v](./quick/36-remove-client-side-js-derived-duration-v/) |
+| 36 | Remove client-side JS-derived duration values | 2026-02-24 | 5871a55 | Verified | [36-remove-client-side-js-derived-duration-v](./quick/36-remove-client-side-js-derived-duration-v/) |
 
 ## Session Continuity
 
