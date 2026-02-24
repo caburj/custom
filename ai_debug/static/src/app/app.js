@@ -276,11 +276,33 @@ export class AiDebugApp extends Component {
             for (const plain of stored) {
                 this.traces.set(plain.trace_id, hydrateTrace(plain));
             }
-            // Auto-select first trace if any hydrated (SESS-03: auto-select when nothing selected)
+            // Second pass: validate parent pointers, promote orphans to root.
+            // A trace is an orphan when its parent_trace_id points to a trace
+            // that is no longer in IDB (e.g. was deleted externally). Nulling
+            // both parent fields makes sidebarNodes treat it as a root trace,
+            // consistent with the !t.parent_trace_id root-detection rule.
+            for (const trace of this.traces.values()) {
+                if (trace.parent_trace_id && !this.traces.has(trace.parent_trace_id)) {
+                    trace.parent_trace_id = null;
+                    trace.parent_tool_call_id = null;
+                }
+            }
+            // Auto-select newest root trace if nothing is selected (SESS-03).
+            // Must filter to root traces only — never auto-select a subagent
+            // child trace, as that would confuse the detail panel context.
             if (this.state.selectedId === null && this.traces.size > 0) {
-                const firstKey = [...this.traces.keys()].at(-1); // at(-1) = top of reversed list
-                this.state.selectedId = firstKey;
-                this.state.selectedType = "trace";
+                let bestTrace = null;
+                for (const trace of this.traces.values()) {
+                    if (!trace.parent_trace_id) {
+                        if (!bestTrace || (trace.created_ts || 0) > (bestTrace.created_ts || 0)) {
+                            bestTrace = trace;
+                        }
+                    }
+                }
+                if (bestTrace) {
+                    this.state.selectedId = bestTrace.trace_id;
+                    this.state.selectedType = "trace";
+                }
             }
         });
 
