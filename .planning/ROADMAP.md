@@ -99,7 +99,9 @@ Plans:
   2. After a page refresh, hydrated iterations still have `tokens` and `duration_ms` (IDB round-trip preserved the data)
   3. The sidebar token/time counters increment visually as each new iteration event arrives during a live run
   4. An errored iteration that returns no tokens shows a safe display value (no NaN or crash)
-**Plans**: TBD
+**Plans:** 1 plan
+Plans:
+- [ ] 17-01-PLAN.md -- Reactive store token/timing fields, normalizeTokens, getTraceTotals, IDB round-trip
 
 ### Phase 18: Display Components and Animation
 **Goal**: Developers can read time and token metrics at a glance in the sidebar and drill into per-iteration breakdowns in detail panels
@@ -132,5 +134,5 @@ Plans:
 | 14. Sidebar Tree Nesting | v1.4 | 1/1 | Complete | 2026-02-23 |
 | 15. Data Integrity Fixes | v1.4 | 1/1 | Complete | 2026-02-24 |
 | 16. Backend Token Extraction and Per-Iteration Timing | 1/1 | Complete    | 2026-02-24 | - |
-| 17. Frontend Reactive Store and IDB Persistence | v1.5 | 0/? | Not started | - |
+| 17. Frontend Reactive Store and IDB Persistence | v1.5 | 0/1 | Not started | - |
 | 18. Display Components and Animation | v1.5 | 0/? | Not started | - |
