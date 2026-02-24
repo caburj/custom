@@ -125,4 +125,4 @@ Plans:
 | 12. Export and Import | v1.3 | 2/2 | Complete | 2026-02-22 |
 | 13. Python Instrumentation and Bus Event Handling | v1.4 | 2/2 | Complete | 2026-02-23 |
 | 14. Sidebar Tree Nesting | v1.4 | 1/1 | Complete | 2026-02-23 |
-| 15. Data Integrity Fixes | 1/1 | Complete   | 2026-02-24 | — |
+| 15. Data Integrity Fixes | 1/1 | Complete    | 2026-02-24 | — |
