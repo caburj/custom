@@ -6,7 +6,7 @@
 - ✅ **v1.1 Live Tracer Standalone App** — Phases 4-7 (shipped 2026-02-22)
 - ✅ **v1.2 Native Theming** — Phases 8-9 (shipped 2026-02-22)
 - ✅ **v1.3 Local Persistence** — Phases 10-12 (shipped 2026-02-22)
-- 🚧 **v1.4 Subagent Support** — Phases 13-15 (in progress)
+- 🚧 **v1.4 Subagent Support** — Phases 13-15 (in progress, gap closure)
 
 ## Phases
 
@@ -56,10 +56,11 @@ Full details: `.planning/milestones/v1.3-ROADMAP.md`
 
 ### 🚧 v1.4 Subagent Support (In Progress)
 
-**Milestone Goal:** Visualize subagent hierarchies in the debugger — nest subagent traces under the tool call that spawned them, flatten the within-trace tree, and color-code agents.
+**Milestone Goal:** Visualize subagent hierarchies in the debugger — nest subagent traces under the tool call that spawned them, flatten the within-trace tree, and ensure data integrity across export/import and page refresh.
 
 - [x] **Phase 13: Python Instrumentation and Bus Event Handling** - Backend emits parent linkage in bus events; frontend buffers out-of-order child traces (completed 2026-02-23)
 - [x] **Phase 14: Sidebar Tree Nesting** - Computed sidebarNodes tree with flat within-trace layout, guide lines, and IDB parent linkage serialization (completed 2026-02-23)
+- [ ] **Phase 15: Data Integrity Fixes** - Export cascades to subagent descendants; orphan traces excluded from auto-selection
 
 ## Phase Details
 
@@ -90,10 +91,20 @@ Plans:
 Plans:
 - [x] 14-01-PLAN.md -- sidebarNodes getter, template rewrite to single t-foreach, SCSS guide lines, flat within-trace layout, serializeTrace() parent linkage fix
 
+### Phase 15: Data Integrity Fixes
+**Goal**: Export cascades to subagent descendants; orphan traces excluded from auto-selection
+**Depends on**: Phase 14
+**Requirements**: DATA-01, DATA-02, DATA-03
+**Gap Closure:** Closes gaps from v1.4 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. Exporting a root trace that has subagent descendants includes all descendant traces in the JSON — re-importing reconstructs the full nested hierarchy
+  2. Auto-select logic does not select a trace whose `parent_trace_id` points to a non-existent parent — orphan traces never appear in the detail panel
+  3. serializeTrace()/hydrateTrace() roundtrip preserves parent linkage fields (already working, formal closure)
+
 ## Progress
 
 **Execution Order:**
-13 → 14 (originally Phase 15, renumbered after Phase 14 removal)
+13 → 14 → 15 (Phase 15 added for gap closure after milestone audit)
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -111,3 +122,4 @@ Plans:
 | 12. Export and Import | v1.3 | 2/2 | Complete | 2026-02-22 |
 | 13. Python Instrumentation and Bus Event Handling | v1.4 | 2/2 | Complete | 2026-02-23 |
 | 14. Sidebar Tree Nesting | v1.4 | 1/1 | Complete | 2026-02-23 |
+| 15. Data Integrity Fixes | v1.4 | 0/0 | Pending | — |
