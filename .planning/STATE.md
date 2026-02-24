@@ -9,7 +9,7 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 
 ## Current Position
 
-Phase: 15 of 15 (Sidebar Rendering)
+Phase: 15 of 14 (Sidebar Rendering)
 Plan: 01 complete
 Status: All tasks complete — visual verification approved, post-checkpoint fixes committed
 Last activity: 2026-02-23 - Completed quick task 27: when deleting a trace, all descendant traces should be deleted
