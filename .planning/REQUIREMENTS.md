@@ -21,12 +21,12 @@ Requirements for v1.5 Live Metrics. Each maps to roadmap phases.
 
 ### Sidebar Display
 
-- [ ] **SIDE-01**: Trace rows show compact metrics line with total time and total tokens (e.g. `"1.2s · 3,450 tok"`)
+- [x] **SIDE-01**: Trace rows show compact metrics line with total time and total tokens (e.g. `"1.2s · 3,450 tok"`)
 - [x] **SIDE-02**: Sidebar token/time counters increment visually as new iteration events arrive (OWL reactive count-up)
 
 ### Detail Panel
 
-- [ ] **DETL-01**: IterationDetail shows duration and token count chips in the header
+- [x] **DETL-01**: IterationDetail shows duration and token count chips in the header
 - [ ] **DETL-02**: LoopDetail shows a Metrics tab with per-iteration token/timing table and trace-level totals row
 - [ ] **DETL-03**: Detail panel shows live elapsed timer for running traces (updates at 1-second granularity)
 
@@ -70,9 +70,9 @@ Requirements for v1.5 Live Metrics. Each maps to roadmap phases.
 | TOKN-04 | Phase 16 | Complete |
 | TIME-01 | Phase 16 | Complete |
 | TIME-02 | Phase 16 | Complete |
-| SIDE-01 | Phase 18 | Pending |
+| SIDE-01 | Phase 18 | Complete |
 | SIDE-02 | Phase 17 | Complete |
-| DETL-01 | Phase 18 | Pending |
+| DETL-01 | Phase 18 | Complete |
 | DETL-02 | Phase 18 | Pending |
 | DETL-03 | Phase 18 | Pending |
 | PERS-01 | Phase 17 | Complete |

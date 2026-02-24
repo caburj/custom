@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.5 Live Metrics — Phase 17 Plan 01 complete, ready for Phase 17 Plan 02 or Phase 18
+**Current focus:** v1.5 Live Metrics — Phase 18 Plan 01 complete, ready for Phase 18 Plan 02
 
 ## Current Position
 
-Phase: 17 of 18 (Frontend Reactive Store and IDB Persistence)
+Phase: 18 of 18 (Display Components and Animation)
 Plan: 01 complete
 Status: In progress
-Last activity: 2026-02-24 — Phase 17 Plan 01 complete (reactive store token/timing wiring + IDB round-trip)
+Last activity: 2026-02-24 — Phase 18 Plan 01 complete (format_metrics.js, sidebar metrics line, IterationDetail chips)
 
 Progress: [████████████████░░░] 88% (16/18 phases complete, Phase 17 in progress)
 
@@ -28,6 +28,8 @@ Progress: [████████████████░░░] 88% (16/18
 | 17    | 01   | 1 min    | 2     | 2     |
 
 *Updated after each plan completion*
+
+| 18    | 01   | 2 min    | 2     | 6     |
 
 ## Accumulated Context
 
@@ -46,6 +48,9 @@ Recent decisions affecting current work:
 - normalizeTokens maps backend 'cached' field to store 'cache_read' (locked schema decision); cache_write always 0 — no backend field exists yet
 - hydrateTrace uses ?? operator (not normalizeTokens) for zero-defaulting pre-Phase 17 records — stored records already have cache_read key
 - getTraceTotals reads through reactive proxy chain for OWL re-render on token changes (SIDE-02 precondition satisfied)
+- [Phase 18]: Keep _formatDuration in AiDebugApp for getIterationDuration callers; bind new formatDuration separately for template use
+- [Phase 18]: Monochrome ai-metric-chip (gray-200/gray-700) — no color-coding by metric type for clean developer-tool aesthetic
+- [Phase 18]: ai-metric-chip designed as reusable class in app.scss for Plan 02 LoopDetail and live timer chip
 
 ### Pending Todos
 
@@ -76,5 +81,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Phase 17 Plan 01 complete — OWL reactive store token/timing wiring + IDB round-trip persistence done
+Stopped at: Phase 18 Plan 01 complete — format_metrics.js utility, sidebar metrics line, IterationDetail header chips done
 Resume file: None
