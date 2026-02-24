@@ -22,7 +22,7 @@ Requirements for v1.5 Live Metrics. Each maps to roadmap phases.
 ### Sidebar Display
 
 - [ ] **SIDE-01**: Trace rows show compact metrics line with total time and total tokens (e.g. `"1.2s · 3,450 tok"`)
-- [ ] **SIDE-02**: Sidebar token/time counters increment visually as new iteration events arrive (OWL reactive count-up)
+- [x] **SIDE-02**: Sidebar token/time counters increment visually as new iteration events arrive (OWL reactive count-up)
 
 ### Detail Panel
 
@@ -32,8 +32,8 @@ Requirements for v1.5 Live Metrics. Each maps to roadmap phases.
 
 ### Persistence
 
-- [ ] **PERS-01**: Token and timing data persists through IDB round-trip (serializeTrace/hydrateTrace updated symmetrically)
-- [ ] **PERS-02**: IDB schema version remains unchanged (no DB_VERSION bump)
+- [x] **PERS-01**: Token and timing data persists through IDB round-trip (serializeTrace/hydrateTrace updated symmetrically)
+- [x] **PERS-02**: IDB schema version remains unchanged (no DB_VERSION bump)
 
 ## Future Requirements
 
@@ -71,12 +71,12 @@ Requirements for v1.5 Live Metrics. Each maps to roadmap phases.
 | TIME-01 | Phase 16 | Complete |
 | TIME-02 | Phase 16 | Complete |
 | SIDE-01 | Phase 18 | Pending |
-| SIDE-02 | Phase 17 | Pending |
+| SIDE-02 | Phase 17 | Complete |
 | DETL-01 | Phase 18 | Pending |
 | DETL-02 | Phase 18 | Pending |
 | DETL-03 | Phase 18 | Pending |
-| PERS-01 | Phase 17 | Pending |
-| PERS-02 | Phase 17 | Pending |
+| PERS-01 | Phase 17 | Complete |
+| PERS-02 | Phase 17 | Complete |
 
 **Coverage:**
 - v1.5 requirements: 13 total
