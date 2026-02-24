@@ -107,3 +107,37 @@
 
 ---
 
+
+## v1.4 Subagent Support (Shipped: 2026-02-24)
+
+**Phases completed:** 3 phases, 4 plans, 9 tasks
+**Commits:** 8 feat commits (a6e5758 → 1132803)
+**Code changes:** 837 insertions, 176 deletions across 14 files
+**Timeline:** 4 days (2026-02-20 → 2026-02-24)
+
+**Delivered:** Subagent hierarchy nesting in the sidebar — subagent traces nest under the tool call that spawned them with arbitrary depth, flat within-trace layout, and full data integrity across export/import and page refresh.
+
+**Key accomplishments:**
+- Python parent linkage: new_trace includes session_id, parent_trace_id, parent_tool_call_id for subagent causality chain
+- Split tool_call events into tool_call_started/completed with stable UUID correlation via pre-generated _tc_id_map
+- Pending-child buffer with 30s timeout prevents out-of-order bus events from misplacing child traces at root
+- Sidebar tree rewrite: single flat t-foreach over computed sidebarNodes getter with arbitrary-depth nesting and VS Code guide lines
+- Export cascade via _collectDescendantIds() includes all subagent descendant traces in JSON export
+- Two-pass IDB hydration with orphan promotion and root-only auto-select on page refresh
+
+**Key decisions:**
+- Flat Map with parent pointers (not nested trace objects) — preserves all existing lookup, serialize, and selection functions
+- sidebarNodes computed getter (flat array) + single t-foreach — avoids recursive OWL component anti-pattern
+- _pendingChildren buffer keyed by LLM call_id — child traces arriving before parent tool call are buffered and attached when parent arrives
+- Checkboxes only on depth===0 trace rows — subagent traces excluded from bulk select/delete
+- COLR-01-05 descoped to v1.5 after initial audit identified scope gap
+
+**Known tech debt:**
+- TREE-01/TREE-02: visual nesting verified in code but needs human browser confirmation
+- DATA-02/DATA-03: export/import and orphan promotion need human browser confirmation
+- _applyImport does not run orphan-promotion pass (unreachable via normal export flow)
+- CSS depth tint caps at 4 levels while JS tracks exact depth
+- ai_parent_tool_call_id depends on base enterprise class setting tools_context['tool_call_id'] — fragile coupling
+
+---
+
