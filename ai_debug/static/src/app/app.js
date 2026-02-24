@@ -57,7 +57,6 @@ function hydrateTrace(plain) {
         }
         iterations.set(iterId, {
             ...iter,
-            receivedAt: iter.receivedAt ? new Date(iter.receivedAt) : null,
             expanded: true,
             toolCalls,
             // Phase 17: zero-default for pre-17 IDB records that lack these fields.
@@ -72,9 +71,7 @@ function hydrateTrace(plain) {
     }
     return {
         ...plain,
-        started_at: plain.started_at ? new Date(plain.started_at) : null,
-        ended_at: plain.ended_at ? new Date(plain.ended_at) : null,
-        created_ts: plain.created_ts || (plain.started_at ? new Date(plain.started_at).getTime() : 0),
+        created_ts: plain.created_ts || plain.storedAt || 0,
         expanded: false,
         hydrated: true,
         iterations,
@@ -191,7 +188,6 @@ export class AiDebugApp extends Component {
                     trace_id: payload.trace_id,
                     iteration_index: payload.iteration_index,
                     has_error: !!payload.error,
-                    receivedAt: new Date(),
                     expanded: true,
                     toolCalls,
                     // Phase 7: full payload for detail panel
@@ -289,7 +285,6 @@ export class AiDebugApp extends Component {
                     : payload.termination_reason === "max_iterations"
                     ? "max_iterations"
                     : "error";
-            trace.ended_at = new Date();
             trace.duration_ms = payload.duration_ms;
             // NEVER touch this.state.selectedId here — SIDE-05
 
@@ -317,8 +312,8 @@ export class AiDebugApp extends Component {
             // Sort oldest-first so Map insertion order is chronological;
             // the template's .reverse() then yields newest-first display.
             stored.sort((a, b) =>
-                (a.created_ts || new Date(a.started_at || 0).getTime()) -
-                (b.created_ts || new Date(b.started_at || 0).getTime())
+                (a.created_ts || a.storedAt || 0) -
+                (b.created_ts || b.storedAt || 0)
             );
             for (const plain of stored) {
                 this.traces.set(plain.trace_id, hydrateTrace(plain));
@@ -423,8 +418,6 @@ export class AiDebugApp extends Component {
             user_query: payload.user_query || "",
             status: "running",
             created_ts: Date.now(),
-            started_at: new Date(),
-            ended_at: null,
             duration_ms: null,
             expanded: true,
             iterations,
@@ -765,42 +758,6 @@ export class AiDebugApp extends Component {
         return descendants;
     }
 
-    // ----------------------------------------------------------------
-    // Iteration duration helpers
-    // ----------------------------------------------------------------
-
-    getIterationDuration(trace, iterationId) {
-        const iterationKeys = [...trace.iterations.keys()];
-        const idx = iterationKeys.indexOf(iterationId);
-        const iteration = trace.iterations.get(iterationId);
-        if (!iteration) return null;
-
-        // Find next iteration (in insertion order) to compute delta
-        const nextKey = iterationKeys[idx + 1];
-        if (nextKey) {
-            const nextIteration = trace.iterations.get(nextKey);
-            const delta = nextIteration.receivedAt - iteration.receivedAt;
-            return this._formatDuration(delta);
-        }
-
-        // Last iteration: if loop is complete, use loop end time
-        if (trace.ended_at) {
-            const delta = trace.ended_at - iteration.receivedAt;
-            return this._formatDuration(delta);
-        }
-
-        // Still running — no duration yet
-        return null;
-    }
-
-    _formatDuration(ms) {
-        if (ms < 1000) return `${Math.round(ms)}ms`;
-        if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-        const mins = Math.floor(ms / 60000);
-        const secs = Math.round((ms % 60000) / 1000);
-        return `${mins}m ${secs}s`;
-    }
-
     /**
      * Compute trace-level token and timing aggregates across all iterations.
      *
@@ -1063,8 +1020,8 @@ export class AiDebugApp extends Component {
         // Sort oldest-first so Map insertion order is chronological;
         // the template's .reverse() then yields newest-first display.
         records.sort((a, b) =>
-            (a.created_ts || new Date(a.started_at || 0).getTime()) -
-            (b.created_ts || new Date(b.started_at || 0).getTime())
+            (a.created_ts || a.storedAt || 0) -
+            (b.created_ts || b.storedAt || 0)
         );
         for (const record of records) {
             const hydrated = hydrateTrace(record);
