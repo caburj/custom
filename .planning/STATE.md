@@ -80,9 +80,10 @@ None.
 | 30 | Fix indentation mode visual hierarchy (iter/tc row nesting) | 2026-02-24 | 8284199 | | [30-in-the-last-quick-task-toggle-between-ne](./quick/30-in-the-last-quick-task-toggle-between-ne/) |
 | 31 | Fix nested trace indentation under tool calls in indentation mode | 2026-02-24 | 5169a94 | Verified | [31-fix-nested-trace-indentation-under-tool-](./quick/31-fix-nested-trace-indentation-under-tool-/) |
 | 32 | Make indented view the default and add CSS vertical depth guide lines | 2026-02-24 | 6a07093 | Verified | [32-make-indented-view-the-default-and-rende](./quick/32-make-indented-view-the-default-and-rende/) |
+| 33 | Inline sidebar trace metrics into agent/model meta line | 2026-02-24 | 752369c | | [33-in-the-sidebar-inline-the-metrics-to-the](./quick/33-in-the-sidebar-inline-the-metrics-to-the/) |
 
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Phase 18 Plan 02 complete — LoopDetail Metrics tab, live timer with DOM mutation, accounting-style totals row
+Stopped at: Quick task 33 complete — inlined sidebar trace metrics into meta line
 Resume file: None
