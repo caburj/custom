@@ -100,6 +100,9 @@ Plans:
   1. Exporting a root trace that has subagent descendants includes all descendant traces in the JSON — re-importing reconstructs the full nested hierarchy
   2. Auto-select logic does not select a trace whose `parent_trace_id` points to a non-existent parent — orphan traces never appear in the detail panel
   3. serializeTrace()/hydrateTrace() roundtrip preserves parent linkage fields (already working, formal closure)
+**Plans:** 1 plan
+Plans:
+- [ ] 15-01-PLAN.md -- Export cascade, two-pass IDB hydration, orphan promotion, root-only auto-select, DATA-01 verification
 
 ## Progress
 
@@ -122,4 +125,4 @@ Plans:
 | 12. Export and Import | v1.3 | 2/2 | Complete | 2026-02-22 |
 | 13. Python Instrumentation and Bus Event Handling | v1.4 | 2/2 | Complete | 2026-02-23 |
 | 14. Sidebar Tree Nesting | v1.4 | 1/1 | Complete | 2026-02-23 |
-| 15. Data Integrity Fixes | v1.4 | 0/0 | Pending | — |
+| 15. Data Integrity Fixes | v1.4 | 0/1 | Planned | — |
