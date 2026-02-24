@@ -66,7 +66,7 @@ export class AiDebugApp extends Component {
             selectedType: null,   // 'trace' | 'iteration' | 'tool_call'
             ephemeralMode: false, // true when IDB is unavailable (private browsing or write failure)
             checkedTraceIds: new Set(),  // Phase 11: checkbox selection for bulk delete
-            sidebarWidth: 280,
+            sidebarWidth: 420,
         });
 
         // Sidebar DOM ref for auto-scroll
@@ -493,6 +493,14 @@ export class AiDebugApp extends Component {
     // No recursive OWL components; a single t-foreach renders this array.
     // ----------------------------------------------------------------
 
+    // Depth staircase line constants — keep in sync with SCSS row heights
+    static DEPTH_LINE_BASE_X = 6;
+    static DEPTH_LINE_STEP_X = 4;
+    static DEPTH_LINE_TRANSITION_H = 16;
+    static DEPTH_LINE_COLORS = ["#3b82f6", "#14b8a6", "#a855f7", "#f59e0b", "#f43f5e"];
+    static ROW_H_TRACE = 44;
+    static ROW_H_DEFAULT = 34;
+
     /**
      * Returns a flat array of node descriptors representing the full sidebar
      * tree in display order (depth-first, newest-first within siblings).
@@ -501,6 +509,89 @@ export class AiDebugApp extends Component {
      * Called during OWL render — reactive reads on this.traces and nested
      * reactive Maps are tracked here, so any mutation triggers re-render.
      */
+    /**
+     * Total pixel height of all sidebar rows — used for SVG viewBox height.
+     * Coupled to CSS: trace rows = 44px, iter/tc rows = 34px.
+     */
+    get depthLineTotalHeight() {
+        const C = this.constructor;
+        return this.sidebarNodes.reduce(
+            (h, n) => h + (n.type === "trace" ? C.ROW_H_TRACE : C.ROW_H_DEFAULT), 0
+        );
+    }
+
+    /**
+     * Compute SVG path descriptors for the depth staircase line.
+     * Returns [{d, color}, ...] — vertical segments + S-curve transitions.
+     */
+    get depthLinePaths() {
+        const nodes = this.sidebarNodes;
+        if (nodes.length === 0) return [];
+
+        const C = this.constructor;
+        const BX = C.DEPTH_LINE_BASE_X;
+        const SX = C.DEPTH_LINE_STEP_X;
+        const TH = C.DEPTH_LINE_TRANSITION_H;
+        const COLORS = C.DEPTH_LINE_COLORS;
+
+        // Pass 1: compute y-positions from known row heights
+        let y = 0;
+        const pos = [];
+        for (const node of nodes) {
+            const h = node.type === "trace" ? C.ROW_H_TRACE : C.ROW_H_DEFAULT;
+            pos.push({ top: y, bottom: y + h, depth: Math.min(node.depth, 4) });
+            y += h;
+        }
+
+        // Pass 2: group consecutive rows by depth
+        const groups = [];
+        let gStart = 0;
+        for (let i = 1; i <= pos.length; i++) {
+            if (i === pos.length || pos[i].depth !== pos[gStart].depth) {
+                groups.push({
+                    depth: pos[gStart].depth,
+                    yTop: pos[gStart].top,
+                    yBot: pos[i - 1].bottom,
+                });
+                gStart = i;
+            }
+        }
+
+        // Pass 3: build path segments
+        const paths = [];
+        for (let g = 0; g < groups.length; g++) {
+            const grp = groups[g];
+            const x = BX + grp.depth * SX;
+            const color = COLORS[grp.depth] || COLORS[4];
+
+            // Vertical extent, trimmed by transition zones
+            let yStart = grp.yTop;
+            let yEnd = grp.yBot;
+            if (g > 0) yStart += TH / 2;
+            if (g < groups.length - 1) yEnd -= TH / 2;
+
+            if (yEnd > yStart) {
+                paths.push({ d: `M ${x},${yStart} L ${x},${yEnd}`, color });
+            }
+
+            // S-curve transition to next group
+            if (g < groups.length - 1) {
+                const next = groups[g + 1];
+                const nx = BX + next.depth * SX;
+                const boundary = grp.yBot;
+                const cy0 = boundary - TH / 2;
+                const cy1 = boundary + TH / 2;
+                const curveColor = COLORS[Math.max(grp.depth, next.depth)] || COLORS[4];
+                paths.push({
+                    d: `M ${x},${cy0} C ${x},${boundary} ${nx},${boundary} ${nx},${cy1}`,
+                    color: curveColor,
+                });
+            }
+        }
+
+        return paths;
+    }
+
     get sidebarNodes() {
         const nodes = [];
         // Root traces: those without a parent_trace_id, newest-first
