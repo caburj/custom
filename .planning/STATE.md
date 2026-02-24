@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-24)
 Phase: 18 of 18 (Display Components and Animation)
 Plan: 02 complete
 Status: Complete
-Last activity: 2026-02-24 - Completed quick task 34: change token display to directional arrows
+Last activity: 2026-02-24 - Completed quick task 35: Show actual iteration duration and in/out tokens in sidebar iteration rows
 
 Progress: [████████████████░░░] 88% (16/18 phases complete, Phase 17 in progress)
 
@@ -82,7 +82,7 @@ None.
 | 32 | Make indented view the default and add CSS vertical depth guide lines | 2026-02-24 | 6a07093 | Verified | [32-make-indented-view-the-default-and-rende](./quick/32-make-indented-view-the-default-and-rende/) |
 | 33 | Inline sidebar trace metrics into agent/model meta line | 2026-02-24 | 752369c | | [33-in-the-sidebar-inline-the-metrics-to-the](./quick/33-in-the-sidebar-inline-the-metrics-to-the/) |
 | 34 | Change token display to directional up/down arrows | 2026-02-24 | 576ebb7 | | [34-change-token-display-format-to-use-up-do](./quick/34-change-token-display-format-to-use-up-do/) |
-| 35 | Show actual iteration duration and in/out tokens in sidebar | 2026-02-24 | 4e8f602 | | [35-show-actual-iteration-duration-and-in-ou](./quick/35-show-actual-iteration-duration-and-in-ou/) |
+| 35 | Show actual iteration duration and in/out tokens in sidebar | 2026-02-24 | 4e8f602 | Verified | [35-show-actual-iteration-duration-and-in-ou](./quick/35-show-actual-iteration-duration-and-in-ou/) |
 
 ## Session Continuity
 
