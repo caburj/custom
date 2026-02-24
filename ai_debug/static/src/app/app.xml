@@ -34,6 +34,12 @@
                         <span>Traces</span>
                     </div>
                     <div class="ai-tree-header-actions">
+                        <button class="ai-tree-action-btn ai-tree-nesting-toggle"
+                                t-on-click="toggleNestingMode"
+                                t-att-title="state.nestingMode === 'lines' ? 'Switch to indentation' : 'Switch to guide lines'">
+                            <t t-if="state.nestingMode === 'lines'">&#x2502;</t>
+                            <t t-else="">&#x2261;</t>
+                        </button>
                         <button class="ai-tree-action-btn"
                                 t-att-disabled="state.checkedTraceIds.size === 0 or undefined"
                                 t-on-click="exportSelected"
@@ -49,10 +55,10 @@
                 </div>
 
                 <!-- Scrollable tree content area — t-ref here so scrollIntoView targets the right container -->
-                <div class="ai-tree-content" t-ref="sidebar">
+                <div t-attf-class="ai-tree-content {{ state.nestingMode === 'indent' ? 'ai-indent-mode' : '' }}" t-ref="sidebar">
 
                 <!-- Depth staircase line — SVG overlay, scrolls with content -->
-                <svg t-if="sidebarNodes.length > 0"
+                <svg t-if="sidebarNodes.length > 0 and state.nestingMode === 'lines'"
                      class="ai-depth-line-svg"
                      t-att-height="depthLineTotalHeight"
                      width="50"
