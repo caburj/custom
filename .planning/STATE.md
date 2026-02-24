@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-24)
 Phase: Not started (defining requirements)
 Plan: —
 Status: Defining requirements
-Last activity: 2026-02-24 - Completed quick task 29: Add toolbar toggle for SVG guide lines vs indentation mode
+Last activity: 2026-02-24 - Completed quick task 30: Fix indentation mode visual hierarchy (iter/tc row nesting)
 
 ## Milestones Shipped
 
@@ -50,9 +50,10 @@ None.
 | 27 | Cascade delete descendant traces on bulk delete | 2026-02-23 | 93bd1bc | Verified | [27-when-deleting-a-trace-all-descendant-tra](./quick/27-when-deleting-a-trace-all-descendant-tra/) |
 | 28 | Fix trace title click expanding trace in sidebar | 2026-02-24 | 5bec7dc | | [28-fix-trace-title-click-expanding-trace-in](./quick/28-fix-trace-title-click-expanding-trace-in/) |
 | 29 | Add toolbar toggle for SVG guide lines vs indentation mode | 2026-02-24 | af138b6 | Verified | [29-add-toolbar-toggle-for-svg-guide-lines-v](./quick/29-add-toolbar-toggle-for-svg-guide-lines-v/) |
+| 30 | Fix indentation mode visual hierarchy (iter/tc row nesting) | 2026-02-24 | 3d87b6a | | [30-in-the-last-quick-task-toggle-between-ne](./quick/30-in-the-last-quick-task-toggle-between-ne/) |
 
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Quick task 29 — toolbar toggle for nesting mode
+Stopped at: Quick task 30 — indentation mode visual hierarchy fix
 Resume file: None
