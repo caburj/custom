@@ -115,6 +115,16 @@
     flex: 1;
     overflow-y: auto;
     min-height: 0;
+    position: relative; // anchor for SVG depth-line overlay
+}
+
+// SVG staircase depth line — scrolls with content, renders above row backgrounds
+.ai-depth-line-svg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 1;
+    pointer-events: none;
 }
 
 .ai-debug-sidebar-empty {
@@ -211,15 +221,21 @@
     }
 }
 
+// Depth staircase line — left padding clears the SVG overlay area.
+// BASE_X(6) + max_depth(4) * STEP_X(4) + half_stroke(1.5) + gap(4) ≈ 28px
+$ai-depth-line-padding: 28px;
+
 // Tree row base — 34px height per locked decision
+// padding-left clears the SVG depth staircase line area
 .ai-tree-row {
     display: flex;
     align-items: center;
     height: 34px;
     cursor: pointer;
     gap: 4px;
+    padding-left: $ai-depth-line-padding;
     padding-right: 8px;
-    position: relative; // Required for ::before guide line pseudo-element
+    position: relative;
     transition: background-color 0.1s ease;
     animation: ai-tree-slide-in 0.15s ease-out;
 
@@ -243,12 +259,9 @@
     padding-bottom: 4px;
 }
 
-// 5-level depth color palette for nested subagent traces.
-// Each depth gets a colored left border; depth > 0 also gets a subtle background
-// tint.  Standalone selectors (not nested in .ai-tree-row) keep specificity at
-// 0,1,0 so hover / selected / ancestor states naturally override the background.
+// 5-level depth colors — used for background tints on nested rows.
+// The SVG line colors are defined in JS (AiDebugApp.DEPTH_LINE_COLORS).
 $ai-depth-colors: (
-    0: #3b82f6,  // blue  — root trace
     1: #14b8a6,  // teal  — first subagent
     2: #a855f7,  // purple
     3: #f59e0b,  // amber
@@ -257,11 +270,7 @@ $ai-depth-colors: (
 
 @each $depth, $color in $ai-depth-colors {
     .ai-depth-#{$depth} {
-        border-left: 3px solid $color;
-
-        @if $depth > 0 {
-            background-color: rgba($color, 0.04);
-        }
+        background-color: rgba($color, 0.04);
     }
 }
 

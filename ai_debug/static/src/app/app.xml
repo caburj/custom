@@ -51,6 +51,21 @@
                 <!-- Scrollable tree content area — t-ref here so scrollIntoView targets the right container -->
                 <div class="ai-tree-content" t-ref="sidebar">
 
+                <!-- Depth staircase line — SVG overlay, scrolls with content -->
+                <svg t-if="sidebarNodes.length > 0"
+                     class="ai-depth-line-svg"
+                     t-att-height="depthLineTotalHeight"
+                     width="50"
+                     aria-hidden="true">
+                    <t t-foreach="depthLinePaths" t-as="seg" t-key="seg_index">
+                        <path t-att-d="seg.d"
+                              t-att-stroke="seg.color"
+                              stroke-width="2.5"
+                              fill="none"
+                              stroke-linecap="round"/>
+                    </t>
+                </svg>
+
                 <!-- Empty state — only when no traces -->
                 <div t-if="traces.size === 0" class="ai-debug-sidebar-empty">
                     <span class="ai-debug-pulse-dot"/>
@@ -63,7 +78,6 @@
                     <!-- Trace row (two-line format: query title + agent/model meta) -->
                     <t t-if="node.type === 'trace'">
                         <div t-attf-class="ai-tree-row ai-tree-trace-row ai-depth-{{ node.depth > 4 ? 4 : node.depth }}"
-                             style="padding-left: 4px"
                              t-att-class="{
                                  'selected': state.selectedId === node.id,
                                  'ancestor': selectedTraceId === node.id and state.selectedId !== node.id,
@@ -104,7 +118,6 @@
                     <!-- Iteration row (flat: same depth as parent trace's tool calls) -->
                     <t t-elif="node.type === 'iter'">
                         <div t-attf-class="ai-tree-row ai-tree-iter-row ai-depth-{{ node.depth > 4 ? 4 : node.depth }}"
-                             style="padding-left: 4px"
                              t-att-class="{
                                  'selected': state.selectedId === node.id,
                                  'ancestor': selectedIterationId === node.id and state.selectedId !== node.id,
@@ -137,7 +150,6 @@
                     <!-- Tool call row (flat: same depth as iteration rows) -->
                     <t t-elif="node.type === 'tc'">
                         <div t-attf-class="ai-tree-row ai-tree-tc-row ai-depth-{{ node.depth > 4 ? 4 : node.depth }}"
-                             style="padding-left: 4px"
                              t-att-class="{
                                  'selected': state.selectedId === node.id,
                              }"
