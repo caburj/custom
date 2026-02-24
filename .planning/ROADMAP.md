@@ -59,8 +59,8 @@ Full details: `.planning/milestones/v1.3-ROADMAP.md`
 **Milestone Goal:** Visualize subagent hierarchies in the debugger — nest subagent traces under the tool call that spawned them, flatten the within-trace tree, and color-code agents.
 
 - [x] **Phase 13: Python Instrumentation and Bus Event Handling** - Backend emits parent linkage in bus events; frontend buffers out-of-order child traces (completed 2026-02-23)
-- [ ] **Phase 14: Data Model, IDB Schema, and Color Assignment** - Flat trace store with parent pointers; color assignment persisted to IDB
-- [x] **Phase 15: Sidebar Rendering and Color Display** - Computed sidebarNodes tree; colored left borders, agent legend, and color chip in detail panel (completed 2026-02-23)
+- [ ] **Phase 14: Agent Color Assignment and Display** - 8-color palette assignment per agent name; IDB persistence; colored sidebar borders, agent legend, and detail panel chip
+- [x] **Phase 15: Sidebar Tree Nesting** - Computed sidebarNodes tree with flat within-trace layout, guide lines, and IDB parent linkage serialization (completed 2026-02-23)
 
 ## Phase Details
 
@@ -78,35 +78,35 @@ Plans:
 - [x] 13-01-PLAN.md -- Python instrumentation: parent linkage in new_trace + tool call event splitting
 - [x] 13-02-PLAN.md -- JS event handling: tool_call_started/completed migration + pending-child buffer
 
-### Phase 14: Data Model, IDB Schema, and Color Assignment
-**Goal**: The JS trace store is a flat Map with parent pointer fields; agent colors are assigned on first appearance and survive page refresh
-**Depends on**: Phase 13
-**Requirements**: COLR-01, COLR-02, DATA-01, DATA-02, DATA-03
+### Phase 14: Agent Color Assignment and Display
+**Goal**: Each agent gets a deterministic palette color on first appearance, persisted to IDB; sidebar rows show colored left borders, an agent legend appears in the sidebar header, and a color chip identifies the agent in the detail panel
+**Depends on**: Phase 13, Phase 15
+**Requirements**: COLR-01, COLR-02, COLR-03, COLR-04, COLR-05
 **Success Criteria** (what must be TRUE):
   1. Each distinct agent name is assigned one of 8 palette colors on its first `new_trace` event and retains that color for the lifetime of the session
   2. After a page refresh, each agent's assigned color is restored from IndexedDB — no color reassignment occurs
-  3. Exporting traces to JSON and re-importing them reconstructs the correct parent-child nesting — subagent traces are children of the correct parent after import
-  4. Two-pass IDB hydration on page load correctly links all parent-child trace relationships regardless of the order records were stored in IDB
+  3. Each trace row displays a 3px colored left border in the agent's assigned palette color
+  4. A compact color legend showing agent names and color swatches is visible in the sidebar header; the detail panel header shows a colored chip identifying which agent owns the selected node
+**Reconciliation note**: DATA-01 (flat Map with parent pointers), DATA-02 (export/import parent-child nesting), DATA-03 (IDB hydration with parent linking) were delivered by Phase 15 during its serializeTrace() fix and sidebarNodes getter implementation. COLR-03/04/05 were deferred from Phase 15 to here.
 **Plans**: TBD
 
-### Phase 15: Sidebar Rendering and Color Display
-**Goal**: The sidebar tree displays subagent traces indented under their parent tool call; trace rows carry colored left borders; an agent legend and detail panel chip identify which agent owns each item
-**Depends on**: Phase 14
-**Requirements**: TREE-01, TREE-02, TREE-03, TREE-04, COLR-03, COLR-04, COLR-05
+### Phase 15: Sidebar Tree Nesting
+**Goal**: The sidebar tree displays subagent traces indented under their parent tool call with flat within-trace layout, guide lines, and IDB-persistent parent linkage
+**Depends on**: Phase 13
+**Requirements**: TREE-01, TREE-02, TREE-03, TREE-04, DATA-01, DATA-02, DATA-03
 **Success Criteria** (what must be TRUE):
   1. Subagent traces appear indented under the tool call that spawned them in the sidebar; grandchild subagents indent further with no hardcoded depth limit
   2. Within a single trace, iterations and tool calls appear at the same indentation level — there is no separate iteration tier above tool calls
   3. Collapsing a parent trace hides all of its descendant traces, iterations, and tool calls
-  4. Each trace row displays a 3px colored left border in the agent's assigned palette color
-  5. A compact color legend showing agent names and color swatches is visible in the sidebar header; the detail panel header shows a colored chip identifying which agent owns the selected node
+  4. serializeTrace() persists parent_trace_id, parent_tool_call_id, and session_id to IDB — parent-child nesting survives page refresh, export, and import
 **Plans:** 1/1 plans complete
 Plans:
-- [x] 15-01-PLAN.md -- sidebarNodes getter, template rewrite to single t-foreach, SCSS guide lines, flat within-trace layout (COLR-03/04/05 deferred to post-Phase 14)
+- [x] 15-01-PLAN.md -- sidebarNodes getter, template rewrite to single t-foreach, SCSS guide lines, flat within-trace layout, serializeTrace() parent linkage fix
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 13 → 14 → 15
+13 → 15 → 14 (Phase 15 executed before 14; Phase 14 narrowed to color work only)
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -122,6 +122,6 @@ Phases execute in numeric order: 13 → 14 → 15
 | 10. IDB Layer and Write-Through | v1.3 | 1/1 | Complete | 2026-02-22 |
 | 11. Hydration and Trace Management | v1.3 | 2/2 | Complete | 2026-02-22 |
 | 12. Export and Import | v1.3 | 2/2 | Complete | 2026-02-22 |
-| 13. Python Instrumentation and Bus Event Handling | 2/2 | Complete    | 2026-02-23 | - |
-| 14. Data Model, IDB Schema, and Color Assignment | v1.4 | 0/? | Not started | - |
-| 15. Sidebar Rendering and Color Display | 1/1 | Complete    | 2026-02-23 | - |
+| 13. Python Instrumentation and Bus Event Handling | v1.4 | 2/2 | Complete | 2026-02-23 |
+| 15. Sidebar Tree Nesting | v1.4 | 1/1 | Complete | 2026-02-23 |
+| 14. Agent Color Assignment and Display | v1.4 | 0/? | Not started | - |
