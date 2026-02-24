@@ -72,7 +72,7 @@ Full details: `.planning/milestones/v1.4-ROADMAP.md`
 
 - [x] **Phase 16: Backend Token Extraction and Per-Iteration Timing** — Instrument the provider layer to capture normalized token usage and per-iteration duration into bus events (completed 2026-02-24)
 - [x] **Phase 17: Frontend Reactive Store and IDB Persistence** — Wire new bus event fields into the reactive trace store with computed total getters and symmetric IDB serialization (completed 2026-02-24)
-- [ ] **Phase 18: Display Components and Animation** — Render compact sidebar metrics, IterationDetail chips, LoopDetail Metrics tab, and live elapsed ticker
+- [x] **Phase 18: Display Components and Animation** — Render compact sidebar metrics, IterationDetail chips, LoopDetail Metrics tab, and live elapsed ticker (completed 2026-02-24)
 
 ## Phase Details
 
@@ -112,7 +112,7 @@ Plans:
   2. IterationDetail header shows duration and token count chips for that iteration
   3. LoopDetail Metrics tab shows a per-iteration table (input, output, cached, reasoning tokens + duration) with a totals row
   4. While a trace is actively running, the detail panel header shows a live elapsed timer updating at 1-second intervals
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [ ] 18-01-PLAN.md -- Formatting utility, sidebar metrics line, and IterationDetail chips
 - [ ] 18-02-PLAN.md -- LoopDetail Metrics tab and live elapsed timer
@@ -138,4 +138,4 @@ Plans:
 | 15. Data Integrity Fixes | v1.4 | 1/1 | Complete | 2026-02-24 |
 | 16. Backend Token Extraction and Per-Iteration Timing | 1/1 | Complete    | 2026-02-24 | - |
 | 17. Frontend Reactive Store and IDB Persistence | 1/1 | Complete    | 2026-02-24 | - |
-| 18. Display Components and Animation | 1/2 | In Progress|  | - |
+| 18. Display Components and Animation | 2/2 | Complete   | 2026-02-24 | - |
