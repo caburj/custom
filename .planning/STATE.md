@@ -82,9 +82,10 @@ None.
 | 32 | Make indented view the default and add CSS vertical depth guide lines | 2026-02-24 | 6a07093 | Verified | [32-make-indented-view-the-default-and-rende](./quick/32-make-indented-view-the-default-and-rende/) |
 | 33 | Inline sidebar trace metrics into agent/model meta line | 2026-02-24 | 752369c | | [33-in-the-sidebar-inline-the-metrics-to-the](./quick/33-in-the-sidebar-inline-the-metrics-to-the/) |
 | 34 | Change token display to directional up/down arrows | 2026-02-24 | 576ebb7 | | [34-change-token-display-format-to-use-up-do](./quick/34-change-token-display-format-to-use-up-do/) |
+| 35 | Show actual iteration duration and in/out tokens in sidebar | 2026-02-24 | 4e8f602 | | [35-show-actual-iteration-duration-and-in-ou](./quick/35-show-actual-iteration-duration-and-in-ou/) |
 
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Quick task 34 complete — changed sidebar token display to directional arrows
+Stopped at: Quick task 35 complete — show actual iteration duration_ms and token counts in sidebar rows
 Resume file: None
