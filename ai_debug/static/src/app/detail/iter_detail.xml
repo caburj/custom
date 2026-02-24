@@ -8,6 +8,14 @@
             <span class="ai-detail-name">Iteration <t t-esc="props.iteration.iteration_index"/></span>
             <span t-if="props.iteration.is_final" class="ai-detail-meta">Final</span>
             <span t-if="props.iteration.has_error" class="ai-detail-meta error">Error</span>
+            <span t-if="props.iteration.duration_ms"
+                  class="ai-metric-chip">
+                <t t-esc="this.formatDuration(props.iteration.duration_ms)"/>
+            </span>
+            <span t-if="props.iteration.tokens and props.iteration.tokens.total > 0"
+                  class="ai-metric-chip">
+                <t t-esc="this.formatTokens(props.iteration.tokens.total)"/> tok
+            </span>
         </div>
 
         <!-- Error banner if iteration has error -->

@@ -5,6 +5,7 @@ import { CopyButton } from "@web/core/copy_button/copy_button";
 import { useService } from "@web/core/utils/hooks";
 import { JsonTree } from "./json_tree";
 import { TextPopupDialog } from "./text_popup";
+import { formatTokens, formatDuration } from "../format_metrics";
 
 export class IterationDetail extends Component {
     static template = "ai_debug.IterationDetail";
@@ -14,6 +15,8 @@ export class IterationDetail extends Component {
     };
 
     setup() {
+        this.formatTokens = formatTokens;
+        this.formatDuration = formatDuration;
         try {
             this.dialog = useService("dialog");
         } catch {
