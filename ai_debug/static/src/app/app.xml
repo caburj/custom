@@ -115,7 +115,7 @@
                                     <t t-if="totals.total_duration_ms > 0 or totals.total_tokens > 0">
                                         &#xB7; <t t-esc="this.formatDuration(totals.total_duration_ms)"/>
                                         <t t-if="totals.total_input > 0 and totals.total_output > 0">
-                                            &#xB7; <t t-esc="this.formatTokens(totals.total_input)"/>&#x2192;<t t-esc="this.formatTokens(totals.total_output)"/>
+                                            &#xB7; <t t-esc="this.formatTokens(totals.total_input)"/>&#x2191; <t t-esc="this.formatTokens(totals.total_output)"/>&#x2193;
                                         </t>
                                         <t t-elif="totals.total_tokens > 0">
                                             &#xB7; <t t-esc="this.formatTokens(totals.total_tokens)"/> tok
