@@ -293,16 +293,21 @@ $ai-indent-step: 16px;
         padding-left: #{8 + 32}px;  // 40px
     }
 
-    // Progressive depth indentation: each depth level adds 16px to all row types
+    // Progressive depth indentation: each depth level shifts by 3 steps (48px) so
+    // a child trace at depth N+1 sits one step (16px) past the tool-call row at
+    // depth N. Resulting values:
+    //   D0: trace=8, iter=24, tc=40
+    //   D1: trace=56, iter=72, tc=88
+    //   D2: trace=104, iter=120, tc=136
     @for $d from 1 through 4 {
         .ai-depth-#{$d}.ai-tree-trace-row {
-            padding-left: #{8 + $d * 16}px;
+            padding-left: #{8 + $d * 48}px;
         }
         .ai-depth-#{$d}.ai-tree-iter-row {
-            padding-left: #{8 + $d * 16 + 16}px;
+            padding-left: #{8 + $d * 48 + 16}px;
         }
         .ai-depth-#{$d}.ai-tree-tc-row {
-            padding-left: #{8 + $d * 16 + 32}px;
+            padding-left: #{8 + $d * 48 + 32}px;
         }
     }
 }
