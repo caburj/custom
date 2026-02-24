@@ -141,3 +141,35 @@
 
 ---
 
+
+## v1.5 Live Metrics (Shipped: 2026-02-24)
+
+**Phases completed:** 3 phases, 4 plans, 8 tasks + 7 quick tasks (28-34)
+**Commits:** 9 feat commits (1b85695 → 576ebb7)
+**Code changes:** 573 insertions, 8 deletions across 12 files
+**Total LOC:** ~5,409 (JS/XML/SCSS/Python)
+**Timeline:** 1 day (2026-02-24)
+
+**Delivered:** Real-time token and timing metrics across the full stack — backend monkey-patch extracts normalized token usage from both OpenAI and Google, frontend reactive store aggregates totals, sidebar shows live counting metrics, and detail panels provide per-iteration breakdown with a pulsing elapsed timer.
+
+**Key accomplishments:**
+- `threading.local()` monkey-patch on `AIApiService._request` captures OpenAI and Google token usage with normalized `{input, output, total, cached, reasoning}` schema
+- Server-measured per-iteration `duration_ms` via `time.monotonic()` on every iteration and tool call bus event
+- `normalizeTokens()` + `getTraceTotals()` feed sidebar and detail panels through OWL reactive proxy chain with IDB round-trip persistence
+- Sidebar compact metrics line with directional arrows (`350↑ 1.2k↓ tok`) updates live as iterations complete
+- LoopDetail Metrics tab with per-iteration token/timing table and accounting-style totals row
+- Pulsing live elapsed timer using `setInterval` + DOM mutation (not reactive state) with instant freeze on trace completion
+
+**Key decisions:**
+- Token data stripped at provider service layer — must patch `AIApiService._request` via `threading.local()`
+- DB_VERSION not bumped — additive JSON fields on iteration blob require no IDB schema migration
+- Count-up animation via OWL reactive re-render at LLM-call frequency (1-30s) — no rAF infrastructure needed
+- DOM mutation timer via useRef+setInterval avoids OWL re-render overhead at 1Hz
+- Token total uses raw provider value (not computed from input+output)
+
+**Known tech debt:**
+- `ai_provider` field stored in reactive store and IDB but not rendered (reserved for future provider-display feature)
+- Sidebar shows "0ms" if thread-local timing stash fails but tokens succeed (requires unlikely partial failure; cosmetic only)
+
+---
+

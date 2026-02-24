@@ -5,30 +5,27 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.5 Live Metrics — Phase 18 complete (Plans 01 and 02 done)
+**Current focus:** Planning next milestone
 
 ## Current Position
 
-Phase: 18 of 18 (Display Components and Animation)
-Plan: 02 complete
-Status: Complete
-Last activity: 2026-02-24 - Completed quick task 35: Show actual iteration duration and in/out tokens in sidebar iteration rows
+Phase: 18 of 18 (all phases complete)
+Plan: All complete
+Status: v1.5 milestone shipped
+Last activity: 2026-02-24 - Completed v1.5 Live Metrics milestone
 
-Progress: [████████████████░░░] 88% (16/18 phases complete, Phase 17 in progress)
+Progress: [████████████████████] 100% (18/18 phases complete, 6 milestones shipped)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 27
-- v1.0-v1.4 across 15 phases, v1.5 Phase 16 Plan 01 + Phase 17 Plan 01 complete
+- Total plans completed: 31 (v1.0-v1.5 across 18 phases)
+- v1.5 milestone: 4 plans in 1 day
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
 | 16    | 01   | 3 min    | 2     | 3     |
 | 17    | 01   | 1 min    | 2     | 2     |
-
-*Updated after each plan completion*
-
 | 18    | 01   | 2 min    | 2     | 6     |
 | 18    | 02   | 2 min    | 2     | 3     |
 
@@ -37,23 +34,6 @@ Progress: [████████████████░░░] 88% (16/18
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
-
-Recent decisions affecting current work:
-- Token data is stripped at the provider service layer before instrumentation can see it — must patch `AIApiService._request` via `threading.local()` in a new `ai_provider_patch.py` file
-- Do NOT bump `DB_VERSION` — additive JSON fields on the iteration blob do not require an IDB schema migration
-- Count-up animation requires no rAF infrastructure — OWL reactive re-render at LLM-call frequency (1-30s) provides the visual effect naturally
-- Live elapsed ticker in detail panel: use `setRecurringAnimationFrame` + `useRef` DOM mutation (not reactive state) to avoid 60fps OWL re-render
-- Token total uses raw provider value (not computed from input + output) — matches locked decision
-- Tokens field absent (not null) on errored iterations — absence signals failure
-- pop_last_completion_data() called as first action when iteration item arrives to prevent stale reads
-- normalizeTokens maps backend 'cached' field to store 'cache_read' (locked schema decision); cache_write always 0 — no backend field exists yet
-- hydrateTrace uses ?? operator (not normalizeTokens) for zero-defaulting pre-Phase 17 records — stored records already have cache_read key
-- getTraceTotals reads through reactive proxy chain for OWL re-render on token changes (SIDE-02 precondition satisfied)
-- [Phase 18]: Keep _formatDuration in AiDebugApp for getIterationDuration callers; bind new formatDuration separately for template use
-- [Phase 18]: Monochrome ai-metric-chip (gray-200/gray-700) — no color-coding by metric type for clean developer-tool aesthetic
-- [Phase 18]: ai-metric-chip designed as reusable class in app.scss for Plan 02 LoopDetail and live timer chip
-- [Phase 18]: DOM mutation via useRef+setInterval for timer avoids OWL re-render overhead at 1Hz
-- [Phase 18]: Timer chip swaps via t-if/t-elif (not CSS transition) for instant freeze on trace completion
 
 ### Pending Todos
 
@@ -87,5 +67,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Quick task 35 complete — show actual iteration duration_ms and token counts in sidebar rows
+Stopped at: v1.5 milestone completed and archived
 Resume file: None
