@@ -67,6 +67,10 @@ export class AiDebugApp extends Component {
             ephemeralMode: false, // true when IDB is unavailable (private browsing or write failure)
             checkedTraceIds: new Set(),  // Phase 11: checkbox selection for bulk delete
             sidebarWidth: 420,
+            nestingMode: (() => {
+                try { return localStorage.getItem("ai_debug.nestingMode") || "lines"; }
+                catch { return "lines"; }
+            })(),
         });
 
         // Sidebar DOM ref for auto-scroll
@@ -410,6 +414,12 @@ export class AiDebugApp extends Component {
             const trace = this.traces.get(id);
             if (trace) trace.expanded = true;
         }
+    }
+
+    toggleNestingMode() {
+        this.state.nestingMode = this.state.nestingMode === "lines" ? "indent" : "lines";
+        try { localStorage.setItem("ai_debug.nestingMode", this.state.nestingMode); }
+        catch { /* private browsing or quota — silently ignore */ }
     }
 
     showFullQuery(ev, query) {
