@@ -10,6 +10,32 @@ import { ImportPreviewDialog } from "./import_dialog";
 import { TextPopupDialog } from "./detail/text_popup";
 
 /**
+ * Translate backend token schema to the store's canonical token shape.
+ *
+ * Backend emits: { input, output, total, cached?, reasoning? }
+ *   - 'cached' is the backend field name (single read-cache metric)
+ *   - 'cache_write' has no backend field yet (always 0 for now)
+ *
+ * Store schema (locked decision): { input, output, cache_read, cache_write, reasoning, total }
+ *   - 'cached' -> 'cache_read'   (backend -> store rename)
+ *   - 'cache_write' always 0     (no backend field exists yet)
+ *
+ * All fields default to 0 so errored iterations (null/missing token payload)
+ * produce a uniform zero shape — no NaN, no crash downstream.
+ */
+function normalizeTokens(t) {
+    if (!t) return { input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: 0, total: 0 };
+    return {
+        input: t.input ?? 0,
+        output: t.output ?? 0,
+        cache_read: t.cached ?? 0,   // backend 'cached' -> store 'cache_read'
+        cache_write: t.cache_write ?? 0,
+        reasoning: t.reasoning ?? 0,
+        total: t.total ?? 0,
+    };
+}
+
+/**
  * Reconstruct a reactive trace object from a plain IDB-stored record.
  *
  * IDB stores iterations and toolCalls as [id, record] pair arrays (from
@@ -160,6 +186,10 @@ export class AiDebugApp extends Component {
                     raw_response: payload.raw_response || null,
                     is_final: payload.is_final || false,
                     error: payload.error || null,
+                    // Phase 17: token/timing/provider fields
+                    tokens: normalizeTokens(payload.tokens),
+                    duration_ms: payload.duration_ms ?? 0,
+                    ai_provider: payload.provider ?? null,
                 });
                 this._lastArrivedId = payload.iteration_id;
                 this._needsScroll = true;
@@ -756,6 +786,38 @@ export class AiDebugApp extends Component {
         const mins = Math.floor(ms / 60000);
         const secs = Math.round((ms % 60000) / 1000);
         return `${mins}m ${secs}s`;
+    }
+
+    /**
+     * Compute trace-level token and timing aggregates across all iterations.
+     *
+     * Called from OWL templates — reading iter.tokens and iter.duration_ms through
+     * the reactive proxy chain (trace.iterations.values()) triggers re-render whenever
+     * any iteration's token data changes. This is the reactive data layer for SIDE-02:
+     * Phase 18 templates reading getTraceTotals(trace).total_tokens will re-render as
+     * each new iteration event arrives.
+     *
+     * Returns raw numbers only — no formatting (Phase 18's concern).
+     *
+     * @param {object} trace - reactive trace object with iterations Map
+     * @returns {{ total_tokens, total_duration_ms, total_input, total_output, total_cached, total_reasoning }}
+     */
+    getTraceTotals(trace) {
+        let total_tokens = 0, total_duration_ms = 0,
+            total_input = 0, total_output = 0,
+            total_cached = 0, total_reasoning = 0;
+        for (const iter of trace.iterations.values()) {
+            const t = iter.tokens;
+            if (t) {
+                total_input += t.input || 0;
+                total_output += t.output || 0;
+                total_cached += t.cache_read || 0;
+                total_reasoning += t.reasoning || 0;
+                total_tokens += t.total || 0;
+            }
+            total_duration_ms += iter.duration_ms || 0;
+        }
+        return { total_tokens, total_duration_ms, total_input, total_output, total_cached, total_reasoning };
     }
 
     // ----------------------------------------------------------------
