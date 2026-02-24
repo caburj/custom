@@ -1,333 +1,350 @@
 # Pitfalls Research
 
-**Domain:** Adding subagent nesting, recursive trace linking, and color-coding to an existing OWL reactive Map store (ai_debug v1.4)
-**Researched:** 2026-02-23
-**Confidence:** HIGH (direct codebase inspection of current v1.3 implementation + OWL source-level reasoning + empirical IDB behavior)
+**Domain:** Adding live animated token/time metrics to an existing OWL streaming debugger (ai_debug v1.5)
+**Researched:** 2026-02-24
+**Confidence:** HIGH (grounded in direct codebase inspection of ai_debug and the upstream enterprise `ai` module)
 
-This document supersedes the v1.3 PITFALLS.md for the purposes of v1.4 planning. V1.3 pitfalls are resolved and confirmed — see Sources. This document focuses exclusively on the new surface area: adding parent/child trace linking, restructuring the flat Map store for recursive nesting, flattening the 3-level tree to a flat+nested rendering model, persisting color assignments to IDB alongside trace data, handling bus event ordering, and hydrating nested trace relationships.
+This document supersedes the v1.4 PITFALLS.md for v1.5 planning. V1.4 pitfalls are resolved and confirmed. This document focuses exclusively on the new surface area: token extraction from two structurally different LLM providers, per-iteration timing instrumentation, animated counters in OWL's reactive rendering system, and IDB schema additions for new fields.
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Child `new_trace` Bus Event Arrives Before Parent `tool_call` Event
+### Pitfall 1: Token Data Is Stripped Before the Instrumentation Override Can See It
 
 **What goes wrong:**
+The `iteration` bus event already carries `raw_response: item.get('metadata')`. The natural first assumption is that `raw_response` contains the full HTTP response envelope — including usage fields. It does not.
 
-Bus events are sent via separate database cursors (`registry.cursor()`) and committed independently. The parent agent's `tool_call` event is sent when `_handle_tool_calls` yields a result — but the subagent's `_run_agentic_loop` may emit its `new_trace` event before the parent's cursor has committed (depending on Postgres NOTIFY delivery timing and Python execution order). The JS event handler for `new_trace` looks up `payload.parent_tool_call_id` in the parent trace's tool call map — which doesn't exist yet. Without an out-of-order buffer, the subagent trace is silently dropped or inserted at root level.
+Tracing the data flow from the actual source code:
+
+- **OpenAI** (`AIApiServiceOpenAI.get_completions`, lines 86-100): the full HTTP response dict has both a `usage` key and an `output` key. The logger reads `response.get('usage')`, then the method returns `response.get('output', [])`. The `output` list is what becomes `metadata` in `_run_agentic_loop` → `raw_response` in the bus event. `usage` is gone.
+- **Google** (`AIApiServiceGoogle.get_completions`, lines 75-101): the full HTTP response dict has both `usageMetadata` and `candidates`. The logger reads `response.get('usageMetadata')`, then the method returns `[content]` (a single-element list from `candidates[0]['content']`). `usageMetadata` is gone.
+
+The `ai_debug` override of `_run_agentic_loop` calls `super()._run_agentic_loop()` and iterates its yielded items. At that point the raw HTTP envelope is already gone — it was consumed inside the service layer. Reading `payload.raw_response?.usage` or `payload.raw_response?.[0]?.usageMetadata` in JS will always be `undefined`.
 
 **Why it happens:**
-
-Two separate cursors commit independently. There is no ordering guarantee between a parent `tool_call` commit and a child `new_trace` commit on the bus channel. The Python execution order is: parent yields tool results → sends `tool_call` event → subagent `_run_agentic_loop` is called → sends `new_trace`. But NOTIFY processing on the Postgres side and WebSocket delivery can reorder these. Even a 1ms delivery delta causes the child to arrive first.
+The service layer was designed to return only LLM *output* (messages / tool calls), discarding the HTTP envelope. The logging calls in the service files are the only consumers of token data today. It is natural to assume `metadata` (= `raw_response`) would carry everything — but it only carries what `get_completions()` returns.
 
 **How to avoid:**
+Token counts must be extracted *inside* the service layer, before the envelope is discarded, and surfaced through a side channel that the instrumentation override can read.
 
-Implement a pending-child buffer. When a `new_trace` event arrives with a `parent_tool_call_id` that is not yet in any trace's tool call map, add the child payload to a `Map<parent_tool_call_id, payload[]>` buffer. When a `tool_call` event arrives, after inserting the tool call, check the buffer for any pending children with that `tool_call_id` and process them in order. The buffer needs a TTL or a max size to prevent unbounded growth if a child event arrives for a tool call that is never seen (e.g., dropped `tool_call` event).
+The correct interception point is to override `get_completions()` on each provider's service class inside `ai_debug`. Since `AIApiServiceOpenAI` and `AIApiServiceGoogle` are concrete classes (not Odoo models), they cannot use `_inherit`. The practical options are:
+
+1. **Add a thread-local / mutable-dict side channel**: pass a mutable dict (e.g., `token_sink = {}`) through `tools_context` into the service call. Subclass the service classes in `ai_debug` to write token data into the sink. Override `provider.get_service()` at the provider level to return the debug-aware subclass. This requires adding module-level subclasses for each provider service.
+
+2. **Inject into `tools_context`**: the `_debug_ctx` mutable dict is already threaded through `tools_context`. Add a `token_sink` list to `_debug_ctx` before calling `super()._run_agentic_loop()`. Override `get_completions()` to append to it after each API call. The iteration event then reads from `_debug_ctx['token_sink'][-1]` after each yield.
+
+3. **Minimal approach — extract from `raw_response` at the Odoo model layer**: Override `_run_agentic_loop` to call the service directly (not via `super()`) and capture the pre-formatted response. This duplicates the service-call logic and breaks the override-only constraint.
+
+Option 2 (mutable `token_sink` in `_debug_ctx`) is the least invasive: it requires subclassing the service classes to write a single dict into a pre-existing channel, with no changes to the main agentic loop logic.
+
+**Warning signs:**
+- JS code doing `payload.raw_response?.usage` or `payload.raw_response?.[0]?.usageMetadata` — both are always undefined
+- Sidebar counters stuck at 0 tokens for all runs, all providers
+- The `iteration` bus event payload has no top-level `tokens` field
+
+**Phase to address:** Backend token extraction (the first backend phase). Must be resolved before any frontend counter work begins, as zero tokens arriving means the UI cannot be validated.
+
+---
+
+### Pitfall 2: OpenAI and Google Use Structurally Different Token Field Names — a Single Extraction Path Silently Drops One Provider
+
+**What goes wrong:**
+Even with a correct interception point, the two providers use completely different JSON structures for usage data:
+
+| Field | OpenAI (`usage` key in HTTP response) | Google (`usageMetadata` key in HTTP response) |
+|-------|----------------------------------------|------------------------------------------------|
+| Envelope key | `usage` | `usageMetadata` |
+| Input tokens | `input_tokens` | `promptTokenCount` |
+| Output tokens | `output_tokens` | `candidatesTokenCount` |
+| Cached tokens | `input_tokens_details.cached_tokens` | `cachedContentTokenCount` |
+| Reasoning tokens | `output_tokens_details.reasoning_tokens` | `thoughtsTokenCount` |
+
+This is confirmed directly from the logger calls in the two service files (lines 87-94 in `ai_api_service_openai.py` and lines 76-83 in `ai_api_service_google.py`).
+
+A normalizer that only checks `response.get('usage')` returns zeros for Google. A normalizer that only checks `response.get('usageMetadata')` returns zeros for OpenAI. Because the service returns normally (no error) and the fallback is `0`, the failure is completely silent.
+
+**Why it happens:**
+The logging calls in the two service files provide the ground truth, but they are easy to miss when writing a new normalizer. Developers test against one provider, see non-zero counts, and ship.
+
+**How to avoid:**
+Write a single Python normalizer function with explicit branches for both envelope keys:
+
+```python
+def _ai_debug_normalize_tokens(raw_envelope):
+    """Extract token counts from the raw HTTP response envelope before stripping.
+    raw_envelope is the full response dict from self._request(), not the stripped output.
+    """
+    if usage := raw_envelope.get('usage'):           # OpenAI Responses API
+        return {
+            'input_tokens': usage.get('input_tokens', 0),
+            'output_tokens': usage.get('output_tokens', 0),
+            'cached_tokens': (usage.get('input_tokens_details') or {}).get('cached_tokens', 0),
+            'reasoning_tokens': (usage.get('output_tokens_details') or {}).get('reasoning_tokens', 0),
+        }
+    if usage := raw_envelope.get('usageMetadata'):   # Google Gemini
+        return {
+            'input_tokens': usage.get('promptTokenCount', 0),
+            'output_tokens': usage.get('candidatesTokenCount', 0),
+            'cached_tokens': usage.get('cachedContentTokenCount', 0),
+            'reasoning_tokens': usage.get('thoughtsTokenCount', 0),
+        }
+    return {'input_tokens': 0, 'output_tokens': 0, 'cached_tokens': 0, 'reasoning_tokens': 0}
+```
+
+Unit-test this function with fixture dicts representing both provider HTTP responses.
+
+**Warning signs:**
+- Token counters work for one model family but show 0 for another
+- No unit test covers both OpenAI and Google fixture responses
+- Normalizer written with only one provider's field names verified against actual API docs
+
+**Phase to address:** Backend token extraction phase — add a fixture-based unit test covering both provider shapes before the normalizer is considered done.
+
+---
+
+### Pitfall 3: `time.monotonic()` Measures Server-Side Elapsed Time, But JS `receivedAt` Differences Include Bus Latency
+
+**What goes wrong:**
+The existing `getIterationDuration()` method in `app.js` computes per-iteration duration by differencing `receivedAt` timestamps (JS `Date.now()` at the moment the bus event arrives at the browser). This works well enough for a rough display, but bus.bus delivery latency — typically 50-300ms — is included in every gap measurement. For a featured "per-iteration time" metric (not just a rough display), this inaccuracy is visible:
+
+- Fast iterations (< 500ms LLM call) can show 2-3x their true duration
+- The sum of JS-computed per-iteration durations will consistently exceed `loop_end.duration_ms` (which is server-side `time.monotonic()`)
+- Two identical prompts can show different displayed durations depending on WebSocket jitter
+
+**Why it happens:**
+The current timing was introduced as a client-side convenience. When per-iteration timing is a featured metric shown prominently in the detail panel and sidebar, the inaccuracy becomes misleading to developers trying to diagnose LLM latency.
+
+**How to avoid:**
+Emit `duration_ms` from Python in the `iteration` bus event. In the `_run_agentic_loop` override, track `_iter_start = time.monotonic()` just before each invocation of `super()._run_agentic_loop()` yields an iteration item, then compute `duration_ms = int((time.monotonic() - _iter_start) * 1000)` and include it in the `iteration` event payload. The existing `getIterationDuration()` in `app.js` can then be replaced by `iter.duration_ms` from the server.
+
+Keep the JS `receivedAt`-based method as a fallback for hydrated traces that were recorded before v1.5 (older IDB records will not have `duration_ms`).
+
+**Warning signs:**
+- Iteration timing shows large variance even for identical prompts (bus jitter showing through)
+- Sum of per-iteration durations substantially exceeds `loop_end.duration_ms`
+- No `duration_ms` field on the `iteration` event payload
+
+**Phase to address:** Backend instrumentation phase — add `duration_ms` to the `iteration` event before the frontend uses it.
+
+---
+
+### Pitfall 4: OWL Re-renders the Full `sidebarNodes` Getter on Every Animation Frame If Counter State Is Reactive
+
+**What goes wrong:**
+`sidebarNodes` is a computed getter that reads `this.traces` and all nested reactive Maps (`iterations`, `toolCalls`). Any mutation to a reactive value in that chain re-runs `sidebarNodes`. Additionally, `depthLinePaths` reads `sidebarNodes`, so it too recomputes.
+
+If animated token counters are implemented by storing a "current displayed value" in reactive state (e.g., `iter.displayed_tokens = 500`) and a `requestAnimationFrame` loop increments it each frame, every tick triggers:
+
+1. `sidebarNodes` recompute (iterates all traces, all iterations)
+2. `depthLinePaths` recompute (geometry for all sidebar rows)
+3. OWL patch cycle (DOM diffing for the full sidebar tree)
+
+At 60fps with even a 5-trace session, this creates measurable jank — the sidebar scroll and click response degrade during an active run.
+
+**Why it happens:**
+OWL's reactive system tracks *reads*, not write paths. If the animation loop writes `iter.displayed_tokens` and the template (or any getter) reads it during render, OWL re-renders on every write. There is no way to "opt out" of this for a single property without restructuring how state is stored.
+
+**How to avoid:**
+Do not store the in-flight animation value in reactive state. Two clean alternatives:
+
+**Option A (recommended): Reactive final value + CSS transition.**
+Store the final token count as `iter.tokens_total` in reactive state. This only changes when a new `iteration` event arrives (once per LLM call, not 60x/second). The template renders `iter.tokens_total` and applies a CSS `transition: color 0.2s, opacity 0.2s` or a brief CSS animation class (`@keyframes count-flash`) on the element. No RAF loop, no reactive-state thrashing.
+
+**Option B: Non-reactive JS object + `useRef` DOM write.**
+Store `{displayedValue, targetValue, startedAt}` in a plain (non-reactive) JS object keyed by `iterationId`. A single RAF loop runs continuously, interpolating `displayedValue` toward `targetValue` and writing directly to DOM via `useRef`-obtained element refs. The template renders a bare `<span t-ref="'tokenSpan_' + iterationId"></span>` with no OWL binding inside the span — OWL never patches this element because nothing reactive is bound to it.
+
+Do NOT mix these strategies: do not use both `t-esc="iter.tokens_total"` and a RAF that writes `span.textContent`. One owner, always.
+
+**Warning signs:**
+- A `displayed_tokens` or `animating_value` field is stored on reactive state (trace or iteration objects)
+- `console.time('sidebarNodes')` shows calls at 16ms intervals during animation
+- Sidebar scroll lags or feels sticky during active trace execution
+- OWL `__owl__.renderCount` increments 60 times per second
+
+**Phase to address:** Frontend counter animation phase — animation strategy must be locked in before any counter code is written.
+
+---
+
+### Pitfall 5: Counter Jitter — Rapid Bus Events Reset the Count-Up Animation to 0
+
+**What goes wrong:**
+A multi-iteration trace emits one `iteration` event per LLM API call. If three events arrive within 500ms (a fast agentic loop), a naive animation implementation shows: "start counting from 0 to 500 → new event arrives, reset to 0, count to 1100 → new event arrives, reset to 0, count to 1800." The developer sees a flickering counter that never finishes before resetting.
+
+**Why it happens:**
+Naive approach: "on new event, set animation start = 0, target = new total, duration = 600ms." This treats each event as an independent animation. When events arrive faster than the animation completes, the counter perpetually resets.
+
+**How to avoid:**
+Track `{displayedValue, targetValue}` in the animation state (non-reactive JS object). On each new event:
+- Update `targetValue = newTotal`
+- Leave `displayedValue` unchanged (do not reset to 0)
+- The RAF loop continues interpolating from `displayedValue` toward `targetValue`
+
+If the new target arrives while the previous tween is still in progress, the tween simply aims higher without resetting. The counter appears to accelerate rather than reset.
+
+Use a short tween duration (200-300ms). For sidebar counters where events arrive every 1-5 seconds, this is fast enough to feel live without being jarring.
+
+**Warning signs:**
+- Counter resets to 0 mid-run when a second iteration event arrives
+- Counter shows an intermediate wrong value briefly after a multi-iteration run completes
+- Animation duration exceeds 500ms (longer than the typical inter-iteration gap for fast agents)
+
+**Phase to address:** Frontend counter animation phase — the `{displayedValue, targetValue}` tracking pattern must be established before any animation duration tuning.
+
+---
+
+### Pitfall 6: IDB `serializeTrace()` / `hydrateTrace()` Asymmetry Causes New Fields to Be Invisible in Hydrated Traces
+
+**What goes wrong:**
+`serializeTrace()` in `db.js` is a manual field enumeration — not a spread. Adding new fields to the in-memory iteration object (`tokens_input`, `tokens_output`, `duration_ms`) without also adding them to `serializeTrace()` means those fields are silently dropped when the trace is written to IDB. After a page refresh, the hydrated trace shows 0 tokens and no duration for all iterations, even though the live session showed correct values.
+
+The symmetric failure: updating `serializeTrace()` but not `hydrateTrace()` means the fields are written to IDB but not read back. `hydrateTrace()` constructs the iteration object with an explicit property list — new fields not in that list are silently ignored.
+
+**Why it happens:**
+`serializeTrace()` and `hydrateTrace()` are in `db.js` far from the bus event handlers in `app.js`. It is easy to add new iteration fields to `_onIteration` and forget to update the two serialization functions. The failure is silent — no error, just 0/null values after reload.
+
+**How to avoid:**
+Treat `serializeTrace()` and `hydrateTrace()` as a contract: every field that must survive a page reload must appear in both. Add a comment block at the top of each function listing the iteration-level fields and marking which were added in which version:
 
 ```javascript
-// In setup():
-this._pendingChildren = new Map(); // parent_tool_call_id → [payload, ...]
+// Iteration fields (serializeTrace ↔ hydrateTrace must be symmetric):
+// v1.0: iteration_id, trace_id, iteration_index, has_error, receivedAt, is_final, error, messages_sent, raw_response
+// v1.5: duration_ms, tokens_input, tokens_output, tokens_cached, tokens_reasoning  ← NEW
+```
 
-// In _onNewTrace:
-if (payload.parent_tool_call_id) {
-    const parentFound = this._attachChildTrace(payload);
-    if (!parentFound) {
-        // Buffer for later
-        const pending = this._pendingChildren.get(payload.parent_tool_call_id) || [];
-        pending.push(payload);
-        this._pendingChildren.set(payload.parent_tool_call_id, pending);
+Update both functions in the same commit. Add a hydration default for each new field:
+```javascript
+// hydrateTrace() iteration reconstruction:
+duration_ms: iter.duration_ms ?? null,       // null = old record, show '—'
+tokens_input: iter.tokens_input ?? 0,
+tokens_output: iter.tokens_output ?? 0,
+tokens_cached: iter.tokens_cached ?? 0,
+tokens_reasoning: iter.tokens_reasoning ?? 0,
+```
+
+**Warning signs:**
+- Tokens and timing display correctly during a live run but show 0/null after a page refresh
+- Console shows no error — the failure is purely silent data loss
+- `serializeTrace()` and `hydrateTrace()` have a different number of iteration-level fields
+
+**Phase to address:** Frontend IDB/hydration phase — always edit both functions in the same commit, same PR.
+
+---
+
+### Pitfall 7: DB_VERSION Bump Wipes All Stored Traces — Should Not Be Bumped for Additive JSON Fields
+
+**What goes wrong:**
+The IDB store in `db.js` uses a single denormalized JSON blob per trace (one record per `trace_id` in the `traces` object store). Adding new fields to this JSON blob does NOT change the IDB object store schema — it only changes the JS object structure. Bumping `DB_VERSION = 2` triggers `onupgradeneeded`, which in Odoo's `IndexedDB` utility recreates stores from scratch. All v1.4 traces are deleted.
+
+**Why it happens:**
+Developers see "adding new fields = schema change" and reflexively bump the version. This reasoning applies to SQL schemas (adding a column) but not to IDB key-value stores where the value is opaque JSON. The IDB schema is: "one object store called `traces`, keyed by `trace_id`, value is a JSON blob." That schema does not change when the JSON blob gets new keys.
+
+**How to avoid:**
+Do NOT bump `DB_VERSION` for v1.5. Add `tokens_*` and `duration_ms` fields to the JSON blob only. Old IDB records (v1.4) will hydrate with these fields reading as `undefined`, which the `?? 0` / `?? null` defaults in `hydrateTrace()` handle correctly.
+
+Only bump `DB_VERSION` if a new *object store* is added (a new IDB table) or if an existing key-path changes (restructuring the store itself).
+
+**Warning signs:**
+- `DB_VERSION` was changed to `2` — all developer trace history is gone after deploy
+- The commit that bumps `DB_VERSION` also only adds new JSON properties, not new object stores
+- Post-deploy, IDB is empty and all previously stored traces are lost
+
+**Phase to address:** Frontend IDB/hydration phase — confirm `DB_VERSION` is unchanged in code review.
+
+---
+
+### Pitfall 8: Animated Counters Conflict With OWL's `onPatched` DOM Write Timing
+
+**What goes wrong:**
+If the animation strategy uses `requestAnimationFrame` to write directly to DOM elements (Option B from Pitfall 4), there is a timing conflict when OWL also patches those elements. The sequence:
+
+1. RAF fires → writes "1,234" to `span.textContent`
+2. Bus event arrives → `iter.tokens_total` changes → OWL schedules re-render
+3. OWL patches the sidebar → overwrites `span.textContent` with whatever `t-esc` renders
+
+If the RAF callback and the OWL patch cycle share ownership of the same DOM node, the counter flickers between the animation value and the OWL-rendered value.
+
+**Why it happens:**
+OWL patches what the template declares. If the template has `<span>{{iter.tokens_display}}</span>` and the RAF also writes to that span, two systems fight for the same node.
+
+**How to avoid:**
+Pick one owner per DOM node. The two clean patterns:
+
+- **CSS-only animation (one owner: OWL):** Template renders `iter.tokens_total` via `t-esc`. CSS handles visual effect via `transition` or `@keyframes`. No RAF. No DOM write conflict.
+- **RAF-only animation (one owner: RAF):** Template renders a bare `<span t-ref="..."></span>` with no `t-esc` binding. RAF writes `textContent`. OWL's patch cycle touches the span's container (the row div) but has nothing to diff inside the span — it leaves the textContent untouched.
+
+The CSS approach is strongly preferred: it requires zero animation code beyond a CSS rule, survives OWL patch cycles without any special handling, and degrades gracefully (no animation if reduced-motion is set).
+
+**Warning signs:**
+- Counter text flickers between the animation value and a static value during rapid bus events
+- Template has both `t-esc="iter.tokens_display"` and a RAF that writes to the same element
+- `onPatched` fires more often than expected (visible via `console.log` in `onPatched` callback)
+
+**Phase to address:** Frontend counter animation phase — before writing any animation code.
+
+---
+
+### Pitfall 9: Treating Per-Iteration Token Sum as a Running Accumulator Produces Wrong Totals After Hydration
+
+**What goes wrong:**
+Naive implementation: `trace.total_tokens` is updated by each `_onIteration` handler by adding the new iteration's tokens to the existing total. This works correctly during a live run. But after a page refresh and IDB hydration, `total_tokens` is not recomputed — it is read directly from the stored value. If `total_tokens` was stored before all iterations had arrived (e.g., written to IDB at `loop_end` time, correctly), it is fine. But if the IDB write happens on each `_onIteration` event (before the trace is complete), the stored `total_tokens` is the value at the time of the last write, which may be a partial sum from mid-run.
+
+More common: `total_tokens` is derived from per-iteration values and never stored separately. After hydration, the detail panel computes the total by summing `iter.tokens_input + iter.tokens_output` across all iterations. This sum is always correct (computed from the stored per-iteration data). The sidebar counter reads `trace.total_tokens` which may be stale or absent.
+
+**Why it happens:**
+Mixing "live accumulator" for the sidebar counter with "computed sum" for the detail panel. The two views drift unless both derive from the same source.
+
+**How to avoid:**
+Never store `total_tokens` as a separate accumulator on the trace object. Always compute it as a getter from the per-iteration data:
+
+```javascript
+// As a helper or getter in app.js:
+getTraceTotalTokens(trace) {
+    let total = 0;
+    for (const iter of trace.iterations.values()) {
+        total += (iter.tokens_input || 0) + (iter.tokens_output || 0);
     }
-    return;
-}
-// Root trace: handle as before
-
-// In _onToolCall, after inserting the tool call:
-const waiting = this._pendingChildren.get(payload.tool_call_id);
-if (waiting) {
-    this._pendingChildren.delete(payload.tool_call_id);
-    for (const child of waiting) this._attachChildTrace(child);
+    return total;
 }
 ```
 
+This is always correct: live runs accumulate as iterations arrive; hydrated traces compute from stored per-iteration data. No separate accumulator field, no drift.
+
+For the sidebar display, this getter is called during render — OWL tracks the reactive reads on `trace.iterations` and re-renders when a new iteration is added.
+
 **Warning signs:**
+- A `total_tokens` field is stored on the trace object in reactive state
+- Sidebar counter shows the correct total during a live run but shows a different (incorrect) total after reload
+- Detail panel and sidebar counters disagree on the total
 
-- Subagent traces appear at root level in the sidebar (not nested under parent tool call)
-- Console logs show "parent tool call not found" or equivalent for traces with `parent_tool_call_id`
-- The pending buffer grows unboundedly (a `tool_call` event was dropped)
-
-**Phase to address:** Phase 1 (backend events + JS event handlers) — buffer must exist before any subagent can trigger the race
+**Phase to address:** Frontend counter data model phase — decide "computed from iterations" before writing any accumulator code.
 
 ---
 
-### Pitfall 2: Nested Subagent Traces Stored in the Flat Top-Level Map Break the IDB Write
+### Pitfall 10: Token Counts for Error Iterations Show NaN or Stale Values
 
 **What goes wrong:**
+When an LLM API call fails (UserError or general Exception), the existing `ai_session.py` override emits an error `iteration` event with `raw_response: None` and `error: termination_error`. In v1.5, a token extraction hook that runs on the API response would also return 0 (or None) for error iterations — because there is no response envelope to extract from.
 
-The current IDB write is triggered in `_onLoopEnd` per trace: `writeTrace(trace)` serializes the trace as a self-contained record keyed by `trace_id`. If subagent traces are stored as nested objects inside the parent trace (e.g., `parentTrace.children.set(childTraceId, childTrace)`), the IDB record for the parent trace grows unboundedly with each level of subagent nesting, and the structured clone cost per write multiplies. Worse: if both the parent and child have their own `_onLoopEnd` events, they will both try to write, and the child's write will serialize an object that's not a top-level trace record.
+If the JS `getTraceTotalTokens()` helper does `iter.tokens_input + iter.tokens_output` without null guards, `undefined + undefined = NaN`. The sidebar counter then shows "NaN tokens."
 
-Alternatively, if subagent traces remain in the top-level `this.traces` Map (flat storage with `parent_tool_call_id` pointer), then `serializeTrace` must be updated to include the linkage fields — otherwise the relationship is lost on hydration.
-
-**Why it happens:**
-
-The natural first instinct is "nest child traces inside parent" to mirror the rendering hierarchy. But the current IDB schema is one record per `trace_id`. Nesting produces a schema mismatch with the write layer and the hydration layer.
-
-**How to avoid:**
-
-Keep subagent traces flat in `this.traces` (keyed by their own `trace_id`). Add linkage fields to each trace record: `parent_trace_id` and `parent_tool_call_id`. The rendering layer computes the tree from these pointers rather than from nested data structure. IDB stores each trace independently. Hydration reconstructs the parent–child relationship by linking after loading all records.
-
-This is the same approach used by distributed tracing systems (OpenTelemetry span model) and is the correct design for a fire-and-forget IDB write pattern.
-
-Update `serializeTrace` to include `parent_trace_id` and `parent_tool_call_id`. Update `hydrateTrace` to preserve them. No change to IDB schema version required if both fields are nullable.
-
-**Warning signs:**
-
-- `serializeTrace` does not include `parent_trace_id` or `parent_tool_call_id` fields
-- Subagent traces are stored as properties of their parent trace object rather than as entries in `this.traces`
-- After reload, subagent traces appear at root level even though they nested correctly in the live session
-
-**Phase to address:** Phase 1 (data model design) and Phase 2 (IDB serialization) — decide flat vs. nested storage before writing any code
-
----
-
-### Pitfall 3: `reactive()` Without a Render Observer Silently Breaks Nested Map Mutations
-
-**What goes wrong:**
-
-In OWL, `reactive(obj)` creates a proxy that notifies observers when properties are read/written. However, if `reactive()` is called without a callback argument (the second parameter), it uses OWL's `NO_CALLBACK` sentinel — meaning mutations are tracked but there is no observer to notify. Re-renders only happen when the mutation is observed through a `useState()` proxy chain.
-
-When subagent traces are added to the flat `this.traces` Map (which IS a `useState`-wrapped Map), the traces themselves are reactive by association — OWL tracks reads through the proxy chain. But the subagent's `children` relationship is computed by iterating `this.traces.values()` and filtering on `parent_tool_call_id`. This is a computed derived view, not a stored reactive property. If the rendering template calls a method to build the tree (e.g., `getChildren(traceId)`), OWL tracks that call during render and re-renders when `this.traces` changes — which is correct.
-
-The failure mode is when intermediate objects are created outside of a render cycle (e.g., in a `setup()` helper or a one-time computation) and stored as plain objects. Those objects are not in the proxy chain and mutations to them do not trigger renders.
+For a different failure mode: an iteration that was still running when the page was refreshed (status: "running", `loop_end` never arrived) may have partial token data. After hydration, the "running" state indicator shows alongside a token count that is no longer being incremented.
 
 **Why it happens:**
-
-The pattern `reactive(new Map())` for `iterations` and `toolCalls` worked in v1.3 because those Maps were explicitly created inside `_onNewTrace` (inside a bus handler that's called during rendering or triggers a render via `useState`). If subagent nesting introduces a new level (e.g., `trace.childTraces = reactive(new Map())`), the new Map must be created with the same care — but developers may skip `reactive()` assuming the parent trace's proxy chain handles it.
-
-**How to avoid:**
-
-Use the same flat `this.traces` Map for all traces (root and subagent). Never add a `childTraces` or `children` property to a trace object. The tree is a view computed from the flat Map on every render. This avoids the nested-reactive problem entirely.
-
-If a precomputed child index is needed for performance (many traces), store it in a `useState({})` plain object (not a Map), keyed by `parent_tool_call_id`. OWL tracks plain object property reads through `useState`, so mutations trigger renders correctly.
-
-**Warning signs:**
-
-- A `childTraces` or `children` property appears on trace objects
-- `reactive(new Map())` called inside a function that's not a bus event handler or `setup()`
-- Subagent trace additions don't trigger sidebar re-renders even though the data is in the store
-
-**Phase to address:** Phase 1 (data model design) — decide the reactive structure before writing rendering code
-
----
-
-### Pitfall 4: Flattening the 3-Level Tree to Flat+Nested Rendering Breaks Existing Selection Logic
-
-**What goes wrong:**
-
-The current sidebar renders a 3-level hierarchy: Loop > Iteration > Tool Call. The template iterates `trace.iterations` and within each iteration, `iteration.toolCalls`. Selection state (`selectedId`, `selectedType`) and ancestor highlighting (`selectedTraceId`, `selectedIterationId`) depend on this 3-level structure.
-
-V1.4 flattens within-trace rendering (iterations and tool calls at the same level) and adds a new fourth dimension: subagent traces indented under the parent tool call. The existing `selectedTraceId` getter does a nested scan of all iterations to find which trace owns the selected iteration — this scan must now also descend into subagent traces.
-
-If the selection getters are not updated, selecting an item inside a subagent trace returns `null` for `selectedTraceId` (because the scan only traverses root traces), breaking the ancestor-highlighting CSS classes and the detail panel "which agent's color accent to show."
-
-**Why it happens:**
-
-The existing getters `getSelectedIteration()`, `getSelectedToolCall()`, `selectedTraceId`, and `selectedIterationId` assume all traces are top-level entries in `this.traces`. Subagent traces are also in `this.traces` (flat model), so the getters will find them — but the ancestor walk for `selectedTraceId` when a `tool_call` is selected inside a subagent will return the subagent's `trace_id`, not the root agent's `trace_id`. This is technically correct but breaks the visual "which root loop owns this selection" expectation.
+Error iterations are created in the exception handlers of `_run_agentic_loop` with `raw_response: None`. Token extraction must handle `None` input without raising. JS addition with `undefined` operands produces `NaN` silently.
 
 **How to avoid:**
-
-When flattening the rendering tree, audit every selection getter and update it to work with the new flat+recursive model. Define clearly: does "selected trace" mean the immediate containing trace or the root-level trace? For color-coding and breadcrumbs, the immediate trace is correct. For checkbox selection, the root trace is correct (only root traces have checkboxes). Document this distinction.
-
-Add a `getRootTraceId(traceId)` helper that walks `parent_trace_id` pointers up to the root. Use this consistently in all places that need "the root trace for a given selection."
-
-**Warning signs:**
-
-- Selecting an item inside a subagent trace causes the parent tool call highlight to disappear
-- The detail panel shows no color accent or wrong color accent for subagent content
-- Checkbox state becomes confused when subagent traces appear in the sidebar
-
-**Phase to address:** Phase 3 (rendering flatten + nesting) — selection logic audit must be a required step when restructuring the template
-
----
-
-### Pitfall 5: Color Assignment Stored in a Plain Object Inside `useState` Loses Reactivity on Color Map Growth
-
-**What goes wrong:**
-
-The per-agent color assignment (agent_name or trace_id → CSS color token) needs to be reactive: the first time an agent appears (new `new_trace` event), a color is assigned and the sidebar must re-render to show that color. The simplest storage is `this.agentColors = useState({})`, keyed by `agent_name`.
-
-The problem: `useState({})` makes the top-level object reactive (its direct properties are tracked). Adding a new key (`this.agentColors[agentName] = 'color-3'`) triggers a re-render. But if the template reads `agentColors[trace.agent_name]` during render, OWL tracks that specific key access. A new agent name being added (new key) triggers a full re-render of the traces list — which is correct.
-
-The failure mode is when colors are stored in a plain `Map` (not reactive): `this.agentColors = new Map()` without `useState` or `reactive()`. Map mutations are not observable by OWL. Adding a new color for a new agent does not trigger a render, so the new agent's sidebar row appears without its color until the next render triggered by something else (e.g., the next iteration event).
-
-**Why it happens:**
-
-The color assignment feels like "configuration state" rather than "UI data," so developers may store it in a module-level Map or a plain instance property rather than a reactive store.
-
-**How to avoid:**
-
-Store color assignments in `useState({})` (plain object, not Map). Keys are agent names (strings). Values are CSS class names or color tokens. The first time a `new_trace` event arrives for an agent not yet in the map, assign a color and add it to `this.agentColors`. This triggers a re-render that applies the color to the new trace row immediately.
-
-Persist color assignments to IDB as a separate record (not embedded in trace records), keyed by a fixed key (e.g., `__agent_colors__`). Load from IDB in `onWillStart` before first render — same as trace hydration. This ensures color consistency across page refreshes.
+- Python: the token extraction normalizer must accept `None` as input and return all-zero dict
+- Python: emit `tokens: {'input_tokens': 0, 'output_tokens': 0, ...}` on all `iteration` events, including error events
+- JS: always use `(iter.tokens_input || 0)` in the sum, never `iter.tokens_input +` without guard
+- JS: display `—` (em dash) for iterations where `iter.has_error` is true and tokens are 0, rather than "0 tokens"
 
 **Warning signs:**
-
-- `agentColors` is a plain `Map` or a plain instance property (not `useState`)
-- New agent's first trace row appears without its color chip until the next render
-- After page reload, all agents revert to color 1 (no persistence)
-
-**Phase to address:** Phase 2 (color assignment + IDB persistence) — reactive storage and persistence design must be decided before implementing color assignment
-
----
-
-### Pitfall 6: IDB DB Version Not Bumped When Adding `agentColors` Store — Upgrade Silently Fails
-
-**What goes wrong:**
-
-V1.3 opened IndexedDB at version 1 with a single `traces` store. V1.4 needs to persist color assignments (a separate logical record). If the color data is added to the existing `traces` store as a special record (e.g., keyed by `__agent_colors__`), no version bump is required. But if a new `agent_colors` object store is added, the IDB version must be bumped to 2 and `onupgradeneeded` must create the new store.
-
-The current `db.js` uses `@web/core/utils/indexed_db` (Odoo's IDB wrapper), which uses `idb._tables.add(STORE)` to register stores. If a second store is registered without bumping the version, `onupgradeneeded` is not called (it only fires on version change), so the new store is never created. All writes to the new store fail with `NotFoundError: The operation failed because the requested database object could not be found`.
-
-**Why it happens:**
-
-Developers assume that adding `idb._tables.add('agent_colors')` is sufficient to create the store. It is only sufficient when the DB is being created for the first time (version 0 → 1). For an existing DB (already at version 1), adding to `_tables` without bumping the version means `onupgradeneeded` never fires and the store is never created.
-
-**How to avoid:**
-
-Two options:
-1. **No version bump**: Store agent colors as a special sentinel record in the existing `traces` store (key `__agent_colors__`, value is the color map object). This avoids the schema migration entirely and is acceptable for a simple key-value payload.
-2. **Version bump to 2**: Change `DB_VERSION = 2`, add `idb._tables.add('agent_colors')`. The `onupgradeneeded` handler (which Odoo's IDB util calls) creates the new store. Existing `traces` data is preserved.
-
-Option 1 is simpler and recommended — it avoids a migration and keeps the IDB schema minimal.
-
-**Warning signs:**
-
-- `DB_VERSION` is still 1 but a new object store is being added
-- `NotFoundError` in the console when writing to the new store
-- Color assignments are lost on page reload (write silently failed)
-
-**Phase to address:** Phase 2 (IDB persistence for colors) — decide the storage strategy before implementing
-
----
-
-### Pitfall 7: Hydrating Nested Traces From IDB Requires a Two-Pass Load to Reconstruct Parent Pointers
-
-**What goes wrong:**
-
-On page load, `loadAllTraces()` returns all trace records from IDB. Currently, each record is independently hydrated with `hydrateTrace()` and inserted into `this.traces`. This works for flat traces.
-
-With subagent nesting, some traces have `parent_trace_id` and `parent_tool_call_id`. For correct rendering, those pointer fields must reference traces that are ALSO in the store. But the IDB records are loaded in arbitrary order — there is no guarantee the parent trace record is processed before the child. If the rendering logic does a parent-pointer lookup during hydration (e.g., to validate linkage), it may not find the parent yet.
-
-More subtly: after hydration, the pending-child buffer (from Pitfall 1) must be initialized empty — but the rendering template builds the tree by walking `parent_tool_call_id` pointers, not by looking up a buffer. So the ordering issue only affects the buffer, not rendering.
-
-**Why it happens:**
-
-IDB's `getAll()` returns records in key-path order (alphabetical by `trace_id` UUID strings, which are random — so effectively random order). If any hydration code does a parent lookup during the load loop, it will sometimes find the parent (already loaded) and sometimes not (not yet loaded).
-
-**How to avoid:**
-
-Do the hydration in two passes:
-1. First pass: call `hydrateTrace()` on every record and insert into `this.traces`. No parent-linking logic.
-2. Second pass: for every trace with `parent_trace_id`, verify the parent exists in `this.traces`. Log a warning if the parent is missing (orphaned trace — parent was deleted). No structural repair needed; the rendering template handles missing parents gracefully by rendering the orphan at root level.
-
-The pending-child buffer (`_pendingChildren`) should be initialized empty and NOT pre-populated during hydration — it is only for in-flight live events. Hydrated traces are already complete records; there are no "pending" relationships to resolve.
-
-**Warning signs:**
-
-- Hydration loop does parent-pointer validation inline (single pass)
-- `_pendingChildren` is populated during IDB hydration (should only be for live events)
-- Subagent traces appear at root level after reload (parent pointer not being used in template)
-
-**Phase to address:** Phase 2 (IDB hydration) — two-pass design must be explicit in the implementation plan
-
----
-
-### Pitfall 8: Export Format Does Not Include `parent_trace_id` — Nesting Is Lost on Import
-
-**What goes wrong:**
-
-The current `serializeTrace()` function does not include `parent_trace_id` or `parent_tool_call_id` (they don't exist yet in v1.3). If these fields are added to trace objects in v1.4 but not added to `serializeTrace()`, the export file contains all the traces (both root and subagent) but with no parent linkage. When imported into a fresh session, all traces appear at root level — the hierarchy is gone.
-
-**Why it happens:**
-
-`serializeTrace()` explicitly lists every field it preserves (it's not a `{...trace}` spread — it's a manual field enumeration). Adding a new field to the trace object requires a matching addition to `serializeTrace()`. This is easy to forget because the export still works (no error), it just silently drops the relationship field.
-
-**How to avoid:**
-
-Add `parent_trace_id: trace.parent_trace_id || null` and `parent_tool_call_id: trace.parent_tool_call_id || null` to `serializeTrace()`. Add the same fields to the import validation: a trace with `parent_trace_id` but no matching trace in the import set is an orphan — log a warning but don't reject the import (the user may have exported a subset).
-
-Update the import validator to also accept `parent_trace_id` as an optional string field. The import should reconstruct nesting after all traces are loaded (same two-pass approach as hydration).
-
-**Warning signs:**
-
-- `serializeTrace()` does not include `parent_trace_id` or `parent_tool_call_id`
-- After export + import, all traces are flat (no nesting) even if they were nested in the original session
-- Import validation rejects traces with `parent_trace_id` (unexpected field)
-
-**Phase to address:** Phase 2 (IDB serialization) and Phase 4 (export/import) — `serializeTrace` must be updated in the same phase as the data model change
-
----
-
-### Pitfall 9: Color Assignment Keyed by `agent_name` Collides When Two Different Agents Have the Same Name
-
-**What goes wrong:**
-
-The color assignment is intended to visually distinguish different agents. If the key is `agent_name` (a human-readable string like "Research Agent"), two completely different agent configurations with the same display name get the same color — which is correct by definition if the name is the identity key.
-
-But if the user has two agents with the same name in different Odoo configurations, or if an agent's name changes between runs, the color assignment becomes confusing: a "new" agent gets the color of an old one, or two unrelated agents share a color.
-
-The deeper problem: what is the correct identity key? `agent_name` (human-readable, collides), `agent_id` (database ID, stable across name changes), or `trace_id` (unique but gives every trace a different color, making comparison impossible)?
-
-**Why it happens:**
-
-The first implementation reaches for `agent_name` because it's what the user sees and expects to map to a color. The collision case isn't obvious until two same-named agents appear in the same session.
-
-**How to avoid:**
-
-Use `agent_name` as the color key. The collision is intentional: if two agents share a name, they share a color (the user probably treats them as equivalent). Document this decision explicitly. If `agent_id` is available in the bus payload, prefer it as the key (more stable than name).
-
-Per the PROJECT.md, `agent_name` is already available in `new_trace` payloads. Check whether `agent_id` (database record ID) is also available — if so, use it and display `agent_name` as the label.
-
-**Warning signs:**
-
-- Color assignment keyed by `trace_id` (every trace gets a unique color — defeats the purpose)
-- No documentation of what the identity key means
-- Two agents with the same name display different colors (key is more granular than `agent_name`)
-
-**Phase to address:** Phase 2 (color assignment design) — decide the identity key before implementing
-
----
-
-### Pitfall 10: Rendering Subagent Nesting With Recursive OWL Components Causes Double-Render Cascades
-
-**What goes wrong:**
-
-The natural approach to rendering a recursive tree is a recursive OWL component: `<TraceRow>` renders itself for each child trace. But OWL renders components depth-first. If a subagent trace's data arrives via a bus event while the parent is being re-rendered (a common pattern during fast loops), the component mount/patch lifecycle for the recursive child may fire during the parent's patch cycle. This is not a correctness problem (OWL queues patches), but it can cause visual flicker — the parent renders without the child, then the child renders, producing two visible updates in rapid succession.
-
-The more significant problem is with `t-key` assignment. The current template uses `traceId` as the key for trace rows. If a subagent trace is rendered inside the parent trace's subtree (as a child of a tool call row), its `t-key` must be globally unique to prevent OWL from reusing the wrong DOM node. Using just `traceId` inside a nested `t-foreach` could cause key collisions if the same `traceId` appears at multiple rendering levels (which it won't in this model, but is worth documenting).
-
-**Why it happens:**
-
-Recursive OWL components are uncommon in Odoo codebases. The pattern is supported (OWL is a full component framework) but requires explicit attention to lifecycle ordering. Developers may use a flat template loop with indentation via CSS margin instead of a recursive component — this is actually the correct approach for the ai_debug use case, since the nesting is bounded (not truly unbounded-recursive in practice).
-
-**How to avoid:**
-
-Do NOT use recursive OWL components. Instead, flatten the render loop: after each root trace's rows, check if any subagent traces reference a tool call in that trace, and render those subagent rows immediately after (with CSS indentation). This is a depth-first iterative walk, not a recursive component tree. It keeps the rendering logic in a single template, avoids component lifecycle complexity, and is consistent with how the v1.3 template already works (flat `t-foreach` loops with conditional expansion).
-
-```xml
-<!-- Pseudocode: flat iterative rendering with depth-aware indentation -->
-<t t-foreach="orderedTraceIds" t-as="traceId" t-key="traceId">
-    <!-- render trace row with depth-dependent indent class -->
-    <!-- then recurse via a helper that yields child trace IDs in order -->
-</t>
-```
-
-**Warning signs:**
-
-- A recursive OWL component (`TraceRow` that renders `<TraceRow>` inside itself) is being introduced
-- Double-render flicker on fast bus events (parent re-renders, then child re-renders separately)
-- Template has nested `t-foreach` loops with the same key variable name at different depths
-
-**Phase to address:** Phase 3 (rendering restructure) — decide flat-iterative vs. recursive-component before writing any template code
+- "NaN tokens" appears in the sidebar for any run that ends in an error
+- Error iteration rows show "0 tokens" with no visual distinction from a successful iteration with no token data
+- Python normalizer raises an exception when `raw_response` is `None`
+
+**Phase to address:** Frontend counter rendering phase — add null guards before any token display logic.
 
 ---
 
@@ -335,13 +352,13 @@ Do NOT use recursive OWL components. Instead, flatten the render loop: after eac
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Skip the pending-child buffer (assume events arrive in order) | Simpler bus handlers | Subagent traces silently dropped or misplaced under race conditions | Never — race is real, buffer is cheap |
-| Nest subagent traces inside parent trace objects | Mirrors visual hierarchy | IDB write complexity multiplies; structured clone on large parent; selection logic breaks | Never — flat model is correct |
-| Key agentColors by `trace_id` instead of `agent_name` | No collision risk | Each trace gets a unique color; color-coding loses its purpose | Never |
-| Recursive OWL component for tree rendering | Elegant code | Double-render cascades; t-key complexity; lifecycle ordering bugs | Never for this use case |
-| Store colors embedded in trace records | No new IDB key | Colors change when any trace is updated (incorrect coupling) | Never — colors are orthogonal to traces |
-| Single-pass hydration with inline parent validation | Simpler code | Occasionally fails when child record is processed before parent | Never — two-pass is the correct approach |
-| Skip bumping DB version when adding agent_colors to sentinel key in traces store | No migration needed | Acceptable — sentinel key approach does not require version bump | Acceptable only for the sentinel key approach |
+| Read tokens from `raw_response` in JS (after service strips envelope) | No Python changes needed | Always returns undefined; counters permanently show 0 for all providers | Never |
+| Store animated counter value in reactive `iter.displayed_tokens` | Simple, idiomatic-looking code | Triggers full `sidebarNodes` recompute at 60fps; sidebar jank during any animation | Never |
+| Use JS `receivedAt` differences for per-iteration timing | No backend changes | Includes bus latency (50-300ms); inaccurate for fast LLM calls | Acceptable as fallback for v1.4 hydrated traces; never for new live events |
+| Bump `DB_VERSION` to 2 "for safety" | Ensures clean state | Destroys all stored developer traces on deploy | Never for additive JSON fields |
+| Single token extraction path (only OpenAI or only Google) | Faster to write | Silent zero-tokens for one entire provider family | Only as temporary dev stub, never shipped |
+| Accumulate `total_tokens` as a separate trace field | Avoids recomputation | Diverges from per-iteration data after hydration | Never — always compute from iterations |
+| Animation duration > 500ms | More dramatic visual effect | Counter still animating when next iteration arrives; jitter visible | Never for agents with > 1 LLM call |
 
 ---
 
@@ -349,14 +366,14 @@ Do NOT use recursive OWL components. Instead, flatten the render loop: after eac
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| Bus events + subagent ordering | Assume `tool_call` always arrives before child `new_trace` | Buffer pending children; check buffer on every `tool_call` arrival |
-| OWL reactive Map + computed tree view | Store parent-child relationships in nested Map properties | Store in flat Map; compute tree from `parent_tool_call_id` pointers at render time |
-| IDB + subagent fields | Forget to add `parent_trace_id` to `serializeTrace()` | Audit `serializeTrace()` and `hydrateTrace()` together when adding any new field |
-| IDB + color store | Bump DB version without migration code | Use sentinel key in existing store, or bump version with proper `onupgradeneeded` |
-| IDB hydration + parent pointers | Single-pass with inline parent lookup (sometimes fails) | Two-pass: load all traces first, then validate/link parent pointers |
-| Export + nesting | Export traces without parent linkage fields | Always include `parent_trace_id` and `parent_tool_call_id` in serialization |
-| OWL template + recursive tree | Recursive component for subagent nesting | Flat iterative render with CSS indentation; depth computed from pointer walk |
-| Color assignment + identity | Key by `trace_id` (too granular) or `agent_id` (may not be in payload) | Key by `agent_name`; document the collision semantics |
+| OpenAI `usage` envelope | Accessing `response.get('usage')` after `get_completions()` returns | Capture inside service before `return response.get('output', [])` |
+| Google `usageMetadata` envelope | Accessing `response.get('usageMetadata')` after `get_completions()` returns | Capture inside service before `return [content]` |
+| `iteration` bus event | Adding `tokens` inside `raw_response` list | Add as a top-level sibling field: `'tokens': {...}` alongside `raw_response` |
+| OWL reactive Map + animation | Storing animation counter in `iter.displayed_tokens` | Store final value only in reactive state; animate via CSS or non-reactive ref |
+| IDB `serializeTrace()` | Updating serializer without updating `hydrateTrace()` | Always edit both in the same commit; add version comment |
+| `getIterationDuration()` in `app.js` | Continuing to use JS `receivedAt` differences for featured timing metric | Replace with `iter.duration_ms` from server; keep JS method as fallback for old records |
+| Error iteration tokens | Python normalizer raising when `raw_response` is `None` | Guard with `if raw_response is None: return zeros` |
+| JS token sum | `iter.tokens_input + iter.tokens_output` without null guard | `(iter.tokens_input \|\| 0) + (iter.tokens_output \|\| 0)` always |
 
 ---
 
@@ -364,25 +381,41 @@ Do NOT use recursive OWL components. Instead, flatten the render loop: after eac
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Computing the full tree on every render (no memoization) | Render time scales with total number of traces × nesting depth | Use a precomputed `childIndex` map in state; update only on `new_trace` events | When >50 total traces (root + subagent) are in the store |
-| Pending-child buffer grows unboundedly | Memory increases monotonically during multi-agent session | Add a buffer size cap (100 entries) and TTL (clear entries older than 30s) | During sessions where `tool_call` events are dropped |
-| Walking all traces for `getSelectedTrace()` and `getRootTraceId()` during render | Getter called per render, scans all traces | Cache the root-trace lookup when selection changes, not per-render | When trace count exceeds ~200 |
-| Serializing nested subagent hierarchy in `serializeTrace()` | Structured clone includes child trace data duplicated in parent | Keep flat model; parent record only stores `parent_trace_id` pointer, not child data | When nesting depth exceeds 3 levels |
+| RAF loop touching reactive iteration state | `sidebarNodes` and `depthLinePaths` recompute at 60fps; sidebar jank | Keep animation values in non-reactive plain JS objects | Immediately on first animation tick, even with 3 traces |
+| `sidebarNodes` getter recomputing during animation | `depthLinePaths` geometry recalculated 60x/second | Ensure no reactive value read by `sidebarNodes` chain is written by animation loop | Any animation touching reactive state |
+| Detail panel re-rendering on each token increment | JSON tree and message history re-render every frame | Token counter and detail panel reactive subtrees must be separate | With any moderately-sized message history (> 5 messages) |
+| Computing `getTraceTotalTokens` in every `sidebarNodes` call | Per-trace token sum recomputed on every render | OWL tracks reactive reads; sum over `trace.iterations` is correct and efficient; only called on render | When trace count > 50 with many iterations each |
+
+---
+
+## UX Pitfalls
+
+| Pitfall | User Impact | Better Approach |
+|---------|-------------|-----------------|
+| Showing "0 tokens" until `loop_end` event | Misleads developer — looks like tokens are not being captured | Show per-iteration token counts as each `iteration` event arrives |
+| Sidebar counter counting from 0 on each iteration | Developer thinks token count resets per-iteration | Sidebar counter shows running total across all iterations; detail panel shows per-iteration breakdown |
+| Raw token numbers without comma separators | "12345" is harder to read than "12,345" in a glance | Use `toLocaleString()` for all counter displays; store raw integers for computation |
+| Animation duration > inter-event gap | Counter perpetually resets; developer cannot read the value | Use 200-300ms animation; the "counting up" effect should complete between events |
+| "0 tokens" for error iterations without visual distinction | Looks identical to a successful zero-token iteration | Show `—` (em dash) for iterations with `has_error: true`; reserve "0" for successful iterations with genuinely no tokens |
+| Showing `duration_ms` from `loop_end` as per-iteration time | Total loop time ≠ LLM call time; tool execution is included | Display `iter.duration_ms` (LLM-only time) separately from `trace.duration_ms` (total loop) |
+| Sub-agent token counts rolled into parent trace total | Parent counter shows artificially high tokens; parent vs. child comparison is meaningless | Each trace shows only its own iteration tokens; sub-agent traces show their own count independently |
 
 ---
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **Race condition handled:** Trigger a subagent that emits `new_trace` before parent emits `tool_call`; verify the child trace appears nested correctly, not at root level
-- [ ] **Color persists across refresh:** Assign colors to 3 agents, reload the page, verify the same agents get the same colors
-- [ ] **Color not in trace record:** Inspect IDB trace records directly; confirm no `agent_color` field on trace objects (colors are stored separately)
-- [ ] **Subagent nesting survives IDB roundtrip:** Run a nested session, reload the page, verify subagent traces are still nested under the correct parent tool call
-- [ ] **Export preserves nesting:** Export a session with subagent traces, import into a fresh session, verify the hierarchy is intact
-- [ ] **`serializeTrace` includes linkage fields:** Inspect exported JSON; confirm `parent_trace_id` and `parent_tool_call_id` are present on subagent trace records
-- [ ] **Selection works inside subagent traces:** Select a tool call inside a 2-deep subagent trace; verify the detail panel shows correct data and the correct ancestor rows are highlighted
-- [ ] **Pending-child buffer is cleared:** After a session ends, verify `_pendingChildren.size === 0` (no orphaned pending children from dropped events)
-- [ ] **Flat rendering: no recursive components:** Inspect the component tree in OWL devtools; confirm only one level of `AiDebugApp` exists (no `TraceRow` inside `TraceRow`)
-- [ ] **Orphaned subagent traces render gracefully:** Manually delete a parent trace from IDB while leaving a child trace; reload and verify the child renders at root level without errors
+- [ ] **Token extraction (OpenAI):** Counter shows non-zero values when running against an OpenAI model — verify with a real API call, not just a fixture.
+- [ ] **Token extraction (Google):** Counter shows non-zero values when running against a Gemini model — confirm `usageMetadata` path is exercised.
+- [ ] **Hydrated traces:** Archived (IDB-hydrated) traces show token counts in both sidebar and detail panel — not just live-run traces.
+- [ ] **Error iterations:** Iterations with `has_error: true` display `—` or 0 for tokens, not NaN.
+- [ ] **`serializeTrace()` symmetry:** Every new field added to `hydrateTrace()` iteration object is also persisted by `serializeTrace()`.
+- [ ] **Animation does not trigger `sidebarNodes` recompute:** Verify via `console.time` that `sidebarNodes` is NOT called during animation frames.
+- [ ] **`DB_VERSION` unchanged at 1:** Confirmed no store wipe introduced by v1.5 changes.
+- [ ] **Per-iteration timing is server-side `duration_ms`:** Sidebar and detail panel show timing from `iter.duration_ms` (server), not from JS `receivedAt` differences.
+- [ ] **Trace total tokens:** Sidebar trace row shows sum of all iteration tokens, computed from iteration objects (not a stored accumulator), correct after hydration.
+- [ ] **Sub-agent traces isolated:** Child traces (sub-agent runs) show their own token counts; parent trace total does NOT include child tokens.
+- [ ] **Fast multi-iteration runs:** Run a 3+ iteration agent; counter never resets to 0 mid-run; it only counts upward.
+- [ ] **`null` / `None` input to normalizer:** Python normalizer called with `None` returns all-zero dict without raising.
 
 ---
 
@@ -390,14 +423,14 @@ Do NOT use recursive OWL components. Instead, flatten the render loop: after eac
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Child arrives before parent (no buffer) | MEDIUM | Add `_pendingChildren` buffer to `setup()`; update `_onToolCall` to drain buffer after insert; retest ordering scenarios |
-| Subagent traces nested in parent objects | HIGH | Refactor data model to flat Map; update all selection getters, serialization, and rendering — major refactor if nesting is deep in the codebase |
-| Color stored in trace record | LOW | Extract color to separate `agentColors` state; update serialization to exclude color from trace records |
-| IDB version not bumped for new store | LOW | Bump `DB_VERSION`; add `idb._tables.add()` for new store; existing traces are preserved |
-| Export missing parent linkage fields | LOW | Add fields to `serializeTrace()`; existing IDB records need re-write (trigger via next `loop_end`) |
-| Single-pass hydration breaks | LOW | Add second pass after load loop; validate parent pointers with warnings for orphans |
-| Recursive component double-render | MEDIUM | Replace recursive component with flat iterative template loop; update all CSS indentation logic |
-| Color key too granular (per-trace) | LOW | Change key from `trace_id` to `agent_name`; wipe existing color assignments and re-assign |
+| Tokens always 0 (wrong extraction point) | MEDIUM | Subclass provider service classes in `ai_debug`; add token capture before envelope strip; re-test both providers |
+| DB_VERSION bump wiped IDB history | LOW (data permanently lost) | Revert `DB_VERSION` bump; add comment explaining why it should not change for JSON-only additions |
+| Animation causes render cascade | MEDIUM | Remove counter value from reactive state; switch to CSS transition on final reactive value; no backend change |
+| `serializeTrace()`/`hydrateTrace()` mismatch | LOW | Add missing fields to whichever function lags; tokens correct on next `loop_end` write |
+| Counter jitter (resets on each event) | LOW | Change animation logic to `{displayedValue, targetValue}` pattern; no backend change |
+| Bus latency in per-iteration timing | MEDIUM | Add `duration_ms` field to `iteration` event in Python; update JS to prefer it over `receivedAt` diff |
+| NaN tokens from error iterations | LOW | Add `|| 0` guards in JS sum; add `if not raw_envelope: return zeros` guard in Python normalizer |
+| Trace total wrongly including sub-agent tokens | LOW | Ensure `getTraceTotalTokens()` only sums `trace.iterations.values()` for the trace's own iterations |
 
 ---
 
@@ -405,29 +438,29 @@ Do NOT use recursive OWL components. Instead, flatten the render loop: after eac
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Child `new_trace` before parent `tool_call` | Phase 1: Bus event handlers | Manual test with artificial delay on parent `tool_call` send |
-| Subagent traces nested in parent objects | Phase 1: Data model design | Code review: `this.traces` is the only store; no `.children` property on traces |
-| `reactive()` without render observer | Phase 1: Data model design | OWL devtools shows renders firing when any child trace is added |
-| Selection logic breaks with flat+nested rendering | Phase 3: Template restructure | Select tool call inside level-2 subagent; ancestor highlight is correct |
-| Color assignment not reactive | Phase 2: Color assignment | New agent's first trace row shows color immediately without a second event |
-| IDB version not bumped | Phase 2: IDB persistence for colors | No `NotFoundError` in console; colors survive reload |
-| Two-pass hydration for parent pointers | Phase 2: IDB hydration | Reload after subagent session; nesting is intact |
-| Export missing linkage fields | Phase 2: Serialization + Phase 4: Export | Exported JSON contains `parent_trace_id`; import restores nesting |
-| Color collision semantics undocumented | Phase 2: Color assignment | Code comment explains key choice; behavior is intentional |
-| Recursive component double-render | Phase 3: Template restructure | OWL devtools shows single render cycle per bus event; no flicker |
+| Token data stripped before instrumentation sees it | Phase: Backend token extraction | Integration test: emit `iteration` event, assert `tokens.input_tokens > 0` against a real or mocked API call for both providers |
+| OpenAI vs. Google field name divergence | Phase: Backend token extraction | Unit test `_ai_debug_normalize_tokens()` with both OpenAI and Google fixture dicts |
+| `time.monotonic()` inaccuracy for per-iteration timing | Phase: Backend instrumentation | Assert `iter.duration_ms` is within reasonable range of `loop_end.duration_ms` divided by iteration count |
+| OWL render cascade from animated reactive state | Phase: Frontend counter animation | Profile: `sidebarNodes` getter call count must not increase at 60fps during animation |
+| Counter jitter on rapid events | Phase: Frontend counter animation | Manual test: 3+ iteration agent; counter never resets to 0 mid-run |
+| IDB serialization/hydration asymmetry | Phase: Frontend IDB/hydration | Test: write trace with new fields, clear in-memory store, reload — tokens survive round-trip |
+| DB_VERSION accidental bump | Phase: Frontend IDB/hydration | Code review gate: diff confirms `DB_VERSION` still `1` |
+| RAF vs. OWL patch conflict | Phase: Frontend counter animation | Visual test: no counter flicker during bus event arrival |
+| NaN/null tokens on error iterations | Phase: Frontend counter rendering | Manual test: provoke a loop error; sidebar shows `—` or `0`, not NaN |
+| Sub-agent token isolation | Phase: Frontend counter rendering | Manual test: run a sub-agent; parent total equals only parent iterations |
 
 ---
 
 ## Sources
 
-- Direct codebase inspection: `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/app.js` — current flat `this.traces` Map, `hydrateTrace()`, `serializeTrace()` in `db.js`, bus event handler structure
-- OWL reactive model: `reactive()` without callback uses `NO_CALLBACK` sentinel — mutations tracked but no observer notification; `useState()` wraps the Map so OWL's render function observes mutations — confirmed from PROJECT.md "Key Decisions" table and OWL source
-- IDB `onupgradeneeded` semantics: fires only on version change, not on `_tables.add()` — confirmed from v1.3 PITFALLS.md Pitfall 9 and MDN IndexedDB documentation
-- Bus event ordering: separate `registry.cursor()` per event means NOTIFY is committed independently per event; no ordering guarantee between two separate cursors — confirmed from `ai_session.py` `_ai_debug_bus_send()` implementation
-- OpenTelemetry span model: flat span storage with parent pointer is the standard distributed tracing pattern — used as the reference model for the flat `parent_trace_id` approach
-- PROJECT.md v1.4 requirements: "subagent traces indent under the parent tool call, with arbitrary nesting depth"; "per-agent color assignment on first appearance, persisted to IDB" — requirements as stated
-- v1.3 PITFALLS.md (superseded): IDB write patterns, `hydrateTrace()` reactive reconstruction, `onWillStart` vs `onMounted` — all confirmed resolved in the current codebase
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/services/ai_api_service_openai.py` — OpenAI `usage` field location and exact field names (lines 86-100); confirms `usage` is logged then only `output` is returned
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/services/ai_api_service_google.py` — Google `usageMetadata` field location and exact field names (lines 75-101); confirms `usageMetadata` is logged then only `[content]` is returned
+- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/models/ai_session.py` — `_run_agentic_loop` yield structure (lines 422-435); confirms `metadata = response` = post-strip output list, not raw envelope
+- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/models/ai_session.py` — existing instrumentation override; `raw_response: item.get('metadata')` confirmed at line 206; `_debug_ctx` mutable dict pattern at lines 139-146
+- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/app.js` — OWL reactive architecture; `sidebarNodes` computed getter chain (lines 628-702); `depthLinePaths` reads `sidebarNodes` (line 551); `getIterationDuration()` using `receivedAt` diffs (lines 729-751); `onPatched` DOM write pattern (lines 342-366)
+- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/db.js` — IDB schema, `DB_VERSION = 1`, manual field enumeration in `serializeTrace()` (lines 37-89), `hydrateTrace()` symmetric read pattern (lines 24-47)
+- OWL reactivity model: reactive read tracking, `onPatched` timing, and RAF/patch interaction — training knowledge (HIGH confidence for the core reactive model, confirmed by the `useState(new Map())` pattern documented in PROJECT.md Key Decisions table)
 
 ---
-*Pitfalls research for: Odoo AI Debugger v1.4 — Subagent nesting, recursive trace linking, color-coding*
-*Researched: 2026-02-23*
+*Pitfalls research for: Odoo AI Debugger v1.5 — Live animated token/time metrics*
+*Researched: 2026-02-24*
