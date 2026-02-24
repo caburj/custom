@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-24)
 Phase: 18 of 18 (Display Components and Animation)
 Plan: 02 complete
 Status: Complete
-Last activity: 2026-02-24 — Phase 18 Plan 02 complete (LoopDetail Metrics tab, live timer, accounting-style totals)
+Last activity: 2026-02-24 - Completed quick task 34: change token display to directional arrows
 
 Progress: [████████████████░░░] 88% (16/18 phases complete, Phase 17 in progress)
 
@@ -81,9 +81,10 @@ None.
 | 31 | Fix nested trace indentation under tool calls in indentation mode | 2026-02-24 | 5169a94 | Verified | [31-fix-nested-trace-indentation-under-tool-](./quick/31-fix-nested-trace-indentation-under-tool-/) |
 | 32 | Make indented view the default and add CSS vertical depth guide lines | 2026-02-24 | 6a07093 | Verified | [32-make-indented-view-the-default-and-rende](./quick/32-make-indented-view-the-default-and-rende/) |
 | 33 | Inline sidebar trace metrics into agent/model meta line | 2026-02-24 | 752369c | | [33-in-the-sidebar-inline-the-metrics-to-the](./quick/33-in-the-sidebar-inline-the-metrics-to-the/) |
+| 34 | Change token display to directional up/down arrows | 2026-02-24 | 576ebb7 | | [34-change-token-display-format-to-use-up-do](./quick/34-change-token-display-format-to-use-up-do/) |
 
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Quick task 33 complete — inlined sidebar trace metrics into meta line
+Stopped at: Quick task 34 complete — changed sidebar token display to directional arrows
 Resume file: None
