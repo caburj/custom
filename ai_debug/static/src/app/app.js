@@ -827,9 +827,16 @@ export class AiDebugApp extends Component {
     exportSelected() {
         const ids = [...this.state.checkedTraceIds];
         if (ids.length === 0) return;
-        // Serialize each checked trace using the same format IDB stores.
+        // Expand to include all descendant traces (subagent children) before
+        // serializing — mirrors the proven deleteCheckedTraces() cascade pattern.
+        const allIds = [...ids];
+        for (const id of ids) {
+            allIds.push(...this._collectDescendantIds(id));
+        }
+        const uniqueIds = [...new Set(allIds)];
+        // Serialize each trace using the same format IDB stores.
         // JSON round-trip strips OWL reactive Proxies (same technique as writeTrace).
-        const records = ids.map((id) => {
+        const records = uniqueIds.map((id) => {
             const trace = this.traces.get(id);
             if (!trace) return null;
             return JSON.parse(JSON.stringify(serializeTrace(trace)));
