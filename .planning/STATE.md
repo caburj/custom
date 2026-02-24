@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-24)
 Phase: Not started (defining requirements)
 Plan: —
 Status: Defining requirements
-Last activity: 2026-02-24 - Completed quick task 31: Fix nested trace indentation under tool calls in indentation mode
+Last activity: 2026-02-24 - Completed quick task 32: Make indented view the default and add CSS vertical depth guide lines
 
 ## Milestones Shipped
 
@@ -52,9 +52,10 @@ None.
 | 29 | Add toolbar toggle for SVG guide lines vs indentation mode | 2026-02-24 | af138b6 | Verified | [29-add-toolbar-toggle-for-svg-guide-lines-v](./quick/29-add-toolbar-toggle-for-svg-guide-lines-v/) |
 | 30 | Fix indentation mode visual hierarchy (iter/tc row nesting) | 2026-02-24 | 8284199 | | [30-in-the-last-quick-task-toggle-between-ne](./quick/30-in-the-last-quick-task-toggle-between-ne/) |
 | 31 | Fix nested trace indentation under tool calls in indentation mode | 2026-02-24 | 5169a94 | Verified | [31-fix-nested-trace-indentation-under-tool-](./quick/31-fix-nested-trace-indentation-under-tool-/) |
+| 32 | Make indented view the default and add CSS vertical depth guide lines | 2026-02-24 | 6a07093 | | [32-make-indented-view-the-default-and-rende](./quick/32-make-indented-view-the-default-and-rende/) |
 
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Quick task 31 — fix nested trace indentation under tool-call rows
+Stopped at: Quick task 32 — make indented view default + CSS vertical depth guide lines
 Resume file: None
