@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A custom Odoo module that instruments the enterprise `ai` module's agentic loop to provide live visibility into every LLM call, tool execution, state change, and loop iteration — including nested subagent hierarchies. Delivered as a standalone OWL app at `/ai-debug` that respects the user's Odoo light/dark theme preference. Traces persist locally via IndexedDB across page refresh, with checkbox-based bulk delete, JSON export/import (with subagent cascade), and automatic ephemeral mode fallback when IDB is unavailable. Subagent traces nest under the tool call that spawned them with arbitrary depth and VS Code-style guide lines.
+A custom Odoo module that instruments the enterprise `ai` module's agentic loop to provide live visibility into every LLM call, tool execution, state change, and loop iteration — including nested subagent hierarchies and real-time token/timing metrics. Delivered as a standalone OWL app at `/ai-debug` that respects the user's Odoo light/dark theme preference. Traces persist locally via IndexedDB across page refresh, with checkbox-based bulk delete, JSON export/import (with subagent cascade), and automatic ephemeral mode fallback when IDB is unavailable. Subagent traces nest under the tool call that spawned them with arbitrary depth and VS Code-style guide lines. Per-iteration token counts and duration are extracted from both OpenAI and Google providers, displayed as live counters in the sidebar and detailed breakdowns in the Metrics tab.
 
 ## Core Value
 
@@ -10,19 +10,7 @@ Full observability of the AI agentic loop — every LLM request/response, tool c
 
 ## Current State
 
-## Current Milestone: v1.5 Live Metrics
-
-**Goal:** Add real-time animated time and token counters to trace rows and detail panels, with per-iteration breakdown and normalized cross-provider token schema.
-
-**Target features:**
-- Normalized token extraction from LLM API responses (OpenAI + Google → common schema)
-- Per-iteration timing instrumentation
-- Sidebar compact live counters (time + tokens) with counting-up animation
-- Detail panel full breakdown (per-iteration tokens/timing, trace totals)
-
-## Shipped
-
-**Shipped v1.4** (2026-02-24) — Subagent Support
+**Shipped v1.5** (2026-02-24) — Live Metrics
 
 The module is a fully functional developer tool with:
 - Standalone OWL app at `/ai-debug` with Odoo-native light/dark theme support
@@ -40,9 +28,15 @@ The module is a fully functional developer tool with:
 - Ephemeral mode degradation when IDB unavailable (amber badge indicator)
 - Conditional CSS bundle loading via `webclient_rendering_context()` — automatically adapts to user's theme preference
 - All SCSS uses Odoo `$o-*` variables — zero hardcoded colors
+- **Normalized token extraction** from OpenAI and Google providers via `threading.local()` monkey-patch on `AIApiService._request`
+- **Per-iteration timing** via server-measured `time.monotonic()` duration on every iteration bus event
+- **Sidebar live counters** showing total time and directional token split (input/output) that update as iterations complete
+- **IterationDetail header chips** displaying duration and token count per iteration
+- **LoopDetail Metrics tab** with per-iteration token/timing table (input, output, cached, reasoning, duration) and accounting-style totals row
+- **Live elapsed timer** with pulsing chip animation using setInterval DOM mutation, instant freeze on trace completion
 
 **Tech stack:** Odoo OWL standalone app, bus.bus WebSocket, generator yield passthrough instrumentation, IndexedDB via `@web/core/utils/indexed_db`.
-**LOC:** ~2,547 (JS/XML/SCSS/Python)
+**LOC:** ~5,409 (JS/XML/SCSS/Python)
 **Module:** `ai_debug` — depends on `ai_app` and `bus`.
 
 ## Requirements
@@ -80,14 +74,15 @@ The module is a fully functional developer tool with:
 - ✓ Export/import cascades to subagent descendants preserving hierarchy — v1.4
 - ✓ Two-pass IDB hydration with orphan promotion — v1.4
 - ✓ Root-only auto-select on page load — v1.4
+- ✓ Extract and normalize token usage from LLM API responses into explicit fields on iteration bus events — v1.5
+- ✓ Per-iteration timing (duration_ms per iteration) — v1.5
+- ✓ Sidebar trace rows show compact live counters: total time, total tokens (animated counting up) — v1.5
+- ✓ Detail panel shows full per-iteration token and timing breakdown with trace-level totals — v1.5
+- ✓ Animated counter effect that ticks up from 0 as new iteration events arrive in real time — v1.5
 
 ### Active
 
-- [ ] Extract and normalize token usage from LLM API responses into explicit fields on iteration bus events
-- [ ] Add per-iteration timing (duration_ms per iteration)
-- [ ] Sidebar trace rows show compact live counters: total time, total tokens (animated counting up)
-- [ ] Detail panel shows full per-iteration token and timing breakdown with trace-level totals
-- [ ] Animated counter effect that ticks up from 0 as new iteration events arrive in real time
+(None — planning next milestone)
 
 ### Out of Scope
 
@@ -106,6 +101,12 @@ The module is a fully functional developer tool with:
 - Sidebar filter by agent — destroys multi-agent context nesting is designed to show
 - Custom color picker per agent — hash-based deterministic assignment is sufficient
 - Auto-expand tree to selected item — breaks user's intentional collapse state
+- Cost-in-currency display — provider pricing changes too frequently; per-tier rates vary
+- Historical cost aggregation — requires pricing data, aggregate IDB queries, currency handling
+- Subagent token roll-up — cross-trace accounting adds complexity with marginal value
+- Anthropic/Claude provider — not present in enterprise ai module yet
+- JS-side raw_response parsing for tokens — raw_response contains output list not HTTP envelope
+- DB_VERSION bump for token fields — additive JSON fields don't require schema migration
 
 ## Context
 
@@ -119,6 +120,8 @@ The module is a fully functional developer tool with:
 - EVAL-01: Automated LLM-as-judge scoring of captured traces
 - TSEL-01: User can select specific traces for export (currently exports all checked)
 - NEST-02: Exact parent tool call matching via parent_call_id for parallel subagent disambiguation
+- ROLL-01: Parent trace total includes aggregated token counts from all descendant subagent traces
+- COST-01: Token counts converted to estimated cost using provider pricing rates
 
 **Known tech debt:**
 - Payload size for RAG-enabled sessions unknown (needs empirical baseline)
@@ -129,12 +132,14 @@ The module is a fully functional developer tool with:
 - _applyImport does not run orphan-promotion pass (unreachable via normal export flow)
 - CSS depth tint caps at 4 levels while JS tracks exact depth
 - ai_parent_tool_call_id depends on base enterprise class setting tools_context['tool_call_id'] — fragile coupling
+- ai_provider field stored in reactive store and IDB but not rendered (reserved for future provider-display feature)
+- Sidebar shows "0ms" if thread-local timing stash fails but tokens succeed (cosmetic only)
 
 ## Constraints
 
 - **Odoo version**: Master branch only
 - **Dependency**: Requires enterprise `ai_app` module installed
-- **Approach**: Model inheritance only (`_inherit = 'ai.session'`), no monkey-patching
+- **Approach**: Model inheritance only (`_inherit = 'ai.session'`), no monkey-patching (except provider service layer for token extraction)
 - **Behavior**: Zero behavioral change to the underlying agentic loop (yield passthrough)
 - **Stack**: Standalone OWL app + `bus.bus` for live updates, no Odoo backend views
 - **Access**: Any internal user (`base.group_user`)
@@ -174,6 +179,15 @@ The module is a fully functional developer tool with:
 | COLR descoped from v1.4 to v1.5 (v1.4) | Audit revealed scope gap; color-coding is additive, not core hierarchy work | ✓ Good — shipped on time |
 | Two-pass IDB hydration (v1.4) | Random IDB record ordering requires post-load validation of parent pointers | ✓ Good — orphans promoted correctly |
 | Export cascade via _collectDescendantIds (v1.4) | Same pattern as delete cascade — consistent, proven | ✓ Good — full hierarchy exported |
+| threading.local() monkey-patch for token capture (v1.5) | Token data stripped at provider service layer before instrumentation can see it | ✓ Good — reliable cross-provider capture |
+| Token total uses raw provider value (v1.5) | Not computed from input+output — preserves any provider-internal discrepancy | ✓ Good — accurate reporting |
+| Tokens field absent on errored iterations (v1.5) | Absence signals failure; null/undefined would require explicit null checks | ✓ Good — clean error signaling |
+| No DB_VERSION bump for token fields (v1.5) | Additive JSON fields on iteration blob require no IDB schema migration | ✓ Good — no data loss on upgrade |
+| normalizeTokens maps cached→cache_read (v1.5) | Locked schema decision; cache_write always 0 until backend field exists | ✓ Good — consistent schema |
+| getTraceTotals reads reactive proxy chain (v1.5) | OWL re-renders sidebar as new iterations arrive — SIDE-02 satisfied | ✓ Good — live counting effect |
+| DOM mutation timer via useRef+setInterval (v1.5) | Avoids OWL re-rendering entire LoopDetail at 1Hz | ✓ Good — smooth timer with no jank |
+| Timer chip swap via t-if/t-elif (v1.5) | Instant freeze on trace completion — no CSS transition needed | ✓ Good — clean lifecycle |
+| Monochrome ai-metric-chip (v1.5) | Gray-200/700, no color-coding — clean developer-tool aesthetic | ✓ Good — consistent look |
 
 ---
-*Last updated: 2026-02-24 — v1.5 Live Metrics milestone started*
+*Last updated: 2026-02-24 after v1.5 milestone*
