@@ -3,6 +3,8 @@
 **Defined:** 2026-02-23
 **Core Value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
 
+**v1.4 scope:** Subagent hierarchy nesting + data integrity. Color coding deferred to v1.5.
+
 ## v1.4 Requirements
 
 ### Instrumentation
@@ -19,14 +21,6 @@
 - [x] **TREE-04**: Collapsing a parent trace hides all descendant traces, iterations, and tool calls
 - [x] **TREE-05**: Frontend handles out-of-order bus events via pending-child buffer (child trace arriving before parent tool call is buffered and attached when parent arrives)
 
-### Color Coding
-
-- [ ] **COLR-01**: Each distinct agent is assigned a color from an 8-slot curated palette on first appearance
-- [ ] **COLR-02**: Agent-to-color mapping is persisted to IndexedDB and survives page refresh
-- [ ] **COLR-03**: Trace rows in the sidebar display a colored left border strip matching their agent's assigned color
-- [ ] **COLR-04**: Compact color legend (agent name + color swatch) is displayed in the sidebar header area
-- [ ] **COLR-05**: Detail panel header shows a colored agent name chip identifying which agent owns the selected node
-
 ### Data Integrity
 
 - [ ] **DATA-01**: `serializeTrace()` and `hydrateTrace()` preserve parent linkage fields (`parent_trace_id`, `parent_tool_call_id`) across IDB roundtrip
@@ -35,10 +29,15 @@
 
 ## Future Requirements
 
-### v1.4.1 Candidates
+### v1.5 Candidates
 
-- **NEST-02**: Exact parent tool call matching via `parent_call_id` for parallel subagent disambiguation (currently deferred — `tools_context['tool_call_id']` not threaded to child session)
+- **COLR-01**: Each distinct agent is assigned a color from an 8-slot curated palette on first appearance
+- **COLR-02**: Agent-to-color mapping is persisted to IndexedDB and survives page refresh
+- **COLR-03**: Trace rows in the sidebar display a colored left border strip matching their agent's assigned color
+- **COLR-04**: Compact color legend (agent name + color swatch) is displayed in the sidebar header area
+- **COLR-05**: Detail panel header shows a colored agent name chip identifying which agent owns the selected node
 - **COLR-06**: Depth indicator (numeric label or vertical guide line) on deeply nested trace rows
+- **NEST-02**: Exact parent tool call matching via `parent_call_id` for parallel subagent disambiguation (currently deferred — `tools_context['tool_call_id']` not threaded to child session)
 
 ## Out of Scope
 
@@ -58,24 +57,19 @@
 | INST-02 | Phase 13 | Complete |
 | INST-03 | Phase 13 | Complete |
 | TREE-05 | Phase 13 | Complete |
-| COLR-01 | Phase 14 | Pending |
-| COLR-02 | Phase 14 | Pending |
-| DATA-01 | Phase 14 | Pending |
-| DATA-02 | Phase 14 | Pending |
-| DATA-03 | Phase 14 | Pending |
-| TREE-01 | Phase 15 | Complete |
-| TREE-02 | Phase 15 | Complete |
-| TREE-03 | Phase 15 | Complete |
-| TREE-04 | Phase 15 | Complete |
-| COLR-03 | Phase 15 | Pending |
-| COLR-04 | Phase 15 | Pending |
-| COLR-05 | Phase 15 | Pending |
+| TREE-01 | Phase 14 | Complete |
+| TREE-02 | Phase 14 | Complete |
+| TREE-03 | Phase 14 | Complete |
+| TREE-04 | Phase 14 | Complete |
+| DATA-01 | Phase 15 | Pending |
+| DATA-02 | Phase 15 | Pending |
+| DATA-03 | Phase 15 | Pending |
 
 **Coverage:**
-- v1.4 requirements: 16 total
-- Mapped to phases: 16
+- v1.4 requirements: 11 total
+- Mapped to phases: 11
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-23*
-*Last updated: 2026-02-23 after roadmap creation*
+*Last updated: 2026-02-24 after milestone audit gap closure*
