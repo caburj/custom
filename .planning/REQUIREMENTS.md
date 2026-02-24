@@ -27,8 +27,8 @@ Requirements for v1.5 Live Metrics. Each maps to roadmap phases.
 ### Detail Panel
 
 - [x] **DETL-01**: IterationDetail shows duration and token count chips in the header
-- [ ] **DETL-02**: LoopDetail shows a Metrics tab with per-iteration token/timing table and trace-level totals row
-- [ ] **DETL-03**: Detail panel shows live elapsed timer for running traces (updates at 1-second granularity)
+- [x] **DETL-02**: LoopDetail shows a Metrics tab with per-iteration token/timing table and trace-level totals row
+- [x] **DETL-03**: Detail panel shows live elapsed timer for running traces (updates at 1-second granularity)
 
 ### Persistence
 
@@ -73,8 +73,8 @@ Requirements for v1.5 Live Metrics. Each maps to roadmap phases.
 | SIDE-01 | Phase 18 | Complete |
 | SIDE-02 | Phase 17 | Complete |
 | DETL-01 | Phase 18 | Complete |
-| DETL-02 | Phase 18 | Pending |
-| DETL-03 | Phase 18 | Pending |
+| DETL-02 | Phase 18 | Complete |
+| DETL-03 | Phase 18 | Complete |
 | PERS-01 | Phase 17 | Complete |
 | PERS-02 | Phase 17 | Complete |
 

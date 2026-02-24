@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.5 Live Metrics — Phase 18 Plan 01 complete, ready for Phase 18 Plan 02
+**Current focus:** v1.5 Live Metrics — Phase 18 complete (Plans 01 and 02 done)
 
 ## Current Position
 
 Phase: 18 of 18 (Display Components and Animation)
-Plan: 01 complete
-Status: In progress
-Last activity: 2026-02-24 — Phase 18 Plan 01 complete (format_metrics.js, sidebar metrics line, IterationDetail chips)
+Plan: 02 complete
+Status: Complete
+Last activity: 2026-02-24 — Phase 18 Plan 02 complete (LoopDetail Metrics tab, live timer, accounting-style totals)
 
 Progress: [████████████████░░░] 88% (16/18 phases complete, Phase 17 in progress)
 
@@ -30,6 +30,7 @@ Progress: [████████████████░░░] 88% (16/18
 *Updated after each plan completion*
 
 | 18    | 01   | 2 min    | 2     | 6     |
+| 18    | 02   | 2 min    | 2     | 3     |
 
 ## Accumulated Context
 
@@ -51,6 +52,8 @@ Recent decisions affecting current work:
 - [Phase 18]: Keep _formatDuration in AiDebugApp for getIterationDuration callers; bind new formatDuration separately for template use
 - [Phase 18]: Monochrome ai-metric-chip (gray-200/gray-700) — no color-coding by metric type for clean developer-tool aesthetic
 - [Phase 18]: ai-metric-chip designed as reusable class in app.scss for Plan 02 LoopDetail and live timer chip
+- [Phase 18]: DOM mutation via useRef+setInterval for timer avoids OWL re-render overhead at 1Hz
+- [Phase 18]: Timer chip swaps via t-if/t-elif (not CSS transition) for instant freeze on trace completion
 
 ### Pending Todos
 
@@ -81,5 +84,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Phase 18 Plan 01 complete — format_metrics.js utility, sidebar metrics line, IterationDetail header chips done
+Stopped at: Phase 18 Plan 02 complete — LoopDetail Metrics tab, live timer with DOM mutation, accounting-style totals row
 Resume file: None
