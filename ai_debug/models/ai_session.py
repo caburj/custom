@@ -5,6 +5,7 @@ import uuid
 
 from odoo import api, models
 from odoo.exceptions import UserError
+from odoo.addons.ai_debug.models.ai_provider_patch import pop_last_completion_data
 
 _logger = logging.getLogger(__name__)
 
@@ -80,6 +81,20 @@ class AiSession(models.TransientModel):
             _logger.exception("ai_debug: failed to serialize tools for new_trace")
             return []
 
+    def _ai_debug_resolve_provider_name(self, model):
+        """Return the provider name string ('openai', 'google', etc.) for a given model.
+
+        Uses the same AIProvider.get_by_model lookup that _ai_debug_serialize_tools uses.
+        Returns None on any failure — callers include it in bus events only when non-None.
+        """
+        try:
+            from odoo.addons.ai.services.ai_provider import AIProvider
+            provider = AIProvider.get_by_model(self.env, model)
+            return provider.name
+        except Exception:
+            _logger.exception("ai_debug: failed to resolve provider name for model %r", model)
+            return None
+
     def _generate_next_response(self, message, confirm_pending=False):
         """Override to capture the raw user query before provider formatting.
 
@@ -148,6 +163,9 @@ class AiSession(models.TransientModel):
         iteration_count = 0
         started_at = time.monotonic()
 
+        # Resolve provider name once — a single _run_agentic_loop call uses one model.
+        provider_name = self._ai_debug_resolve_provider_name(model)
+
         # User query is captured from the raw message in _generate_next_response
         # or _get_direct_response (before provider formatting) and threaded here
         # via env context — no need to reverse-parse provider-specific formats.
@@ -186,7 +204,18 @@ class AiSession(models.TransientModel):
                 tools_context, record, schema, web_grounding,
             ):
                 if 'tool_calls' in item or 'final_message' in item:
-                    # LLM responded — emit iteration event before yielding to caller
+                    # LLM responded — emit iteration event before yielding to caller.
+                    # pop_last_completion_data() MUST be called first, immediately after
+                    # the item arrives, to avoid reading data from the next iteration.
+                    try:
+                        completion_data = pop_last_completion_data()
+                        tokens = completion_data.get('tokens')
+                        llm_duration_ms = completion_data.get('llm_duration_ms')
+                    except Exception:
+                        _logger.warning("ai_debug: failed to pop completion data", exc_info=True)
+                        tokens = None
+                        llm_duration_ms = None
+
                     iteration_count += 1
                     iteration_id = uuid.uuid4().hex
                     _debug_ctx['iteration_id'] = iteration_id
@@ -196,7 +225,7 @@ class AiSession(models.TransientModel):
                     # sent to the LLM for this iteration (full accumulated history).
                     messages_snapshot = self._ai_debug_strip_binary(list(messages))
 
-                    self._ai_debug_bus_send('iteration', {
+                    iteration_payload = {
                         'type': 'iteration',
                         'trace_id': trace_id,
                         'iteration_id': iteration_id,
@@ -205,7 +234,15 @@ class AiSession(models.TransientModel):
                         'raw_response': item.get('metadata'),
                         'has_tool_calls': 'tool_calls' in item,
                         'is_final': 'final_message' in item,
-                    })
+                        'provider': provider_name,
+                    }
+                    # tokens is conditional — absence signals failed/unavailable extraction
+                    if tokens is not None:
+                        iteration_payload['tokens'] = tokens
+                    if llm_duration_ms is not None:
+                        iteration_payload['duration_ms'] = llm_duration_ms
+
+                    self._ai_debug_bus_send('iteration', iteration_payload)
 
                 yield item
 
@@ -214,10 +251,18 @@ class AiSession(models.TransientModel):
             termination_reason = 'max_iterations' if 'successive' in str(e).lower() else 'error'
             termination_error = str(e)
 
+            # Capture any partial timing data — tokens are skipped on errored iterations
+            # per CONTEXT.md locked decision ("absence signals failure").
+            try:
+                err_completion_data = pop_last_completion_data()
+                err_llm_duration_ms = err_completion_data.get('llm_duration_ms')
+            except Exception:
+                err_llm_duration_ms = None
+
             # Emit a failed iteration event so it appears in the sidebar tree.
             # Per locked decision: LLM API failures emit an iteration event with error
             # field instead of raw_response, before loop_end.
-            self._ai_debug_bus_send('iteration', {
+            err_iteration_payload = {
                 'type': 'iteration',
                 'trace_id': trace_id,
                 'iteration_id': uuid.uuid4().hex,
@@ -228,7 +273,11 @@ class AiSession(models.TransientModel):
                 'error_type': type(e).__name__,
                 'has_tool_calls': False,
                 'is_final': False,
-            })
+                'provider': provider_name,
+            }
+            if err_llm_duration_ms is not None:
+                err_iteration_payload['duration_ms'] = err_llm_duration_ms
+            self._ai_debug_bus_send('iteration', err_iteration_payload)
             raise
 
         except Exception as e:
@@ -236,7 +285,13 @@ class AiSession(models.TransientModel):
             termination_reason = 'error'
             termination_error = str(e)
 
-            self._ai_debug_bus_send('iteration', {
+            try:
+                err_completion_data = pop_last_completion_data()
+                err_llm_duration_ms = err_completion_data.get('llm_duration_ms')
+            except Exception:
+                err_llm_duration_ms = None
+
+            err_iteration_payload = {
                 'type': 'iteration',
                 'trace_id': trace_id,
                 'iteration_id': uuid.uuid4().hex,
@@ -247,7 +302,11 @@ class AiSession(models.TransientModel):
                 'error_type': type(e).__name__,
                 'has_tool_calls': False,
                 'is_final': False,
-            })
+                'provider': provider_name,
+            }
+            if err_llm_duration_ms is not None:
+                err_iteration_payload['duration_ms'] = err_llm_duration_ms
+            self._ai_debug_bus_send('iteration', err_iteration_payload)
             raise
 
         finally:
@@ -325,6 +384,11 @@ class AiSession(models.TransientModel):
                 'args': tc.get('args', {}),
             })
 
+        # Record start time per call_id just before tool execution begins.
+        # For batch execution these are all the same moment, giving us the
+        # aggregate duration from batch start to each individual result.
+        _tc_start_times = {tc['call_id']: time.monotonic() for tc in tool_calls}
+
         for item in super()._handle_tool_calls(
             tool_calls, tools_by_name, tools_context, record,
             confirmed_tool_id, refuse_all,
@@ -343,6 +407,7 @@ class AiSession(models.TransientModel):
 
                     _debug_ctx['tool_call_count'] += 1
 
+                    _tc_start = _tc_start_times.get(call_id, time.monotonic())
                     self._ai_debug_bus_send('tool_call_completed', {
                         'type': 'tool_call_completed',
                         'trace_id': _debug_ctx['trace_id'],
@@ -353,6 +418,7 @@ class AiSession(models.TransientModel):
                         'result': result,
                         'success': success,
                         'error': error,
+                        'duration_ms': int((time.monotonic() - _tc_start) * 1000),
                     })
 
             elif confirmation := item.get('tool_confirmation_request'):
@@ -360,6 +426,7 @@ class AiSession(models.TransientModel):
                 originating_tc = tool_calls_by_id.get(call_id, {})
                 _debug_ctx['tool_call_count'] += 1
 
+                _tc_start = _tc_start_times.get(call_id, time.monotonic())
                 self._ai_debug_bus_send('tool_call_completed', {
                     'type': 'tool_call_completed',
                     'trace_id': _debug_ctx['trace_id'],
@@ -373,6 +440,7 @@ class AiSession(models.TransientModel):
                     'error': None,
                     'triggered_confirmation': True,
                     'confirmation_message': confirmation.get('message', ''),
+                    'duration_ms': int((time.monotonic() - _tc_start) * 1000),
                 })
 
             yield item
