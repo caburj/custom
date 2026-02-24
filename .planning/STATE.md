@@ -5,28 +5,36 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** v1.5 Live Metrics
+**Current focus:** v1.5 Live Metrics — Phase 16 ready to plan
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 16 of 18 (Backend Token Extraction and Per-Iteration Timing)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-02-24 — Milestone v1.5 started
+Status: Ready to plan
+Last activity: 2026-02-24 — v1.5 roadmap created (phases 16-18)
 
-## Milestones Shipped
+Progress: [████████████████░░░] 83% (15/18 phases complete)
 
-- v1.0 AI Debugger MVP (2026-02-20) — 3 phases, 5 plans
-- v1.1 Live Tracer Standalone App (2026-02-22) — 4 phases, 10 plans
-- v1.2 Native Theming (2026-02-22) — 2 phases, 4 plans
-- v1.3 Local Persistence (2026-02-22) — 3 phases, 5 plans
-- v1.4 Subagent Support (2026-02-24) — 3 phases, 4 plans
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 25
+- v1.0-v1.4 across 15 phases
+
+*Updated after each plan completion*
 
 ## Accumulated Context
 
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
+
+Recent decisions affecting current work:
+- Token data is stripped at the provider service layer before instrumentation can see it — must patch `AIApiService._request` via `threading.local()` in a new `ai_provider_patch.py` file
+- Do NOT bump `DB_VERSION` — additive JSON fields on the iteration blob do not require an IDB schema migration
+- Count-up animation requires no rAF infrastructure — OWL reactive re-render at LLM-call frequency (1-30s) provides the visual effect naturally
+- Live elapsed ticker in detail panel: use `setRecurringAnimationFrame` + `useRef` DOM mutation (not reactive state) to avoid 60fps OWL re-render
 
 ### Pending Todos
 
@@ -57,5 +65,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Starting v1.5 Live Metrics milestone
+Stopped at: v1.5 roadmap created — ready to plan Phase 16
 Resume file: None

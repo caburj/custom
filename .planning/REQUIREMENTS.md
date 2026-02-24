@@ -64,25 +64,25 @@ Requirements for v1.5 Live Metrics. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TOKN-01 | — | Pending |
-| TOKN-02 | — | Pending |
-| TOKN-03 | — | Pending |
-| TOKN-04 | — | Pending |
-| TIME-01 | — | Pending |
-| TIME-02 | — | Pending |
-| SIDE-01 | — | Pending |
-| SIDE-02 | — | Pending |
-| DETL-01 | — | Pending |
-| DETL-02 | — | Pending |
-| DETL-03 | — | Pending |
-| PERS-01 | — | Pending |
-| PERS-02 | — | Pending |
+| TOKN-01 | Phase 16 | Pending |
+| TOKN-02 | Phase 16 | Pending |
+| TOKN-03 | Phase 16 | Pending |
+| TOKN-04 | Phase 16 | Pending |
+| TIME-01 | Phase 16 | Pending |
+| TIME-02 | Phase 16 | Pending |
+| SIDE-01 | Phase 18 | Pending |
+| SIDE-02 | Phase 17 | Pending |
+| DETL-01 | Phase 18 | Pending |
+| DETL-02 | Phase 18 | Pending |
+| DETL-03 | Phase 18 | Pending |
+| PERS-01 | Phase 17 | Pending |
+| PERS-02 | Phase 17 | Pending |
 
 **Coverage:**
 - v1.5 requirements: 13 total
-- Mapped to phases: 0
-- Unmapped: 13 ⚠️
+- Mapped to phases: 13
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-02-24*
-*Last updated: 2026-02-24 after initial definition*
+*Last updated: 2026-02-24 — traceability mapped to phases 16-18*
