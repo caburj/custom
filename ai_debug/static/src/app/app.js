@@ -390,7 +390,8 @@ export class AiDebugApp extends Component {
         }
     }
 
-    showFullQuery(_ev, query) {
+    showFullQuery(ev, query) {
+        ev.stopPropagation();
         if (!this.dialog || !query) return;
         this.dialog.add(TextPopupDialog, {
             title: "User Query",
