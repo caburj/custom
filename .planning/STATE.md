@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 
 ## Current Position
 
-Phase: 15 of 14 (Sidebar Rendering)
+Phase: 15-data-integrity-fixes
 Plan: 01 complete
-Status: All tasks complete — visual verification approved, post-checkpoint fixes committed
-Last activity: 2026-02-23 - Completed quick task 27: when deleting a trace, all descendant traces should be deleted
+Status: All tasks complete — DATA-01/02/03 requirements satisfied, v1.4 milestone complete
+Last activity: 2026-02-24 - Completed Phase 15 Plan 01: export cascade, two-pass IDB hydration, root-only auto-select
 
-Progress: [█████████░] 90% of v1.4
+Progress: [██████████] 100% of v1.4
 
 ## Milestones Shipped
 
@@ -57,6 +57,9 @@ Phase 15 Plan 01 decisions (2026-02-23):
 - COLR-03/04/05 deferred — no color work in Phase 15 per CONTEXT.md
 - Iteration rows default expanded=true — subagent traces visible immediately without expand clicks
 - serializeTrace() must persist parent_trace_id, parent_tool_call_id, session_id — omitting them silently drops parent linkage on page refresh (fixed in a7ac163)
+- [Phase 15-data-integrity-fixes]: exportSelected() uses _collectDescendantIds() + Set dedup — same proven pattern as deleteCheckedTraces()
+- [Phase 15-data-integrity-fixes]: Two-pass IDB hydration: second pass nulls parent fields on orphan traces (parent_trace_id not in traces Map)
+- [Phase 15-data-integrity-fixes]: Auto-select picks newest root trace by created_ts — never a subagent child trace
 
 ### Pending Todos
 
@@ -83,5 +86,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed Quick Task 28 — fix trace title click expanding trace
+Stopped at: Completed 15-data-integrity-fixes-01-PLAN.md — all DATA requirements satisfied
 Resume file: None

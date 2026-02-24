@@ -60,7 +60,7 @@ Full details: `.planning/milestones/v1.3-ROADMAP.md`
 
 - [x] **Phase 13: Python Instrumentation and Bus Event Handling** - Backend emits parent linkage in bus events; frontend buffers out-of-order child traces (completed 2026-02-23)
 - [x] **Phase 14: Sidebar Tree Nesting** - Computed sidebarNodes tree with flat within-trace layout, guide lines, and IDB parent linkage serialization (completed 2026-02-23)
-- [ ] **Phase 15: Data Integrity Fixes** - Export cascades to subagent descendants; orphan traces excluded from auto-selection
+- [x] **Phase 15: Data Integrity Fixes** - Export cascades to subagent descendants; orphan traces excluded from auto-selection (completed 2026-02-24)
 
 ## Phase Details
 
@@ -100,7 +100,7 @@ Plans:
   1. Exporting a root trace that has subagent descendants includes all descendant traces in the JSON — re-importing reconstructs the full nested hierarchy
   2. Auto-select logic does not select a trace whose `parent_trace_id` points to a non-existent parent — orphan traces never appear in the detail panel
   3. serializeTrace()/hydrateTrace() roundtrip preserves parent linkage fields (already working, formal closure)
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 Plans:
 - [ ] 15-01-PLAN.md -- Export cascade, two-pass IDB hydration, orphan promotion, root-only auto-select, DATA-01 verification
 
@@ -125,4 +125,4 @@ Plans:
 | 12. Export and Import | v1.3 | 2/2 | Complete | 2026-02-22 |
 | 13. Python Instrumentation and Bus Event Handling | v1.4 | 2/2 | Complete | 2026-02-23 |
 | 14. Sidebar Tree Nesting | v1.4 | 1/1 | Complete | 2026-02-23 |
-| 15. Data Integrity Fixes | v1.4 | 0/1 | Planned | — |
+| 15. Data Integrity Fixes | 1/1 | Complete   | 2026-02-24 | — |
