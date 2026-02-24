@@ -414,6 +414,17 @@ $ai-indent-step: 16px;
     white-space: nowrap;
 }
 
+// Compact metrics line (time · tokens) below the agent/model meta line
+.ai-tree-metrics-line {
+    display: block;
+    font-size: 10px;
+    color: $o-gray-500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.3;
+}
+
 .ai-tree-label-dim {
     color: $o-gray-600;
 }

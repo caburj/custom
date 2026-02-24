@@ -8,6 +8,7 @@ import { ToolCallDetail } from "./detail/tc_detail";
 import { probeIDB, writeTrace, deleteTraces, loadAllTraces, serializeTrace } from "./db";
 import { ImportPreviewDialog } from "./import_dialog";
 import { TextPopupDialog } from "./detail/text_popup";
+import { formatTokens, formatDuration } from "./format_metrics";
 
 /**
  * Translate backend token schema to the store's canonical token shape.
@@ -106,6 +107,10 @@ export class AiDebugApp extends Component {
                 catch { return "indent"; }
             })(),
         });
+
+        // Formatting utilities bound for template use (Phase 18)
+        this.formatTokens = formatTokens;
+        this.formatDuration = formatDuration;
 
         // Sidebar DOM ref for auto-scroll
         this.sidebarRef = useRef("sidebar");

@@ -112,6 +112,17 @@
                                 <span class="ai-tree-meta-line">
                                     <t t-esc="node.trace.agent_name or 'Agent'"/> &#xB7; <t t-esc="node.trace.model_name or ''"/>
                                 </span>
+                                <t t-set="totals" t-value="this.getTraceTotals(node.trace)"/>
+                                <span class="ai-tree-metrics-line"
+                                      t-if="totals.total_duration_ms > 0 or totals.total_tokens > 0">
+                                    <t t-esc="this.formatDuration(totals.total_duration_ms)"/>
+                                    <t t-if="totals.total_input > 0 and totals.total_output > 0">
+                                        &#xB7; <t t-esc="this.formatTokens(totals.total_input)"/>&#x2192;<t t-esc="this.formatTokens(totals.total_output)"/> tok
+                                    </t>
+                                    <t t-elif="totals.total_tokens > 0">
+                                        &#xB7; <t t-esc="this.formatTokens(totals.total_tokens)"/> tok
+                                    </t>
+                                </span>
                             </span>
                             <span t-if="node.trace.hydrated" class="ai-tree-hydrated-badge" title="Loaded from storage">archived</span>
                             <span t-if="node.trace.status === 'running'" class="ai-debug-pulse-dot small"/>
