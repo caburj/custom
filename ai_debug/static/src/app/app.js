@@ -59,6 +59,14 @@ function hydrateTrace(plain) {
             receivedAt: iter.receivedAt ? new Date(iter.receivedAt) : null,
             expanded: true,
             toolCalls,
+            // Phase 17: zero-default for pre-17 IDB records that lack these fields.
+            // Do NOT use normalizeTokens() here — stored records were already normalized
+            // at ingestion time and have the correct cache_read/cache_write shape.
+            // Using normalizeTokens would incorrectly remap cached->cache_read on records
+            // that already have cache_read. The ?? operator handles missing fields only.
+            tokens: iter.tokens ?? { input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: 0, total: 0 },
+            duration_ms: iter.duration_ms ?? 0,
+            ai_provider: iter.ai_provider ?? null,
         });
     }
     return {

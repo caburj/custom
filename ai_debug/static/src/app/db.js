@@ -65,6 +65,12 @@ export function serializeTrace(trace) {
                 error: iter.error,
                 messages_sent: iter.messages_sent,
                 raw_response: iter.raw_response,
+                // Phase 17: token/timing/provider fields
+                // tokens is a plain {input, output, cache_read, cache_write, reasoning, total} —
+                // JSON-serializable; writeTrace's JSON.parse(JSON.stringify(...)) strips OWL Proxies.
+                tokens: iter.tokens,
+                duration_ms: iter.duration_ms,
+                ai_provider: iter.ai_provider,
                 // Map → array of [toolCallId, toolCallRecord] pairs
                 toolCalls: [...iter.toolCalls.entries()].map(([tcId, tc]) => [
                     tcId,
