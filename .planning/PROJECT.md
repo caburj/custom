@@ -8,17 +8,19 @@ A custom Odoo module that instruments the enterprise `ai` module's agentic loop 
 
 Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
 
-## Current Milestone: v1.5 Visual Type Hierarchy
+## Current State
 
-**Goal:** Add visual distinction between trace, iteration, and tool call rows in the flat sidebar — iterations recede as scaffolding, tool calls pop as primary content.
+## Current Milestone: v1.5 Live Metrics
+
+**Goal:** Add real-time animated time and token counters to trace rows and detail panels, with per-iteration breakdown and normalized cross-provider token schema.
 
 **Target features:**
-- Iteration rows styled as receding scaffolding (muted text, subtle gray background, top border)
-- Tool call rows as primary content (default text, transparent background, full contrast)
-- Type distinction works correctly layered with depth tinting, selected, hover, and ancestor states
-- Both light and dark modes
+- Normalized token extraction from LLM API responses (OpenAI + Google → common schema)
+- Per-iteration timing instrumentation
+- Sidebar compact live counters (time + tokens) with counting-up animation
+- Detail panel full breakdown (per-iteration tokens/timing, trace totals)
 
-## Current State
+## Shipped
 
 **Shipped v1.4** (2026-02-24) — Subagent Support
 
@@ -81,10 +83,11 @@ The module is a fully functional developer tool with:
 
 ### Active
 
-- [ ] Iteration rows styled as receding scaffolding (muted text, gray background, top border)
-- [ ] Tool call rows as primary content (full-contrast text, transparent background)
-- [ ] Type distinction layers correctly with depth tinting, selected, hover, and ancestor states
-- [ ] Both light and dark modes render correctly
+- [ ] Extract and normalize token usage from LLM API responses into explicit fields on iteration bus events
+- [ ] Add per-iteration timing (duration_ms per iteration)
+- [ ] Sidebar trace rows show compact live counters: total time, total tokens (animated counting up)
+- [ ] Detail panel shows full per-iteration token and timing breakdown with trace-level totals
+- [ ] Animated counter effect that ticks up from 0 as new iteration events arrive in real time
 
 ### Out of Scope
 
@@ -173,4 +176,4 @@ The module is a fully functional developer tool with:
 | Export cascade via _collectDescendantIds (v1.4) | Same pattern as delete cascade — consistent, proven | ✓ Good — full hierarchy exported |
 
 ---
-*Last updated: 2026-02-24 after v1.5 milestone start*
+*Last updated: 2026-02-24 — v1.5 Live Metrics milestone started*
