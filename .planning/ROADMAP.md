@@ -86,7 +86,9 @@ Full details: `.planning/milestones/v1.4-ROADMAP.md`
   3. Every iteration event has `duration_ms > 0` (server-measured, not JS receivedAt delta)
   4. Iterations with no token data have all token fields default to 0, not null or undefined
   5. Trace-level total duration is available from the existing `loop_end.duration_ms` field
-**Plans**: TBD
+**Plans:** 1 plan
+Plans:
+- [ ] 16-01-PLAN.md -- Provider patch, token extraction, and iteration timing
 
 ### Phase 17: Frontend Reactive Store and IDB Persistence
 **Goal**: Token and timing data flows from bus events into the reactive store, survives page refresh, and is accessible via computed getters
