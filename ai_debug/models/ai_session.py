@@ -172,7 +172,7 @@ class AiSession(models.TransientModel):
         user_query = self.env.context.get('_ai_debug_user_query', '')
 
         # INST-02: Read parent linkage from env context — set by _handle_tool_calls
-        # (via ai_parent_trace_id) and ai.agent override (via ai_parent_tool_call_id)
+        # (via ai_parent_trace_id) and ir.actions.server override (via ai_parent_tool_call_id)
         # when a subagent session is spawned. None for root sessions.
         parent_trace_id = self.env.context.get('ai_parent_trace_id')        # None for root
         parent_tool_call_id = self.env.context.get('ai_parent_tool_call_id')  # None for root
