@@ -195,6 +195,7 @@ export class AiDebugApp extends Component {
                     raw_response: payload.raw_response || null,
                     is_final: payload.is_final || false,
                     error: payload.error || null,
+                    request_body: payload.request_body || null,
                     // Phase 17: token/timing/provider fields
                     tokens: normalizeTokens(payload.tokens),
                     duration_ms: payload.duration_ms ?? 0,
