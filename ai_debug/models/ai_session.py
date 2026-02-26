@@ -211,10 +211,12 @@ class AiSession(models.TransientModel):
                         completion_data = pop_last_completion_data()
                         tokens = completion_data.get('tokens')
                         llm_duration_ms = completion_data.get('llm_duration_ms')
+                        request_body = completion_data.get('request_body')
                     except Exception:
                         _logger.warning("ai_debug: failed to pop completion data", exc_info=True)
                         tokens = None
                         llm_duration_ms = None
+                        request_body = None
 
                     iteration_count += 1
                     iteration_id = uuid.uuid4().hex
@@ -241,6 +243,16 @@ class AiSession(models.TransientModel):
                         iteration_payload['tokens'] = tokens
                     if llm_duration_ms is not None:
                         iteration_payload['duration_ms'] = llm_duration_ms
+
+                    # Strip binary data from request body message arrays before bus transmission.
+                    # OpenAI uses 'input'; Google uses 'contents'.
+                    if request_body is not None:
+                        request_body = copy.copy(request_body)  # shallow copy to avoid mutating original
+                        if isinstance(request_body.get('input'), list):
+                            request_body['input'] = self._ai_debug_strip_binary(request_body['input'])
+                        if isinstance(request_body.get('contents'), list):
+                            request_body['contents'] = self._ai_debug_strip_binary(request_body['contents'])
+                        iteration_payload['request_body'] = request_body
 
                     self._ai_debug_bus_send('iteration', iteration_payload)
 

@@ -1,7 +1,8 @@
 """Monkey-patch AIApiService._request to capture LLM completion responses.
 
 This module intercepts the low-level HTTP layer of the AI provider service
-to extract token usage and per-iteration LLM call duration via threading.local().
+to extract token usage, per-iteration LLM call duration, and the raw HTTP
+request body via threading.local().
 This is the only way to access token data without modifying enterprise code:
 get_completions() in each provider strips usage data before returning to the
 agentic loop, so instrumentation must intercept _request directly.
@@ -22,7 +23,7 @@ from odoo.addons.ai.services.ai_api_service import AIApiService
 _logger = logging.getLogger(__name__)
 
 # Thread-local storage: one slot per OS thread.
-# Fields set here: last_completion_response, last_llm_duration_ms
+# Fields set here: last_completion_response, last_llm_duration_ms, last_request_body
 _ai_debug_local = threading.local()
 
 # Preserve the original _request so the patch can delegate to it.
@@ -53,7 +54,9 @@ def _patched_request(self, method, endpoint, body, **kwargs):
     if not is_completion:
         return _original_request(self, method, endpoint, body, **kwargs)
 
-    # Completion path: time the call and stash the raw response.
+    # Completion path: stash request body, time the call, and stash the raw response.
+    # Request body is captured BEFORE the call so it's available even if the request fails.
+    _ai_debug_local.last_request_body = body
     t0 = time.monotonic()
     result = _original_request(self, method, endpoint, body, **kwargs)
 
@@ -144,32 +147,36 @@ def _extract_tokens_google(raw_response):
 
 
 def pop_last_completion_data():
-    """Retrieve and clear the most recent completion response and LLM duration.
+    """Retrieve and clear the most recent completion response, LLM duration, and request body.
 
     Called by ai_session._run_agentic_loop immediately after each iteration
     item arrives from the generator. The thread-local fields are cleared
     immediately after reading to prevent cross-iteration contamination.
 
-    Returns a dict with two keys:
+    Returns a dict with three keys:
       - ``tokens``: canonical ``{input, output, total}`` dict (with optional
         ``cached``/``reasoning``) if extraction succeeded, else ``None``.
       - ``llm_duration_ms``: integer milliseconds of the LLM API call, or
         ``None`` if unavailable (e.g. the request raised before timing was set).
+      - ``request_body``: the raw dict passed to the HTTP layer (provider-specific
+        format), or ``None`` if unavailable.
 
     Never raises — callers rely on graceful degradation.
     """
     try:
         raw_response = getattr(_ai_debug_local, 'last_completion_response', None)
         llm_duration_ms = getattr(_ai_debug_local, 'last_llm_duration_ms', None)
+        request_body = getattr(_ai_debug_local, 'last_request_body', None)
 
         # Clear immediately — must happen before any further processing so that
         # a second call within the same thread (or a yielded sub-iteration) does
         # not see stale data from a previous iteration.
         _ai_debug_local.last_completion_response = None
         _ai_debug_local.last_llm_duration_ms = None
+        _ai_debug_local.last_request_body = None
 
         if raw_response is None:
-            return {'tokens': None, 'llm_duration_ms': llm_duration_ms}
+            return {'tokens': None, 'llm_duration_ms': llm_duration_ms, 'request_body': request_body}
 
         # Detect provider by examining which top-level key is present.
         # OpenAI uses 'usage'; Google uses 'usageMetadata'.
@@ -180,11 +187,11 @@ def pop_last_completion_data():
         else:
             tokens = None
 
-        return {'tokens': tokens, 'llm_duration_ms': llm_duration_ms}
+        return {'tokens': tokens, 'llm_duration_ms': llm_duration_ms, 'request_body': request_body}
 
     except Exception:
         _logger.warning(
             "ai_debug: pop_last_completion_data failed unexpectedly",
             exc_info=True,
         )
-        return {'tokens': None, 'llm_duration_ms': None}
+        return {'tokens': None, 'llm_duration_ms': None, 'request_body': None}
