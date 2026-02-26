@@ -37,4 +37,8 @@ export class IterationDetail extends Component {
         return JSON.stringify(this.props.iteration.raw_response, null, 2);
     }
 
+    get requestJson() {
+        return JSON.stringify(this.props.iteration.request_body, null, 2);
+    }
+
 }

@@ -35,6 +35,17 @@
                 </div>
             </t>
 
+            <t t-set-slot="request" title="'Request'" isVisible="true">
+                <div class="ai-detail-section">
+                    <div class="ai-detail-section-header">
+                        <span>HTTP Request Body</span>
+                        <CopyButton content="() => this.requestJson"/>
+                    </div>
+                    <JsonTree data="props.iteration.request_body"
+                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                </div>
+            </t>
+
             <t t-set-slot="response" title="'Raw Response'" isVisible="true">
                 <div class="ai-detail-section">
                     <div class="ai-detail-section-header">
