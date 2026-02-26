@@ -1,466 +1,295 @@
 # Pitfalls Research
 
-**Domain:** Adding live animated token/time metrics to an existing OWL streaming debugger (ai_debug v1.5)
-**Researched:** 2026-02-24
-**Confidence:** HIGH (grounded in direct codebase inspection of ai_debug and the upstream enterprise `ai` module)
+**Domain:** Adding per-DB IndexedDB scoping to an existing single-database OWL app (ai_debug v1.6)
+**Researched:** 2026-02-26
+**Confidence:** HIGH (grounded in direct codebase inspection of ai_debug db.js, app.js, Odoo IndexedDB utility, and session_info source)
 
-This document supersedes the v1.4 PITFALLS.md for v1.5 planning. V1.4 pitfalls are resolved and confirmed. This document focuses exclusively on the new surface area: token extraction from two structurally different LLM providers, per-iteration timing instrumentation, animated counters in OWL's reactive rendering system, and IDB schema additions for new fields.
+This document supersedes the v1.5 PITFALLS.md for v1.6 planning. V1.5 pitfalls are resolved and confirmed. This document focuses exclusively on the new surface area: scoping the `ai_debug_traces` IndexedDB instance by Odoo database name so developers on a multi-DB Odoo instance see isolated trace stores.
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Token Data Is Stripped Before the Instrumentation Override Can See It
+### Pitfall 1: Module-Level IDB Singleton Created Before `session.db` Is Available
 
 **What goes wrong:**
-The `iteration` bus event already carries `raw_response: item.get('metadata')`. The natural first assumption is that `raw_response` contains the full HTTP response envelope — including usage fields. It does not.
+`db.js` creates the IDB instance at module scope:
 
-Tracing the data flow from the actual source code:
-
-- **OpenAI** (`AIApiServiceOpenAI.get_completions`, lines 86-100): the full HTTP response dict has both a `usage` key and an `output` key. The logger reads `response.get('usage')`, then the method returns `response.get('output', [])`. The `output` list is what becomes `metadata` in `_run_agentic_loop` → `raw_response` in the bus event. `usage` is gone.
-- **Google** (`AIApiServiceGoogle.get_completions`, lines 75-101): the full HTTP response dict has both `usageMetadata` and `candidates`. The logger reads `response.get('usageMetadata')`, then the method returns `[content]` (a single-element list from `candidates[0]['content']`). `usageMetadata` is gone.
-
-The `ai_debug` override of `_run_agentic_loop` calls `super()._run_agentic_loop()` and iterates its yielded items. At that point the raw HTTP envelope is already gone — it was consumed inside the service layer. Reading `payload.raw_response?.usage` or `payload.raw_response?.[0]?.usageMetadata` in JS will always be `undefined`.
-
-**Why it happens:**
-The service layer was designed to return only LLM *output* (messages / tool calls), discarding the HTTP envelope. The logging calls in the service files are the only consumers of token data today. It is natural to assume `metadata` (= `raw_response`) would carry everything — but it only carries what `get_completions()` returns.
-
-**How to avoid:**
-Token counts must be extracted *inside* the service layer, before the envelope is discarded, and surfaced through a side channel that the instrumentation override can read.
-
-The correct interception point is to override `get_completions()` on each provider's service class inside `ai_debug`. Since `AIApiServiceOpenAI` and `AIApiServiceGoogle` are concrete classes (not Odoo models), they cannot use `_inherit`. The practical options are:
-
-1. **Add a thread-local / mutable-dict side channel**: pass a mutable dict (e.g., `token_sink = {}`) through `tools_context` into the service call. Subclass the service classes in `ai_debug` to write token data into the sink. Override `provider.get_service()` at the provider level to return the debug-aware subclass. This requires adding module-level subclasses for each provider service.
-
-2. **Inject into `tools_context`**: the `_debug_ctx` mutable dict is already threaded through `tools_context`. Add a `token_sink` list to `_debug_ctx` before calling `super()._run_agentic_loop()`. Override `get_completions()` to append to it after each API call. The iteration event then reads from `_debug_ctx['token_sink'][-1]` after each yield.
-
-3. **Minimal approach — extract from `raw_response` at the Odoo model layer**: Override `_run_agentic_loop` to call the service directly (not via `super()`) and capture the pre-formatted response. This duplicates the service-call logic and breaks the override-only constraint.
-
-Option 2 (mutable `token_sink` in `_debug_ctx`) is the least invasive: it requires subclassing the service classes to write a single dict into a pre-existing channel, with no changes to the main agentic loop logic.
-
-**Warning signs:**
-- JS code doing `payload.raw_response?.usage` or `payload.raw_response?.[0]?.usageMetadata` — both are always undefined
-- Sidebar counters stuck at 0 tokens for all runs, all providers
-- The `iteration` bus event payload has no top-level `tokens` field
-
-**Phase to address:** Backend token extraction (the first backend phase). Must be resolved before any frontend counter work begins, as zero tokens arriving means the UI cannot be validated.
-
----
-
-### Pitfall 2: OpenAI and Google Use Structurally Different Token Field Names — a Single Extraction Path Silently Drops One Provider
-
-**What goes wrong:**
-Even with a correct interception point, the two providers use completely different JSON structures for usage data:
-
-| Field | OpenAI (`usage` key in HTTP response) | Google (`usageMetadata` key in HTTP response) |
-|-------|----------------------------------------|------------------------------------------------|
-| Envelope key | `usage` | `usageMetadata` |
-| Input tokens | `input_tokens` | `promptTokenCount` |
-| Output tokens | `output_tokens` | `candidatesTokenCount` |
-| Cached tokens | `input_tokens_details.cached_tokens` | `cachedContentTokenCount` |
-| Reasoning tokens | `output_tokens_details.reasoning_tokens` | `thoughtsTokenCount` |
-
-This is confirmed directly from the logger calls in the two service files (lines 87-94 in `ai_api_service_openai.py` and lines 76-83 in `ai_api_service_google.py`).
-
-A normalizer that only checks `response.get('usage')` returns zeros for Google. A normalizer that only checks `response.get('usageMetadata')` returns zeros for OpenAI. Because the service returns normally (no error) and the fallback is `0`, the failure is completely silent.
-
-**Why it happens:**
-The logging calls in the two service files provide the ground truth, but they are easy to miss when writing a new normalizer. Developers test against one provider, see non-zero counts, and ship.
-
-**How to avoid:**
-Write a single Python normalizer function with explicit branches for both envelope keys:
-
-```python
-def _ai_debug_normalize_tokens(raw_envelope):
-    """Extract token counts from the raw HTTP response envelope before stripping.
-    raw_envelope is the full response dict from self._request(), not the stripped output.
-    """
-    if usage := raw_envelope.get('usage'):           # OpenAI Responses API
-        return {
-            'input_tokens': usage.get('input_tokens', 0),
-            'output_tokens': usage.get('output_tokens', 0),
-            'cached_tokens': (usage.get('input_tokens_details') or {}).get('cached_tokens', 0),
-            'reasoning_tokens': (usage.get('output_tokens_details') or {}).get('reasoning_tokens', 0),
-        }
-    if usage := raw_envelope.get('usageMetadata'):   # Google Gemini
-        return {
-            'input_tokens': usage.get('promptTokenCount', 0),
-            'output_tokens': usage.get('candidatesTokenCount', 0),
-            'cached_tokens': usage.get('cachedContentTokenCount', 0),
-            'reasoning_tokens': usage.get('thoughtsTokenCount', 0),
-        }
-    return {'input_tokens': 0, 'output_tokens': 0, 'cached_tokens': 0, 'reasoning_tokens': 0}
+```js
+const DB_NAME = "ai_debug_traces";
+const DB_VERSION = 1;
+const idb = new IndexedDB(DB_NAME, DB_VERSION);
+idb._tables.add(STORE);
 ```
 
-Unit-test this function with fixture dicts representing both provider HTTP responses.
+`new IndexedDB(name, version)` immediately calls `this.mutex.exec(() => this._checkVersion(version))` in its constructor, which queues an IDB open. This happens at module parse/evaluate time — before `onWillStart`, before `AiDebugApp` is mounted, and before `session.db` is readable via any async path.
 
-**Warning signs:**
-- Token counters work for one model family but show 0 for another
-- No unit test covers both OpenAI and Google fixture responses
-- Normalizer written with only one provider's field names verified against actual API docs
+If the new design derives `DB_NAME` from `session.db`, that value must be available at the point `new IndexedDB(...)` is called. The question is: is `session.db` synchronously available at module evaluation time?
 
-**Phase to address:** Backend token extraction phase — add a fixture-based unit test covering both provider shapes before the normalizer is considered done.
+The Odoo `session` object (`@web/session`) is populated from `odoo.__session_info__`, which the server injects into the HTML before the bundle executes. The source is `session.js`:
 
----
-
-### Pitfall 3: `time.monotonic()` Measures Server-Side Elapsed Time, But JS `receivedAt` Differences Include Bus Latency
-
-**What goes wrong:**
-The existing `getIterationDuration()` method in `app.js` computes per-iteration duration by differencing `receivedAt` timestamps (JS `Date.now()` at the moment the bus event arrives at the browser). This works well enough for a rough display, but bus.bus delivery latency — typically 50-300ms — is included in every gap measurement. For a featured "per-iteration time" metric (not just a rough display), this inaccuracy is visible:
-
-- Fast iterations (< 500ms LLM call) can show 2-3x their true duration
-- The sum of JS-computed per-iteration durations will consistently exceed `loop_end.duration_ms` (which is server-side `time.monotonic()`)
-- Two identical prompts can show different displayed durations depending on WebSocket jitter
-
-**Why it happens:**
-The current timing was introduced as a client-side convenience. When per-iteration timing is a featured metric shown prominently in the detail panel and sidebar, the inaccuracy becomes misleading to developers trying to diagnose LLM latency.
-
-**How to avoid:**
-Emit `duration_ms` from Python in the `iteration` bus event. In the `_run_agentic_loop` override, track `_iter_start = time.monotonic()` just before each invocation of `super()._run_agentic_loop()` yields an iteration item, then compute `duration_ms = int((time.monotonic() - _iter_start) * 1000)` and include it in the `iteration` event payload. The existing `getIterationDuration()` in `app.js` can then be replaced by `iter.duration_ms` from the server.
-
-Keep the JS `receivedAt`-based method as a fallback for hydrated traces that were recorded before v1.5 (older IDB records will not have `duration_ms`).
-
-**Warning signs:**
-- Iteration timing shows large variance even for identical prompts (bus jitter showing through)
-- Sum of per-iteration durations substantially exceeds `loop_end.duration_ms`
-- No `duration_ms` field on the `iteration` event payload
-
-**Phase to address:** Backend instrumentation phase — add `duration_ms` to the `iteration` event before the frontend uses it.
-
----
-
-### Pitfall 4: OWL Re-renders the Full `sidebarNodes` Getter on Every Animation Frame If Counter State Is Reactive
-
-**What goes wrong:**
-`sidebarNodes` is a computed getter that reads `this.traces` and all nested reactive Maps (`iterations`, `toolCalls`). Any mutation to a reactive value in that chain re-runs `sidebarNodes`. Additionally, `depthLinePaths` reads `sidebarNodes`, so it too recomputes.
-
-If animated token counters are implemented by storing a "current displayed value" in reactive state (e.g., `iter.displayed_tokens = 500`) and a `requestAnimationFrame` loop increments it each frame, every tick triggers:
-
-1. `sidebarNodes` recompute (iterates all traces, all iterations)
-2. `depthLinePaths` recompute (geometry for all sidebar rows)
-3. OWL patch cycle (DOM diffing for the full sidebar tree)
-
-At 60fps with even a 5-trace session, this creates measurable jank — the sidebar scroll and click response degrade during an active run.
-
-**Why it happens:**
-OWL's reactive system tracks *reads*, not write paths. If the animation loop writes `iter.displayed_tokens` and the template (or any getter) reads it during render, OWL re-renders on every write. There is no way to "opt out" of this for a single property without restructuring how state is stored.
-
-**How to avoid:**
-Do not store the in-flight animation value in reactive state. Two clean alternatives:
-
-**Option A (recommended): Reactive final value + CSS transition.**
-Store the final token count as `iter.tokens_total` in reactive state. This only changes when a new `iteration` event arrives (once per LLM call, not 60x/second). The template renders `iter.tokens_total` and applies a CSS `transition: color 0.2s, opacity 0.2s` or a brief CSS animation class (`@keyframes count-flash`) on the element. No RAF loop, no reactive-state thrashing.
-
-**Option B: Non-reactive JS object + `useRef` DOM write.**
-Store `{displayedValue, targetValue, startedAt}` in a plain (non-reactive) JS object keyed by `iterationId`. A single RAF loop runs continuously, interpolating `displayedValue` toward `targetValue` and writing directly to DOM via `useRef`-obtained element refs. The template renders a bare `<span t-ref="'tokenSpan_' + iterationId"></span>` with no OWL binding inside the span — OWL never patches this element because nothing reactive is bound to it.
-
-Do NOT mix these strategies: do not use both `t-esc="iter.tokens_total"` and a RAF that writes `span.textContent`. One owner, always.
-
-**Warning signs:**
-- A `displayed_tokens` or `animating_value` field is stored on reactive state (trace or iteration objects)
-- `console.time('sidebarNodes')` shows calls at 16ms intervals during animation
-- Sidebar scroll lags or feels sticky during active trace execution
-- OWL `__owl__.renderCount` increments 60 times per second
-
-**Phase to address:** Frontend counter animation phase — animation strategy must be locked in before any counter code is written.
-
----
-
-### Pitfall 5: Counter Jitter — Rapid Bus Events Reset the Count-Up Animation to 0
-
-**What goes wrong:**
-A multi-iteration trace emits one `iteration` event per LLM API call. If three events arrive within 500ms (a fast agentic loop), a naive animation implementation shows: "start counting from 0 to 500 → new event arrives, reset to 0, count to 1100 → new event arrives, reset to 0, count to 1800." The developer sees a flickering counter that never finishes before resetting.
-
-**Why it happens:**
-Naive approach: "on new event, set animation start = 0, target = new total, duration = 600ms." This treats each event as an independent animation. When events arrive faster than the animation completes, the counter perpetually resets.
-
-**How to avoid:**
-Track `{displayedValue, targetValue}` in the animation state (non-reactive JS object). On each new event:
-- Update `targetValue = newTotal`
-- Leave `displayedValue` unchanged (do not reset to 0)
-- The RAF loop continues interpolating from `displayedValue` toward `targetValue`
-
-If the new target arrives while the previous tween is still in progress, the tween simply aims higher without resetting. The counter appears to accelerate rather than reset.
-
-Use a short tween duration (200-300ms). For sidebar counters where events arrive every 1-5 seconds, this is fast enough to feel live without being jarring.
-
-**Warning signs:**
-- Counter resets to 0 mid-run when a second iteration event arrives
-- Counter shows an intermediate wrong value briefly after a multi-iteration run completes
-- Animation duration exceeds 500ms (longer than the typical inter-iteration gap for fast agents)
-
-**Phase to address:** Frontend counter animation phase — the `{displayedValue, targetValue}` tracking pattern must be established before any animation duration tuning.
-
----
-
-### Pitfall 6: IDB `serializeTrace()` / `hydrateTrace()` Asymmetry Causes New Fields to Be Invisible in Hydrated Traces
-
-**What goes wrong:**
-`serializeTrace()` in `db.js` is a manual field enumeration — not a spread. Adding new fields to the in-memory iteration object (`tokens_input`, `tokens_output`, `duration_ms`) without also adding them to `serializeTrace()` means those fields are silently dropped when the trace is written to IDB. After a page refresh, the hydrated trace shows 0 tokens and no duration for all iterations, even though the live session showed correct values.
-
-The symmetric failure: updating `serializeTrace()` but not `hydrateTrace()` means the fields are written to IDB but not read back. `hydrateTrace()` constructs the iteration object with an explicit property list — new fields not in that list are silently ignored.
-
-**Why it happens:**
-`serializeTrace()` and `hydrateTrace()` are in `db.js` far from the bus event handlers in `app.js`. It is easy to add new iteration fields to `_onIteration` and forget to update the two serialization functions. The failure is silent — no error, just 0/null values after reload.
-
-**How to avoid:**
-Treat `serializeTrace()` and `hydrateTrace()` as a contract: every field that must survive a page reload must appear in both. Add a comment block at the top of each function listing the iteration-level fields and marking which were added in which version:
-
-```javascript
-// Iteration fields (serializeTrace ↔ hydrateTrace must be symmetric):
-// v1.0: iteration_id, trace_id, iteration_index, has_error, receivedAt, is_final, error, messages_sent, raw_response
-// v1.5: duration_ms, tokens_input, tokens_output, tokens_cached, tokens_reasoning  ← NEW
+```js
+export const session = odoo.__session_info__ || {};
 ```
 
-Update both functions in the same commit. Add a hydration default for each new field:
-```javascript
-// hydrateTrace() iteration reconstruction:
-duration_ms: iter.duration_ms ?? null,       // null = old record, show '—'
-tokens_input: iter.tokens_input ?? 0,
-tokens_output: iter.tokens_output ?? 0,
-tokens_cached: iter.tokens_cached ?? 0,
-tokens_reasoning: iter.tokens_reasoning ?? 0,
+This is a synchronous assignment. `session.db` IS available at module evaluation time for any page served with `auth='user'`. The `/ai-debug` route uses `auth='user'`, so `session.db` will be present. The safe, correct approach is:
+
+```js
+import { session } from "@web/session";
+const DB_NAME = `ai_debug_${session.db}`;
 ```
 
-**Warning signs:**
-- Tokens and timing display correctly during a live run but show 0/null after a page refresh
-- Console shows no error — the failure is purely silent data loss
-- `serializeTrace()` and `hydrateTrace()` have a different number of iteration-level fields
+The risk is if `session.db` is `undefined` (unauthenticated context, test harness, or future route change). This produces `DB_NAME = "ai_debug_undefined"` — a valid IDB name that silently co-mingles all such sessions into one garbage store.
 
-**Phase to address:** Frontend IDB/hydration phase — always edit both functions in the same commit, same PR.
+**Why it happens:**
+Developers either (a) treat `session.db` as async and unnecessarily defer construction to `onWillStart` with a dynamic DB name — introducing a lifecycle race — or (b) read it synchronously but forget the `undefined` fallback risk.
+
+**How to avoid:**
+Read `session.db` synchronously in `db.js` at module evaluation time. Add a `|| "unknown"` fallback as insurance against unauthenticated contexts. Do not introduce an async DB name resolution path — it unnecessarily complicates the existing serial `onWillStart` ordering.
+
+**Warning signs:**
+- DevTools Application > Storage > IndexedDB shows `ai_debug_undefined` instead of `ai_debug_<dbname>`
+- After switching Odoo databases in the same browser, traces from DB A appear in DB B's app
+- Console shows `indexedDB.open("ai_debug_undefined", ...)` in network panel
+
+**Phase to address:** The single implementation phase. This is the core change — get the name right before writing any other code.
 
 ---
 
-### Pitfall 7: DB_VERSION Bump Wipes All Stored Traces — Should Not Be Bumped for Additive JSON Fields
+### Pitfall 2: Orphaned Old IDB Databases Accumulate Silently on Developer Machines
 
 **What goes wrong:**
-The IDB store in `db.js` uses a single denormalized JSON blob per trace (one record per `trace_id` in the `traces` object store). Adding new fields to this JSON blob does NOT change the IDB object store schema — it only changes the JS object structure. Bumping `DB_VERSION = 2` triggers `onupgradeneeded`, which in Odoo's `IndexedDB` utility recreates stores from scratch. All v1.4 traces are deleted.
+Before v1.6, all developers on any Odoo DB share one IDB instance named `ai_debug_traces`. After v1.6 ships, each DB gets its own instance: `ai_debug_aaa`, `ai_debug_bbb`, etc. The old `ai_debug_traces` instance is never deleted — it just sits in the browser, consuming storage, forever.
+
+For any developer who ran v1.5 and upgrades to v1.6: their browser retains `ai_debug_traces` with all their old traces. The new per-DB instances start empty. The old traces are effectively invisible to the new app without a migration step.
+
+The broader ongoing problem: if a developer creates and drops many Odoo databases (common in development), each spawns an orphaned IDB instance named `ai_debug_<droppedDb>`. `indexedDB.databases()` (Chrome 71+, Firefox 126+, Safari 15+) can enumerate them, but the app has no automatic cleanup path.
 
 **Why it happens:**
-Developers see "adding new fields = schema change" and reflexively bump the version. This reasoning applies to SQL schemas (adding a column) but not to IDB key-value stores where the value is opaque JSON. The IDB schema is: "one object store called `traces`, keyed by `trace_id`, value is a JSON blob." That schema does not change when the JSON blob gets new keys.
+IDB instances are not tied to application lifetime — they persist until explicitly deleted or the browser clears site data. Renaming the logical database by changing the IDB name string leaves the old instance untouched. There is no IDB-side event for "application changed its store name."
 
 **How to avoid:**
-Do NOT bump `DB_VERSION` for v1.5. Add `tokens_*` and `duration_ms` fields to the JSON blob only. Old IDB records (v1.4) will hydrate with these fields reading as `undefined`, which the `?? 0` / `?? null` defaults in `hydrateTrace()` handle correctly.
+For the one-time v1.5 -> v1.6 migration: add a startup step in `onWillStart` that checks for the old `ai_debug_traces` IDB. If it exists and the new per-DB instance is empty, copy records from the old store into the new one then delete the old DB. This is ~15 lines and significantly improves the upgrade experience.
 
-Only bump `DB_VERSION` if a new *object store* is added (a new IDB table) or if an existing key-path changes (restructuring the store itself).
+Approach using `indexedDB.databases()`:
+1. Call `indexedDB.databases()` if available (check with `typeof indexedDB.databases === 'function'`)
+2. Look for an entry named `"ai_debug_traces"` in the returned list
+3. If found and new per-DB store is empty: open old DB, read all records, write into new DB, then delete old DB
+4. Log success to console
+
+For ongoing orphan accumulation: document in `db.js` that `indexedDB.deleteDatabase("ai_debug_<dbname>")` can be run from the browser console. Do not build automatic cleanup — it risks deleting traces from a DB the developer temporarily cannot connect to.
 
 **Warning signs:**
-- `DB_VERSION` was changed to `2` — all developer trace history is gone after deploy
-- The commit that bumps `DB_VERSION` also only adds new JSON properties, not new object stores
-- Post-deploy, IDB is empty and all previously stored traces are lost
+- Developer switches to v1.6 and sees empty trace list — old traces still visible in DevTools Application > Storage > IndexedDB under `ai_debug_traces`
+- DevTools shows multiple `ai_debug_*` databases accumulating as new Odoo DBs are created and dropped
+- Storage quota warnings in environments with many test databases
 
-**Phase to address:** Frontend IDB/hydration phase — confirm `DB_VERSION` is unchanged in code review.
+**Phase to address:** The single implementation phase, as a secondary concern after the core name change. The migration logic is optional but strongly recommended.
 
 ---
 
-### Pitfall 8: Animated Counters Conflict With OWL's `onPatched` DOM Write Timing
+### Pitfall 3: DB Version Collision Silently Wipes All Stored Traces
 
 **What goes wrong:**
-If the animation strategy uses `requestAnimationFrame` to write directly to DOM elements (Option B from Pitfall 4), there is a timing conflict when OWL also patches those elements. The sequence:
+The Odoo `IndexedDB` utility uses a two-level versioning scheme: a custom `__DBVersion__` object store that holds an application-managed version number, and the native IDB `version` integer. The `_checkVersion()` method in the utility is all-or-nothing: if the stored version does not match the expected version, it calls `_deleteDatabase()` and recreates the database. There is no migration path, no warning to the user, no backup.
 
-1. RAF fires → writes "1,234" to `span.textContent`
-2. Bus event arrives → `iter.tokens_total` changes → OWL schedules re-render
-3. OWL patches the sidebar → overwrites `span.textContent` with whatever `t-esc` renders
+For ai_debug, this is dangerous because IDB is the sole persistence layer. An accidental `DB_VERSION` bump during v1.6 development (e.g., thinking "I changed the name, maybe I should bump the version") would delete all existing traces on every developer machine on their next page load. No error is shown — the app starts fresh.
 
-If the RAF callback and the OWL patch cycle share ownership of the same DOM node, the counter flickers between the animation value and the OWL-rendered value.
+This also applies to future versions: once the naming convention is locked at `ai_debug_<dbname>`, changing the name format is equivalent to creating a brand-new database (old data is simply orphaned, not deleted — but also not accessible).
 
 **Why it happens:**
-OWL patches what the template declares. If the template has `<span>{{iter.tokens_display}}</span>` and the RAF also writes to that span, two systems fight for the same node.
+Developers conflate "I changed how the DB is identified" (the name) with "I changed the DB schema" (which requires a version bump). The schema — one object store named `traces` with trace_id as the key — is unchanged by v1.6. Only the name changes. No version bump is needed or correct.
 
 **How to avoid:**
-Pick one owner per DOM node. The two clean patterns:
+Do not increment `DB_VERSION` in v1.6. The value stays at `1`. Add a comment on the `DB_VERSION` constant explaining when it should be bumped: "Increment only when the `traces` object store structure changes (added/removed object stores). Adding or removing fields within the JSON blob does NOT require a version bump — as demonstrated by v1.5 token fields."
 
-- **CSS-only animation (one owner: OWL):** Template renders `iter.tokens_total` via `t-esc`. CSS handles visual effect via `transition` or `@keyframes`. No RAF. No DOM write conflict.
-- **RAF-only animation (one owner: RAF):** Template renders a bare `<span t-ref="..."></span>` with no `t-esc` binding. RAF writes `textContent`. OWL's patch cycle touches the span's container (the row div) but has nothing to diff inside the span — it leaves the textContent untouched.
-
-The CSS approach is strongly preferred: it requires zero animation code beyond a CSS rule, survives OWL patch cycles without any special handling, and degrades gracefully (no animation if reduced-motion is set).
+Lock the naming convention in a code comment: "DB name format is ai_debug_<odoo-db-name>. This format is locked after v1.6 — changing it is equivalent to abandoning all users' stored traces."
 
 **Warning signs:**
-- Counter text flickers between the animation value and a static value during rapid bus events
-- Template has both `t-esc="iter.tokens_display"` and a RAF that writes to the same element
-- `onPatched` fires more often than expected (visible via `console.log` in `onPatched` callback)
+- `DB_VERSION` constant is `2` or higher in the v1.6 diff
+- The diff includes a version bump without any object store creation or deletion
+- Developer machines start with empty trace lists after upgrading
 
-**Phase to address:** Frontend counter animation phase — before writing any animation code.
+**Phase to address:** The single implementation phase. Lock the version number and name format in the same commit.
 
 ---
 
-### Pitfall 9: Treating Per-Iteration Token Sum as a Running Accumulator Produces Wrong Totals After Hydration
+### Pitfall 4: `idb._tables.add(STORE)` Must Be Preserved After Any Refactoring
 
 **What goes wrong:**
-Naive implementation: `trace.total_tokens` is updated by each `_onIteration` handler by adding the new iteration's tokens to the existing total. This works correctly during a live run. But after a page refresh and IDB hydration, `total_tokens` is not recomputed — it is read directly from the stored value. If `total_tokens` was stored before all iterations had arrived (e.g., written to IDB at `loop_end` time, correctly), it is fine. But if the IDB write happens on each `_onIteration` event (before the trace is complete), the stored `total_tokens` is the value at the time of the last write, which may be a partial sum from mid-run.
+The current `db.js` has this immediately after creating the IDB instance:
 
-More common: `total_tokens` is derived from per-iteration values and never stored separately. After hydration, the detail panel computes the total by summing `iter.tokens_input + iter.tokens_output` across all iterations. This sum is always correct (computed from the stored per-iteration data). The sidebar counter reads `trace.total_tokens` which may be stale or absent.
+```js
+const idb = new IndexedDB(DB_NAME, DB_VERSION);
+idb._tables.add(STORE);
+```
+
+The comment in `db.js` explains why: `_tables` is what `_execute()` uses in `onupgradeneeded` to know which object stores to create. Without this call, `loadAllTraces()` (which uses `idb.execute()` directly rather than `idb.read()`/`idb.write()`) will not trigger `traces` object store creation on a fresh IDB instance. The store simply will not exist.
+
+The consequences: `loadAllTraces()` hits the `!db.objectStoreNames.contains(STORE)` guard and returns `[]`. `writeTrace()` also hits the same guard and silently no-ops. The app appears to work but traces are never persisted. No error is thrown.
+
+If v1.6 refactors the `idb` construction into a factory function or moves the construction site, this line must travel with it.
 
 **Why it happens:**
-Mixing "live accumulator" for the sidebar counter with "computed sum" for the detail panel. The two views drift unless both derive from the same source.
+This is a quirk of the Odoo `IndexedDB` utility: only `read()`, `write()`, and `getAllKeys()` auto-register tables via `this._tables.add(table)`. Direct `execute()` calls do not. The `db.js` author correctly worked around this — but the invariant is invisible from call sites and easy to lose during refactoring.
 
 **How to avoid:**
-Never store `total_tokens` as a separate accumulator on the trace object. Always compute it as a getter from the per-iteration data:
+If the constructor call is moved, keep `idb._tables.add(STORE)` as the next line with the comment intact. Better: wrap both in a factory function that cannot be called without the table registration:
 
-```javascript
-// As a helper or getter in app.js:
-getTraceTotalTokens(trace) {
-    let total = 0;
-    for (const iter of trace.iterations.values()) {
-        total += (iter.tokens_input || 0) + (iter.tokens_output || 0);
-    }
-    return total;
+```js
+function createIDB(dbName) {
+    const db = new IndexedDB(dbName, DB_VERSION);
+    // Required: direct execute() calls don't auto-register tables.
+    // Without this, the traces store won't exist on a fresh DB.
+    db._tables.add(STORE);
+    return db;
 }
 ```
 
-This is always correct: live runs accumulate as iterations arrive; hydrated traces compute from stored per-iteration data. No separate accumulator field, no drift.
-
-For the sidebar display, this getter is called during render — OWL tracks the reactive reads on `trace.iterations` and re-renders when a new iteration is added.
-
 **Warning signs:**
-- A `total_tokens` field is stored on the trace object in reactive state
-- Sidebar counter shows the correct total during a live run but shows a different (incorrect) total after reload
-- Detail panel and sidebar counters disagree on the total
+- Fresh installation shows empty trace list that never populates even after running an AI session
+- DevTools Application > IndexedDB shows the database exists but contains only `__DBVersion__` object store, no `traces` store
+- Traces appear in the reactive store in memory but disappear on page refresh
 
-**Phase to address:** Frontend counter data model phase — decide "computed from iterations" before writing any accumulator code.
+**Phase to address:** The single implementation phase — if the construction site is touched at all, verify `_tables.add` is preserved.
 
 ---
 
-### Pitfall 10: Token Counts for Error Iterations Show NaN or Stale Values
+### Pitfall 5: Async DB Name Resolution Breaks the `onWillStart` Serial Ordering
 
 **What goes wrong:**
-When an LLM API call fails (UserError or general Exception), the existing `ai_session.py` override emits an error `iteration` event with `raw_response: None` and `error: termination_error`. In v1.5, a token extraction hook that runs on the API response would also return 0 (or None) for error iterations — because there is no response envelope to extract from.
+The existing `onWillStart` in `app.js` has a carefully maintained serial chain:
 
-If the JS `getTraceTotalTokens()` helper does `iter.tokens_input + iter.tokens_output` without null guards, `undefined + undefined = NaN`. The sidebar counter then shows "NaN tokens."
+```
+probeIDB() -> set ephemeralMode -> loadAllTraces() -> hydrateTrace() for each record -> promote orphans
+```
 
-For a different failure mode: an iteration that was still running when the page was refreshed (status: "running", `loop_end` never arrived) may have partial token data. After hydration, the "running" state indicator shows alongside a token count that is no longer being incremented.
+This chain works because everything runs in serial within the `onWillStart` async function, and OWL blocks the first render until `onWillStart` resolves. Bus subscriptions are set up in `onMounted`, which fires after the first render, so no bus events are delivered during hydration.
+
+If someone introduces an async DB name resolution step before `probeIDB()` — for example, fetching the DB name from the server via `orm.call()` instead of reading `session.db` — and that async call takes more than a few hundred milliseconds, the startup latency becomes user-visible. Worse, if the async resolution is incorrectly placed outside `onWillStart` (e.g., in `setup()`), the IDB instance may not be ready when `onWillStart` tries to use it.
+
+This pitfall is unlikely if `session.db` is used (it's synchronous), but likely if a developer does not know `session.db` is synchronous and reaches for an async alternative.
 
 **Why it happens:**
-Error iterations are created in the exception handlers of `_run_agentic_loop` with `raw_response: None`. Token extraction must handle `None` input without raising. JS addition with `undefined` operands produces `NaN` silently.
+Developers unfamiliar with how Odoo injects `__session_info__` assume `session.db` requires an async lookup (like `lazy_session` or an ORM call). `session.db` does not — it is available synchronously before the bundle even executes.
 
 **How to avoid:**
-- Python: the token extraction normalizer must accept `None` as input and return all-zero dict
-- Python: emit `tokens: {'input_tokens': 0, 'output_tokens': 0, ...}` on all `iteration` events, including error events
-- JS: always use `(iter.tokens_input || 0)` in the sum, never `iter.tokens_input +` without guard
-- JS: display `—` (em dash) for iterations where `iter.has_error` is true and tokens are 0, rather than "0 tokens"
+Use `import { session } from "@web/session"` and read `session.db` at module evaluation time in `db.js`. No async resolution needed. The serial ordering in `onWillStart` is preserved without changes. Document this decision in `db.js`:
+
+```js
+// session.db is synchronously available (populated from odoo.__session_info__
+// before the bundle runs). No async lookup needed.
+import { session } from "@web/session";
+const DB_NAME = `ai_debug_${session.db || "unknown"}`;
+```
 
 **Warning signs:**
-- "NaN tokens" appears in the sidebar for any run that ends in an error
-- Error iteration rows show "0 tokens" with no visual distinction from a successful iteration with no token data
-- Python normalizer raises an exception when `raw_response` is `None`
+- `onWillStart` duration increases by hundreds of milliseconds
+- DB name resolution uses `await orm.call(...)` or `await rpc(...)`
+- IDB construction happens inside a Promise chain rather than synchronously at module level
 
-**Phase to address:** Frontend counter rendering phase — add null guards before any token display logic.
+**Phase to address:** The single implementation phase — avoid by choosing the synchronous `session.db` path from the start.
 
 ---
 
 ## Technical Debt Patterns
 
+Shortcuts that seem reasonable but create long-term problems.
+
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Read tokens from `raw_response` in JS (after service strips envelope) | No Python changes needed | Always returns undefined; counters permanently show 0 for all providers | Never |
-| Store animated counter value in reactive `iter.displayed_tokens` | Simple, idiomatic-looking code | Triggers full `sidebarNodes` recompute at 60fps; sidebar jank during any animation | Never |
-| Use JS `receivedAt` differences for per-iteration timing | No backend changes | Includes bus latency (50-300ms); inaccurate for fast LLM calls | Acceptable as fallback for v1.4 hydrated traces; never for new live events |
-| Bump `DB_VERSION` to 2 "for safety" | Ensures clean state | Destroys all stored developer traces on deploy | Never for additive JSON fields |
-| Single token extraction path (only OpenAI or only Google) | Faster to write | Silent zero-tokens for one entire provider family | Only as temporary dev stub, never shipped |
-| Accumulate `total_tokens` as a separate trace field | Avoids recomputation | Diverges from per-iteration data after hydration | Never — always compute from iterations |
-| Animation duration > 500ms | More dramatic visual effect | Counter still animating when next iteration arrives; jitter visible | Never for agents with > 1 LLM call |
-
----
+| Skip one-time v1.5->v1.6 IDB migration | Simpler v1.6 implementation | Developers see empty trace list after upgrade; old `ai_debug_traces` accumulates forever | Never — migration is ~15 lines and prevents a confusing UX regression |
+| Inline `ai_debug_` prefix as a string literal | Fewer constants | Name format locked in a string literal; harder to grep or enforce consistency | Never — define `const DB_PREFIX = "ai_debug_"` as a named constant |
+| Use `session.db` without a fallback guard | Cleaner code | `DB_NAME = "ai_debug_undefined"` if page somehow loaded without session | Acceptable for v1.6 (auth='user' guarantees session); add `|| "unknown"` as insurance |
+| Bump `DB_VERSION` when only the name changes | "Feels right" during a DB change | Full silent data deletion on every user machine on next load | Never |
 
 ## Integration Gotchas
 
+Common mistakes when connecting to external services.
+
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| OpenAI `usage` envelope | Accessing `response.get('usage')` after `get_completions()` returns | Capture inside service before `return response.get('output', [])` |
-| Google `usageMetadata` envelope | Accessing `response.get('usageMetadata')` after `get_completions()` returns | Capture inside service before `return [content]` |
-| `iteration` bus event | Adding `tokens` inside `raw_response` list | Add as a top-level sibling field: `'tokens': {...}` alongside `raw_response` |
-| OWL reactive Map + animation | Storing animation counter in `iter.displayed_tokens` | Store final value only in reactive state; animate via CSS or non-reactive ref |
-| IDB `serializeTrace()` | Updating serializer without updating `hydrateTrace()` | Always edit both in the same commit; add version comment |
-| `getIterationDuration()` in `app.js` | Continuing to use JS `receivedAt` differences for featured timing metric | Replace with `iter.duration_ms` from server; keep JS method as fallback for old records |
-| Error iteration tokens | Python normalizer raising when `raw_response` is `None` | Guard with `if raw_response is None: return zeros` |
-| JS token sum | `iter.tokens_input + iter.tokens_output` without null guard | `(iter.tokens_input \|\| 0) + (iter.tokens_output \|\| 0)` always |
-
----
+| `@web/session` import | Treating `session.db` as async or unavailable at module level | `session` is a synchronous export from `odoo.__session_info__`; read `session.db` directly at module evaluation time |
+| Odoo `IndexedDB` utility `_checkVersion` | Assuming version mismatch triggers migration | It triggers full deletion with no warning; never bump `DB_VERSION` without an actual object store schema change |
+| `indexedDB.databases()` for orphan detection | Assuming universal availability | Chrome 71+, Firefox 126+, Safari 15+ only; always check `typeof indexedDB.databases === "function"` before calling |
+| `idb.execute()` vs `idb.read()`/`idb.write()` | Using `execute()` for custom queries without registering the table | Either use high-level `read`/`write`/`getAllKeys` (auto-register), or call `idb._tables.add(STORE)` before the first `execute()` |
 
 ## Performance Traps
 
+Patterns that work at small scale but fail as usage grows.
+
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| RAF loop touching reactive iteration state | `sidebarNodes` and `depthLinePaths` recompute at 60fps; sidebar jank | Keep animation values in non-reactive plain JS objects | Immediately on first animation tick, even with 3 traces |
-| `sidebarNodes` getter recomputing during animation | `depthLinePaths` geometry recalculated 60x/second | Ensure no reactive value read by `sidebarNodes` chain is written by animation loop | Any animation touching reactive state |
-| Detail panel re-rendering on each token increment | JSON tree and message history re-render every frame | Token counter and detail panel reactive subtrees must be separate | With any moderately-sized message history (> 5 messages) |
-| Computing `getTraceTotalTokens` in every `sidebarNodes` call | Per-trace token sum recomputed on every render | OWL tracks reactive reads; sum over `trace.iterations` is correct and efficient; only called on render | When trace count > 50 with many iterations each |
+| Migration reads entire old DB into memory at once | OOM on machines with thousands of old traces | Batch-read in chunks of 100; acceptable for ai_debug typical usage | At ~10,000 large traces (~100MB) — unlikely for a developer tool |
+| Running orphan DB detection on every page load | Visible startup latency | Run migration check once, mark complete with a flag in the new DB | Negligible for ai_debug; `indexedDB.databases()` is fast |
 
----
+## Security Mistakes
+
+Domain-specific security issues beyond general web security.
+
+| Mistake | Risk | Prevention |
+|---------|------|------------|
+| Not sanitizing `session.db` before using in IDB name | Malicious DB names could theoretically create confusing IDB entries | Odoo DB names follow PostgreSQL identifier rules (alphanumeric + underscore, max 63 chars); no sanitization needed for Odoo-issued names; document the assumption |
+| Assuming IDB data is private to the current OS user | All browser profiles on the same machine share the IDB namespace for the same origin | ai_debug is a developer tool; cross-user IDB access on shared machines is a known limitation, not a bug to fix in v1.6 |
 
 ## UX Pitfalls
 
+Common user experience mistakes in this domain.
+
 | Pitfall | User Impact | Better Approach |
 |---------|-------------|-----------------|
-| Showing "0 tokens" until `loop_end` event | Misleads developer — looks like tokens are not being captured | Show per-iteration token counts as each `iteration` event arrives |
-| Sidebar counter counting from 0 on each iteration | Developer thinks token count resets per-iteration | Sidebar counter shows running total across all iterations; detail panel shows per-iteration breakdown |
-| Raw token numbers without comma separators | "12345" is harder to read than "12,345" in a glance | Use `toLocaleString()` for all counter displays; store raw integers for computation |
-| Animation duration > inter-event gap | Counter perpetually resets; developer cannot read the value | Use 200-300ms animation; the "counting up" effect should complete between events |
-| "0 tokens" for error iterations without visual distinction | Looks identical to a successful zero-token iteration | Show `—` (em dash) for iterations with `has_error: true`; reserve "0" for successful iterations with genuinely no tokens |
-| Showing `duration_ms` from `loop_end` as per-iteration time | Total loop time ≠ LLM call time; tool execution is included | Display `iter.duration_ms` (LLM-only time) separately from `trace.duration_ms` (total loop) |
-| Sub-agent token counts rolled into parent trace total | Parent counter shows artificially high tokens; parent vs. child comparison is meaningless | Each trace shows only its own iteration tokens; sub-agent traces show their own count independently |
-
----
+| No migration from old `ai_debug_traces` | Developer thinks traces were lost after upgrade | Migrate old traces into new per-DB store in `onWillStart`; log "Migrated N traces from ai_debug_traces" to console |
+| Adding a visible "Current DB: aaa" label to the UI | Unnecessary UI noise — developer always knows which DB they're on | No UI change needed; per-DB scoping is transparent by design (confirmed in PROJECT.md milestone goal) |
+| Deleting orphan databases automatically at startup | Could delete traces from a DB the developer wants but is temporarily unable to reach | Only migrate; never auto-delete DBs other than the explicit old-name one-time migration |
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **Token extraction (OpenAI):** Counter shows non-zero values when running against an OpenAI model — verify with a real API call, not just a fixture.
-- [ ] **Token extraction (Google):** Counter shows non-zero values when running against a Gemini model — confirm `usageMetadata` path is exercised.
-- [ ] **Hydrated traces:** Archived (IDB-hydrated) traces show token counts in both sidebar and detail panel — not just live-run traces.
-- [ ] **Error iterations:** Iterations with `has_error: true` display `—` or 0 for tokens, not NaN.
-- [ ] **`serializeTrace()` symmetry:** Every new field added to `hydrateTrace()` iteration object is also persisted by `serializeTrace()`.
-- [ ] **Animation does not trigger `sidebarNodes` recompute:** Verify via `console.time` that `sidebarNodes` is NOT called during animation frames.
-- [ ] **`DB_VERSION` unchanged at 1:** Confirmed no store wipe introduced by v1.5 changes.
-- [ ] **Per-iteration timing is server-side `duration_ms`:** Sidebar and detail panel show timing from `iter.duration_ms` (server), not from JS `receivedAt` differences.
-- [ ] **Trace total tokens:** Sidebar trace row shows sum of all iteration tokens, computed from iteration objects (not a stored accumulator), correct after hydration.
-- [ ] **Sub-agent traces isolated:** Child traces (sub-agent runs) show their own token counts; parent trace total does NOT include child tokens.
-- [ ] **Fast multi-iteration runs:** Run a 3+ iteration agent; counter never resets to 0 mid-run; it only counts upward.
-- [ ] **`null` / `None` input to normalizer:** Python normalizer called with `None` returns all-zero dict without raising.
+Things that appear complete but are missing critical pieces.
 
----
+- [ ] **DB name:** DevTools Application > Storage > IndexedDB shows `ai_debug_<actualDbName>`, not `ai_debug_traces` or `ai_debug_undefined`
+- [ ] **Isolation:** Open /ai-debug in two browser tabs each logged into a different Odoo DB; confirm each tab's DevTools shows a separate IDB instance with separate trace records
+- [ ] **_tables.add preserved:** Clear all browser storage, load fresh, generate one AI trace, then confirm `traces` object store exists in DevTools (not just `__DBVersion__`)
+- [ ] **DB_VERSION unchanged:** Final git diff shows `DB_VERSION` still set to `1`
+- [ ] **Ephemeral mode still works:** Private browsing mode still shows amber ephemeral badge — `probeIDB()` still correctly detects IDB unavailability
+- [ ] **Old DB orphan handled:** Manually create `ai_debug_traces` with a record in DevTools before testing v1.6; confirm migration or at minimum the new per-DB instance is unaffected
+- [ ] **session.db fallback:** Confirm `DB_NAME` does not include the string "undefined" on any code path
 
 ## Recovery Strategies
 
+When pitfalls occur despite prevention, how to recover.
+
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Tokens always 0 (wrong extraction point) | MEDIUM | Subclass provider service classes in `ai_debug`; add token capture before envelope strip; re-test both providers |
-| DB_VERSION bump wiped IDB history | LOW (data permanently lost) | Revert `DB_VERSION` bump; add comment explaining why it should not change for JSON-only additions |
-| Animation causes render cascade | MEDIUM | Remove counter value from reactive state; switch to CSS transition on final reactive value; no backend change |
-| `serializeTrace()`/`hydrateTrace()` mismatch | LOW | Add missing fields to whichever function lags; tokens correct on next `loop_end` write |
-| Counter jitter (resets on each event) | LOW | Change animation logic to `{displayedValue, targetValue}` pattern; no backend change |
-| Bus latency in per-iteration timing | MEDIUM | Add `duration_ms` field to `iteration` event in Python; update JS to prefer it over `receivedAt` diff |
-| NaN tokens from error iterations | LOW | Add `|| 0` guards in JS sum; add `if not raw_envelope: return zeros` guard in Python normalizer |
-| Trace total wrongly including sub-agent tokens | LOW | Ensure `getTraceTotalTokens()` only sums `trace.iterations.values()` for the trace's own iterations |
-
----
+| DB_NAME resolves to `ai_debug_undefined` | MEDIUM | Fix `session.db` read and redeploy; run `indexedDB.deleteDatabase("ai_debug_undefined")` in browser console to clean up; traces from that session are lost |
+| `_tables.add` forgotten — traces not persisted | MEDIUM | Fix bug and redeploy; in-memory traces visible until refresh are lost on reload; no recovery |
+| DB_VERSION bumped accidentally — all traces deleted | HIGH | Roll back the version bump and redeploy; lost traces must be re-generated; no recovery |
+| v1.5 orphan `ai_debug_traces` not migrated | LOW | Developer runs `indexedDB.deleteDatabase("ai_debug_traces")` in console once they've accepted the loss; or implement migration retroactively |
+| Per-DB IDB instance accumulation from dropped DBs | LOW | Developer runs `indexedDB.databases().then(dbs => ...)` in console to enumerate and delete stale `ai_debug_*` instances |
 
 ## Pitfall-to-Phase Mapping
 
+How roadmap phases should address these pitfalls.
+
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Token data stripped before instrumentation sees it | Phase: Backend token extraction | Integration test: emit `iteration` event, assert `tokens.input_tokens > 0` against a real or mocked API call for both providers |
-| OpenAI vs. Google field name divergence | Phase: Backend token extraction | Unit test `_ai_debug_normalize_tokens()` with both OpenAI and Google fixture dicts |
-| `time.monotonic()` inaccuracy for per-iteration timing | Phase: Backend instrumentation | Assert `iter.duration_ms` is within reasonable range of `loop_end.duration_ms` divided by iteration count |
-| OWL render cascade from animated reactive state | Phase: Frontend counter animation | Profile: `sidebarNodes` getter call count must not increase at 60fps during animation |
-| Counter jitter on rapid events | Phase: Frontend counter animation | Manual test: 3+ iteration agent; counter never resets to 0 mid-run |
-| IDB serialization/hydration asymmetry | Phase: Frontend IDB/hydration | Test: write trace with new fields, clear in-memory store, reload — tokens survive round-trip |
-| DB_VERSION accidental bump | Phase: Frontend IDB/hydration | Code review gate: diff confirms `DB_VERSION` still `1` |
-| RAF vs. OWL patch conflict | Phase: Frontend counter animation | Visual test: no counter flicker during bus event arrival |
-| NaN/null tokens on error iterations | Phase: Frontend counter rendering | Manual test: provoke a loop error; sidebar shows `—` or `0`, not NaN |
-| Sub-agent token isolation | Phase: Frontend counter rendering | Manual test: run a sub-agent; parent total equals only parent iterations |
-
----
+| Module-level singleton with undefined DB name | Implementation: name change | DevTools shows `ai_debug_<dbname>`, not `ai_debug_undefined` or `ai_debug_traces` |
+| Orphaned old `ai_debug_traces` | Implementation: migration | After v1.5->v1.6 upgrade, old traces appear in new per-DB instance; old DB deleted from DevTools |
+| DB_VERSION bumped accidentally | Implementation: version lock | Final diff shows `DB_VERSION = 1` unchanged |
+| `_tables.add` dropped during refactor | Implementation: invariant preservation | Fresh install creates `traces` object store on first load (check DevTools) |
+| Async DB name resolution breaking onWillStart | Implementation: design choice | Use synchronous `session.db` — no async path introduced, startup latency unchanged |
 
 ## Sources
 
-- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/services/ai_api_service_openai.py` — OpenAI `usage` field location and exact field names (lines 86-100); confirms `usage` is logged then only `output` is returned
-- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/services/ai_api_service_google.py` — Google `usageMetadata` field location and exact field names (lines 75-101); confirms `usageMetadata` is logged then only `[content]` is returned
-- `/Users/joseph/clones/odoo/enterprise/.worktrees/master-ai-sub-agents-dpro/ai/models/ai_session.py` — `_run_agentic_loop` yield structure (lines 422-435); confirms `metadata = response` = post-strip output list, not raw envelope
-- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/models/ai_session.py` — existing instrumentation override; `raw_response: item.get('metadata')` confirmed at line 206; `_debug_ctx` mutable dict pattern at lines 139-146
-- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/app.js` — OWL reactive architecture; `sidebarNodes` computed getter chain (lines 628-702); `depthLinePaths` reads `sidebarNodes` (line 551); `getIterationDuration()` using `receivedAt` diffs (lines 729-751); `onPatched` DOM write pattern (lines 342-366)
-- `/Users/joseph/clones/odoo/custom/.worktrees/master-ai-sub-agents-dpro/ai_debug/static/src/app/db.js` — IDB schema, `DB_VERSION = 1`, manual field enumeration in `serializeTrace()` (lines 37-89), `hydrateTrace()` symmetric read pattern (lines 24-47)
-- OWL reactivity model: reactive read tracking, `onPatched` timing, and RAF/patch interaction — training knowledge (HIGH confidence for the core reactive model, confirmed by the `useState(new Map())` pattern documented in PROJECT.md Key Decisions table)
+- Direct codebase inspection: `ai_debug/static/src/app/db.js` — module-level singleton pattern, `_tables.add` requirement, `DB_VERSION = 1` history
+- Direct codebase inspection: `ai_debug/static/src/app/app.js` — `onWillStart` serial ordering: `probeIDB` -> `loadAllTraces` -> hydrate -> promote orphans
+- Direct codebase inspection: `odoo/addons/web/static/src/core/utils/indexed_db.js` — `_checkVersion` full-delete behavior; `_execute` `onupgradeneeded` creates stores from `_tables`; only `read`/`write`/`getAllKeys` auto-register tables
+- Direct codebase inspection: `odoo/addons/web/static/src/session.js` — `export const session = odoo.__session_info__ || {}` (synchronous, no async)
+- Direct codebase inspection: `odoo/addons/web/models/ir_http.py` — `session_info` dict includes `"db": self.env.cr.dbname`; served via `webclient_rendering_context()` used by the `/ai-debug` controller
+- Direct codebase inspection: `odoo/addons/web/static/src/webclient/user_menu/user_menu.js` — `this.dbName = session.db` (confirms `session.db` is the standard field name in Odoo JS)
+- Direct codebase inspection: `odoo/addons/point_of_sale/static/src/app/services/data_service.js` — POS reference pattern for per-DB IDB scoping using `odoo.info?.db`
+- Known tech debt from PROJECT.md: `_applyImport does not run orphan-promotion pass`, `CSS depth tint caps at 4 levels` — unrelated to v1.6, not addressed here
+- MDN Web Docs on `indexedDB.databases()`: available in Chrome 71+, Firefox 126+, Safari 15+
 
 ---
-*Pitfalls research for: Odoo AI Debugger v1.5 — Live animated token/time metrics*
-*Researched: 2026-02-24*
+*Pitfalls research for: per-DB IndexedDB isolation (ai_debug v1.6)*
+*Researched: 2026-02-26*

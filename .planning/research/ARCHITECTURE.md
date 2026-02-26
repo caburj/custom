@@ -1306,3 +1306,198 @@ The root component `AiDebugApp` owns all application state. Children receive pro
 ---
 *Architecture research for: AI Debugger v1.5 — Live metrics (token/timing)*
 *Researched: 2026-02-24*
+
+---
+
+# v1.6 Per-DB IndexedDB Isolation Architecture
+
+> This section answers the research question for v1.6: How does per-DB IndexedDB isolation integrate with the existing ai_debug architecture? Where does the DB name need to flow? What components need changes? What is the suggested build order?
+
+## The Integration Challenge
+
+All browser-origin IndexedDB databases share a flat namespace. A user who works against multiple Odoo databases from the same browser will have all traces from all databases mixed into the single `"ai_debug_traces"` IDB — a wrong-DB trace can appear in the sidebar with no indication it belongs to a different server database.
+
+The fix is to suffix the IDB database name with the Odoo database name: `"ai_debug_aaa"` for Odoo DB `aaa`, `"ai_debug_bbb"` for `bbb`. Traces are naturally separated — each IDB is opened only when connected to its corresponding Odoo DB.
+
+**Key discovery from source reading:**
+
+The Odoo database name is already injected into the page by the QWeb template (`ai_debug_index.xml`) via `odoo.__session_info__`:
+
+```xml
+var odoo = {
+    __session_info__: <t t-out="json.dumps(session_info)"/>,
+};
+```
+
+`session_info` is produced by `ir.http.session_info()` (`addons/web/models/ir_http.py` line 110):
+
+```python
+"db": self.env.cr.dbname,
+```
+
+This field is therefore available synchronously at JS startup via `odoo.__session_info__.db`. No network request, no async operation, no controller change needed.
+
+## System Overview (v1.6)
+
+```
+Server: controller renders /ai-debug
+  └─ webclient_rendering_context() includes session_info["db"] = "aaa"
+       │
+       ▼
+Browser page load:
+  odoo.__session_info__ = { "db": "aaa", ... }   (synchronous, inline script)
+       │
+       ▼
+db.js module evaluation (synchronous):
+  _rawDb  = odoo.__session_info__.db   →  "aaa"
+  _safeDb = "aaa".replace(...)         →  "aaa"
+  DB_NAME = "ai_debug_" + "aaa"        →  "ai_debug_aaa"
+  idb     = new IndexedDB("ai_debug_aaa", 1)   ← isolated per Odoo DB
+       │
+       ├── probeIDB()       → opens "ai_debug_aaa"
+       ├── loadAllTraces()  → reads from "ai_debug_aaa".traces
+       ├── writeTrace()     → writes to "ai_debug_aaa".traces
+       └── deleteTraces()   → deletes from "ai_debug_aaa".traces
+
+app.js: unchanged — same export calls, same signatures
+```
+
+## Component Boundaries: What Changes vs What Stays
+
+### What Changes
+
+**Only `db.js` changes.** The change is confined to the first four lines of the file where the DB name and `idb` singleton are constructed.
+
+**Current (4 lines at top of db.js):**
+
+```javascript
+const DB_NAME = "ai_debug_traces";
+const DB_VERSION = 1;
+const STORE = "traces";
+const idb = new IndexedDB(DB_NAME, DB_VERSION);
+```
+
+**After:**
+
+```javascript
+const _rawDb = (typeof odoo !== "undefined" && odoo.__session_info__ && odoo.__session_info__.db) || "";
+const _safeDb = _rawDb.replace(/[^a-zA-Z0-9_-]/g, "_");
+const DB_NAME = _safeDb ? "ai_debug_" + _safeDb : "ai_debug_traces";
+const DB_VERSION = 1;
+const STORE = "traces";
+const idb = new IndexedDB(DB_NAME, DB_VERSION);
+```
+
+All exports (`probeIDB`, `writeTrace`, `deleteTrace`, `deleteTraces`, `loadAllTraces`, `serializeTrace`) are unchanged. `app.js` requires no changes.
+
+### What Does Not Change
+
+| Component | File | Status | Reason |
+|-----------|------|--------|--------|
+| `app.js` | `static/src/app/app.js` | Unchanged | Calls `db.js` exports by name; signatures unchanged |
+| `main.js` | `static/src/app/main.js` | Unchanged | Entry point only; no DB logic |
+| `controllers/main.py` | `controllers/main.py` | Unchanged | Already calls `webclient_rendering_context()` which includes `"db"` in `session_info` |
+| `ai_debug_index.xml` | `views/ai_debug_index.xml` | Unchanged | Already injects `odoo.__session_info__` |
+| All OWL detail components | `detail/*.js`, `detail/*.xml` | Unchanged | No IDB awareness |
+| Python models | `models/*.py` | Unchanged | No IDB awareness |
+
+## Data Flow: DB Name Resolution
+
+```
+[Python] ir.http.session_info()
+  ├── "db": env.cr.dbname   → e.g. "aaa"
+  └── ... other session fields
+
+[QWeb] ai_debug_index.xml
+  └── odoo.__session_info__ = { "db": "aaa", ... }   (inline JSON, synchronous)
+
+[JS module evaluation] db.js (top of file, before any export is called)
+  ├── read odoo.__session_info__.db → "aaa"
+  ├── sanitize: replace /[^a-zA-Z0-9_-]/g with "_"
+  ├── compose: "ai_debug_" + "aaa" → "ai_debug_aaa"
+  └── idb = new IndexedDB("ai_debug_aaa", 1)
+
+[JS] app.js onWillStart():
+  ├── probeIDB()       → db "ai_debug_aaa" opens (or fails → ephemeral mode)
+  └── loadAllTraces()  → getAll from "ai_debug_aaa".traces
+
+[JS] app.js _onLoopEnd():
+  └── writeTrace(trace)  → write to "ai_debug_aaa".traces
+
+[JS] app.js _onDeleteSelected():
+  └── deleteTraces(ids)  → delete from "ai_debug_aaa".traces
+```
+
+## Design Decisions
+
+### Decision 1: Read at Module Evaluation Time, Not Lazily
+
+`odoo.__session_info__` is available synchronously when the JS module is parsed (it is set by an inline `<script>` block that runs before any module bundle). Reading it at module evaluation time means the `idb` singleton is configured before any consumer can call an export — no lazy init, no factory pattern, no ordering dependency.
+
+### Decision 2: Defensive Fallback to `"ai_debug_traces"`
+
+If `odoo.__session_info__` is absent or `db` is empty string, `DB_NAME` falls back to `"ai_debug_traces"` (the pre-v1.6 name). This guards against:
+- Unusual rendering paths where session_info is not injected
+- Test environments or future controller changes
+- The empty-suffix case where `DB_NAME` would otherwise become `"ai_debug_"` (wrong and confusing)
+
+### Decision 3: Sanitize the DB Name
+
+Odoo database names can legally contain hyphens, dots, or Unicode. IDB accepts arbitrary strings as database names, but embedding unsanitized names in a prefix pattern can produce unexpected strings. The regex `[^a-zA-Z0-9_-]` replaces anything outside alphanumeric, underscore, and hyphen with underscore. This is permissive enough to preserve common patterns (`my-db`, `my_db`) while eliminating edge cases.
+
+### Decision 4: No Migration or Data Copy
+
+Old traces stored under `"ai_debug_traces"` are not migrated to the new per-DB name. The milestone goal is isolation going forward. Developers can re-run sessions to regenerate traces. Auto-migration would require reading the old DB name, iterating all records, writing to the new DB, and deleting the old — disproportionate complexity for a developer tool with ephemeral trace data.
+
+## Suggested Build Order
+
+This milestone is a single-file, single-concern change:
+
+1. **Modify `db.js`** — replace the `const DB_NAME` and `const idb` lines at the top of the file with the DB-name-reading pattern (sanitize, compose, fallback). No other changes anywhere.
+
+**Post-change verification:**
+- Open `/ai-debug` on Odoo DB `aaa` → DevTools Application panel → IndexedDB shows `ai_debug_aaa`
+- Create a trace → confirm it appears in `ai_debug_aaa`.traces
+- Open `/ai-debug` on Odoo DB `bbb` → `ai_debug_bbb` is empty; `aaa` trace does not appear
+- Confirm all existing operations still work: hydration on page refresh, write on loop end, delete on bulk delete, ephemeral mode fallback
+
+## Anti-Patterns
+
+### Anti-Pattern 1: Passing DB Name as Function Argument
+
+**What people do:** Change all `db.js` export signatures to `probeIDB(dbName)`, `writeTrace(trace, dbName)`, etc., and have `app.js` read `session_info` and thread the name through every call.
+
+**Why it's wrong:** Seven call sites in `app.js` all need to change. `db.js` already owns IDB configuration — adding a parameter just moves the config responsibility to the caller without benefit. The `idb` singleton approach is architecturally cleaner.
+
+**Do this instead:** Module-level resolution in `db.js`. `app.js` has no reason to know the IDB name.
+
+### Anti-Pattern 2: Lazy Initialization with Async Factory
+
+**What people do:** Export an `initDb(name)` function from `db.js`, call it from `app.js` `onWillStart`, and gate other exports on initialization.
+
+**Why it's wrong:** `odoo.__session_info__` is synchronously available at parse time. Adding async initialization creates a race condition risk and forces every export to check initialization state. Unnecessary complexity.
+
+**Do this instead:** Synchronous read at module evaluation time.
+
+### Anti-Pattern 3: Reading Session Info in `app.js` and Injecting into `db.js`
+
+**What people do:** `app.js` reads `odoo.__session_info__.db` and calls an exported `configureDb(name)` before other operations.
+
+**Why it's wrong:** Fragile ordering dependency. Any code path that calls `probeIDB()` or any other export before `configureDb()` runs (e.g., from another module or test) operates against the wrong IDB name. Module-level init eliminates this class of bug.
+
+**Do this instead:** Read synchronously at module initialization with no explicit init call required.
+
+## Sources
+
+**v1.6 sources (HIGH confidence — direct source reads, 2026-02-26):**
+- `ai_debug/static/src/app/db.js` (complete — confirmed hardcoded `"ai_debug_traces"` on line 4)
+- `ai_debug/static/src/app/app.js` (complete — all `db.js` call sites confirmed; no `session_info` access)
+- `ai_debug/static/src/app/main.js` (complete — no DB logic)
+- `ai_debug/views/ai_debug_index.xml` (complete — `odoo.__session_info__` injection confirmed)
+- `ai_debug/controllers/main.py` (complete — `webclient_rendering_context()` call confirmed)
+- `odoo/addons/web/models/ir_http.py` line 110 — `"db": self.env.cr.dbname` confirmed in `session_info`
+- `.planning/PROJECT.md` — v1.6 milestone goal and constraints
+
+---
+*Architecture research for: AI Debugger v1.6 — Per-DB IndexedDB isolation*
+*Researched: 2026-02-26*
