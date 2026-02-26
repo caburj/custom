@@ -2,32 +2,17 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-24)
+See: .planning/PROJECT.md (updated 2026-02-26)
 
 **Core value:** Full observability of the AI agentic loop — every LLM request/response, tool call with args and results, state mutations, and loop termination reasons — without altering the loop's behavior.
-**Current focus:** Planning next milestone
+**Current focus:** Per-DB IndexedDB Isolation
 
 ## Current Position
 
-Phase: 18 of 18 (all phases complete)
-Plan: All complete
-Status: v1.5 milestone shipped
-Last activity: 2026-02-24 - Completed quick task 36: Remove client-side JS-derived duration values from ai-debug UI
-
-Progress: [████████████████████] 100% (18/18 phases complete, 6 milestones shipped)
-
-## Performance Metrics
-
-**Velocity:**
-- Total plans completed: 31 (v1.0-v1.5 across 18 phases)
-- v1.5 milestone: 4 plans in 1 day
-
-| Phase | Plan | Duration | Tasks | Files |
-|-------|------|----------|-------|-------|
-| 16    | 01   | 3 min    | 2     | 3     |
-| 17    | 01   | 1 min    | 2     | 2     |
-| 18    | 01   | 2 min    | 2     | 6     |
-| 18    | 02   | 2 min    | 2     | 3     |
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-26 — Milestone v1.6 started
 
 ## Accumulated Context
 
@@ -67,6 +52,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-24
-Stopped at: Completed quick-36 (remove client-side JS-derived duration values)
+Last session: 2026-02-26
+Stopped at: Starting milestone v1.6
 Resume file: None

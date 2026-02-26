@@ -82,7 +82,14 @@ The module is a fully functional developer tool with:
 
 ### Active
 
-(None — planning next milestone)
+## Current Milestone: v1.6 Per-DB IndexedDB Isolation
+
+**Goal:** Scope IndexedDB instances by the Odoo database name so traces from different databases are completely isolated.
+
+**Target features:**
+- IndexedDB database name includes current Odoo DB name (e.g. `ai_debug_aaa` for DB `aaa`)
+- App reads current Odoo DB name at load and opens the correct IDB instance
+- No UI changes — traces naturally belong to the current DB
 
 ### Out of Scope
 
@@ -190,4 +197,4 @@ The module is a fully functional developer tool with:
 | Monochrome ai-metric-chip (v1.5) | Gray-200/700, no color-coding — clean developer-tool aesthetic | ✓ Good — consistent look |
 
 ---
-*Last updated: 2026-02-24 after v1.5 milestone*
+*Last updated: 2026-02-26 after v1.6 milestone start*
