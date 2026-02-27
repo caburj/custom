@@ -897,3 +897,43 @@ $ai-indent-step: 16px;
     max-height: 70vh;
     overflow-y: auto;
 }
+
+// Text popup toolbar (wrap toggle + copy button)
+.ai-popup-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid $border-color;
+}
+
+.ai-popup-toolbar-btn {
+    font-size: 12px;
+    padding: 2px 8px;
+    border: 1px solid $border-color;
+    border-radius: 4px;
+    background: transparent;
+    color: $o-gray-600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &:hover {
+        background: rgba($o-action, 0.08);
+        color: $o-action;
+        border-color: $o-action;
+    }
+
+    &.active {
+        background: rgba($o-action, 0.12);
+        color: $o-action;
+        border-color: $o-action;
+    }
+}
+
+// Unwrapped mode: no wrapping, horizontal scroll
+.ai-popup-content.ai-popup-nowrap {
+    white-space: pre;
+    word-break: normal;
+    overflow-x: auto;
+}

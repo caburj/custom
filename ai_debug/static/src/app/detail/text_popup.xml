@@ -3,7 +3,19 @@
 
 <t t-name="ai_debug.TextPopupDialog">
     <Dialog title="props.title" size="'xl'">
-        <pre class="ai-popup-content"><code t-ref="codeEl" t-attf-class="language-{{props.language or 'json'}}"/></pre>
+        <div class="ai-popup-toolbar">
+            <button class="btn btn-sm"
+                    t-attf-class="ai-popup-toolbar-btn {{ state.wrap ? 'active' : '' }}"
+                    t-on-click="toggleWrap"
+                    title="Toggle text wrapping">
+                <i class="fa fa-align-left"/> Wrap
+            </button>
+            <CopyButton content="props.content"
+                        className="'btn-sm ai-popup-toolbar-btn'"
+                        copyText="'Copy'"
+                        icon="'fa-clone'"/>
+        </div>
+        <pre t-attf-class="ai-popup-content {{ state.wrap ? '' : 'ai-popup-nowrap' }}"><code t-ref="codeEl" t-attf-class="language-{{props.language or 'json'}}"/></pre>
     </Dialog>
 </t>
 

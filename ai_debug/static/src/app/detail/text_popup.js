@@ -1,10 +1,11 @@
 /** @odoo-module **/
-import { Component, onMounted, useRef } from "@odoo/owl";
+import { Component, onMounted, useRef, useState } from "@odoo/owl";
 import { Dialog } from "@web/core/dialog/dialog";
+import { CopyButton } from "@web/core/copy_button/copy_button";
 
 export class TextPopupDialog extends Component {
     static template = "ai_debug.TextPopupDialog";
-    static components = { Dialog };
+    static components = { Dialog, CopyButton };
     static props = {
         title: String,
         content: String,
@@ -14,6 +15,7 @@ export class TextPopupDialog extends Component {
 
     setup() {
         this.codeRef = useRef("codeEl");
+        this.state = useState({ wrap: true });
         onMounted(() => {
             const el = this.codeRef.el;
             if (!el) return;
@@ -28,5 +30,9 @@ export class TextPopupDialog extends Component {
                 }
             }
         });
+    }
+
+    toggleWrap() {
+        this.state.wrap = !this.state.wrap;
     }
 }
