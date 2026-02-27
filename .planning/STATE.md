@@ -50,9 +50,10 @@ None.
 | 35 | Show actual iteration duration and in/out tokens in sidebar | 2026-02-24 | 4e8f602 | Verified | [35-show-actual-iteration-duration-and-in-ou](./quick/35-show-actual-iteration-duration-and-in-ou/) |
 | 36 | Remove client-side JS-derived duration values | 2026-02-24 | 5871a55 | Verified | [36-remove-client-side-js-derived-duration-v](./quick/36-remove-client-side-js-derived-duration-v/) |
 | 38 | Capture HTTP request body per-iteration in AI debug | 2026-02-26 | 5bb2bd3 | | [38-capture-request-body-in-ai-debug-iterati](./quick/38-capture-request-body-in-ai-debug-iterati/) |
+| 39 | Add wrap toggle and copy button toolbar to TextPopupDialog | 2026-02-27 | bb5bf96 | | [39-when-showing-the-popup-to-display-the-fu](./quick/39-when-showing-the-popup-to-display-the-fu/) |
 
 ## Session Continuity
 
-Last session: 2026-02-26
-Stopped at: Completed quick-38 (capture request body in AI debug iterations)
+Last session: 2026-02-27
+Stopped at: Completed quick-39 (wrap toggle and copy button toolbar in TextPopupDialog)
 Resume file: None
