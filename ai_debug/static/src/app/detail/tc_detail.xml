@@ -21,7 +21,7 @@
                 <div class="ai-detail-section">
                     <div class="ai-detail-section-header">
                         <span>Arguments</span>
-                        <CopyButton content="() => this.argsJson"/>
+                        <CopyButton content="() => this.argsJson" successText="'Copied!'"/>
                     </div>
                     <JsonTree data="props.toolCall.args"
                               onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
@@ -32,7 +32,7 @@
                 <div class="ai-detail-section">
                     <div class="ai-detail-section-header">
                         <span>Result</span>
-                        <CopyButton content="() => this.resultString"/>
+                        <CopyButton content="() => this.resultString" successText="'Copied!'"/>
                     </div>
                     <!-- If result is an object/array, use JsonTree; otherwise show as text -->
                     <t t-if="resultIsObject">

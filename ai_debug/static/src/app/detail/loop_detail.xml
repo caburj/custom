@@ -22,7 +22,7 @@
                 <div class="ai-detail-section">
                     <div class="ai-detail-section-header">
                         <span>System Prompt</span>
-                        <CopyButton content="() => this.instructionsContent"/>
+                        <CopyButton content="() => this.instructionsContent" successText="'Copied!'"/>
                     </div>
                     <!-- Truncated text preview; click opens popup -->
                     <div class="ai-detail-text-preview"
@@ -47,7 +47,7 @@
                             <div class="ai-detail-section">
                                 <div class="ai-detail-section-header">
                                     <span t-esc="'System Message ' + (msg_index + 1)"/>
-                                    <CopyButton content="() => msg.content"/>
+                                    <CopyButton content="() => msg.content" successText="'Copied!'"/>
                                 </div>
                                 <div class="ai-detail-text-preview"
                                      t-on-click="() => this.openTextPopup('RAG Context', msg.content, 'markdown')"
@@ -62,7 +62,7 @@
                 <div class="ai-detail-section">
                     <div class="ai-detail-section-header">
                         <span>Tools Definition</span>
-                        <CopyButton content="() => this.toolsJson"/>
+                        <CopyButton content="() => this.toolsJson" successText="'Copied!'"/>
                     </div>
                     <JsonTree data="props.trace.tools" onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
                 </div>
