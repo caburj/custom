@@ -2,6 +2,7 @@
     'name': 'AI Debug',
     'version': '1.2',
     'category': 'Technical',
+    'author': 'Odoo S.A.',
     'summary': 'Standalone live tracer for the AI agentic loop',
     'depends': ['ai_app', 'bus'],
     'data': [
