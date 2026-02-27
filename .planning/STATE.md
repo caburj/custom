@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-26)
 Phase: Not started (defining requirements)
 Plan: —
 Status: Defining requirements
-Last activity: 2026-02-26 — Completed quick task 38: capture request body in ai_debug iteration
+Last activity: 2026-02-27 - Completed quick task 39: When showing the popup to display the full text, introduce a way to toggle text wrapping and a button to copy the full text
 
 ## Accumulated Context
 
@@ -50,7 +50,7 @@ None.
 | 35 | Show actual iteration duration and in/out tokens in sidebar | 2026-02-24 | 4e8f602 | Verified | [35-show-actual-iteration-duration-and-in-ou](./quick/35-show-actual-iteration-duration-and-in-ou/) |
 | 36 | Remove client-side JS-derived duration values | 2026-02-24 | 5871a55 | Verified | [36-remove-client-side-js-derived-duration-v](./quick/36-remove-client-side-js-derived-duration-v/) |
 | 38 | Capture HTTP request body per-iteration in AI debug | 2026-02-26 | 5bb2bd3 | | [38-capture-request-body-in-ai-debug-iterati](./quick/38-capture-request-body-in-ai-debug-iterati/) |
-| 39 | Add wrap toggle and copy button toolbar to TextPopupDialog | 2026-02-27 | bb5bf96 | | [39-when-showing-the-popup-to-display-the-fu](./quick/39-when-showing-the-popup-to-display-the-fu/) |
+| 39 | Add wrap toggle and copy button toolbar to TextPopupDialog | 2026-02-27 | bb5bf96 | Needs Review | [39-when-showing-the-popup-to-display-the-fu](./quick/39-when-showing-the-popup-to-display-the-fu/) |
 
 ## Session Continuity
 
