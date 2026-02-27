@@ -3,6 +3,10 @@
 // ai_debug.assets_dark AFTER web.dark_mode_variables, so all $o-* vars
 // resolve to their dark values.
 
+.ai-debug-app {
+    color-scheme: dark;
+}
+
 // JSON key (light uses $o-action which is fine in dark too, but override for explicitness)
 .ai-json-key    { color: $o-action; }
 
