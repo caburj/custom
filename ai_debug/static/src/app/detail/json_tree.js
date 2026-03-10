@@ -1,11 +1,12 @@
 /** @odoo-module **/
 import { Component, onWillUpdateProps, useState } from "@odoo/owl";
+import { CopyButton } from "@web/core/copy_button/copy_button";
 
 const TRUNCATION_THRESHOLD = 300;
 
 export class JsonTree extends Component {
     static template = "ai_debug.JsonTree";
-    static components = { JsonTree };  // Self-reference for recursive rendering
+    static components = { JsonTree, CopyButton };  // Self-reference for recursive rendering
     static props = {
         data: true,                    // Any JSON value
         label: { type: String, optional: true },
@@ -79,6 +80,10 @@ export class JsonTree extends Component {
         if (this.type === "array") return `Array(${this.childCount})`;
         if (this.type === "object") return `{${this.childCount} keys}`;
         return "";
+    }
+
+    get subtreeJson() {
+        return JSON.stringify(this.props.data, null, 2);
     }
 
     toggle(ev) {

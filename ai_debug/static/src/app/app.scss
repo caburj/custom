@@ -803,6 +803,28 @@ $ai-indent-step: 16px;
     flex-shrink: 0;
 }
 
+// Copy-subtree button — hidden until row hover
+.ai-json-copy-btn {
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    flex-shrink: 0;
+    font-size: 11px;
+    padding: 0 4px;
+    border: none;
+    background: transparent;
+    color: $o-gray-500;
+    cursor: pointer;
+    line-height: 1;
+
+    &:hover {
+        color: $o-action;
+    }
+}
+
+.ai-json-row-expandable:hover .ai-json-copy-btn {
+    opacity: 1;
+}
+
 .ai-json-truncated {
     cursor: pointer;
     text-decoration: underline;
@@ -888,7 +910,9 @@ $ai-indent-step: 16px;
 }
 
 // Text popup content area (inside Dialog)
-.ai-popup-content {
+// Specificity: pre.ai-popup-content beats Prism's pre[class*="language-"] { white-space: pre }
+// (Prism.highlightElement copies language-* class from <code> to parent <pre>)
+pre.ai-popup-content {
     font-family: "SF Mono", "Fira Code", "Consolas", monospace;
     font-size: 13px;
     line-height: 1.6;
@@ -896,6 +920,14 @@ $ai-indent-step: 16px;
     word-break: break-word;
     max-height: 70vh;
     overflow-y: auto;
+
+    // The Prism theme also targets code[class*="language-"] { white-space: pre }.
+    // Since <code> contains all the text, its white-space: pre blocks wrapping
+    // even when the parent <pre> says pre-wrap. Force inheritance.
+    code {
+        white-space: inherit;
+        word-break: inherit;
+    }
 }
 
 // Text popup toolbar (wrap toggle + copy button)
@@ -932,7 +964,7 @@ $ai-indent-step: 16px;
 }
 
 // Unwrapped mode: no wrapping, horizontal scroll
-.ai-popup-content.ai-popup-nowrap {
+pre.ai-popup-content.ai-popup-nowrap {
     white-space: pre;
     word-break: normal;
     overflow-x: auto;

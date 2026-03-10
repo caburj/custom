@@ -6,7 +6,7 @@
 
         <!-- Expandable node (object or array) -->
         <t t-if="isExpandable">
-            <div class="ai-json-row">
+            <div class="ai-json-row ai-json-row-expandable">
                 <span class="ai-json-toggle" t-on-click="toggle">
                     <t t-if="state.expanded">&#x2212;</t>
                     <t t-else="">+</t>
@@ -15,6 +15,9 @@
                     <span class="ai-json-key" t-esc="props.label"/>
                 </t>
                 <span class="ai-json-preview ai-json-value" t-esc="collapsedPreview"/>
+                <CopyButton content="() => this.subtreeJson"
+                            className="'ai-json-copy-btn'"
+                            successText="'Copied!'"/>
             </div>
             <t t-if="state.expanded">
                 <t t-foreach="entries" t-as="entry" t-key="entry[0]">
