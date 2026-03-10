@@ -6,23 +6,18 @@ const DB_VERSION = 1;
 const STORE = "traces";
 
 const idb = new IndexedDB(DB_NAME, DB_VERSION);
-// Ensure the "traces" store is registered with the IndexedDB utility so that
-// onupgradeneeded creates it when the DB is opened (e.g. after external deletion).
-// Without this, direct idb.execute() calls skip store registration (only read/write/
-// getAllKeys add to _tables) and the store won't exist after DB recreation.
-idb._tables.add(STORE);
 
 /**
  * Probe whether IndexedDB is available in this session.
  * Returns true if available, false if blocked (e.g., private browsing).
- *
- * Technique: idb.execute() passes db to the callback when open succeeds,
- * or calls callback(undefined) when onerror fires. We distinguish by checking
- * if db is truthy.
  */
 export async function probeIDB() {
-    const result = await idb.execute((db) => (db ? "ok" : null));
-    return result === "ok";
+    try {
+        await idb.getAllKeys(STORE);
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -108,43 +103,20 @@ export function writeTrace(trace) {
 
 /**
  * Delete a trace record from IndexedDB by trace_id.
- * Exposed for Phase 11's delete feature.
  */
 export async function deleteTrace(traceId) {
-    return idb.execute((db) => {
-        if (!db) return;
-        if (!db.objectStoreNames.contains(STORE)) return;
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE, "readwrite");
-            tx.objectStore(STORE).delete(traceId);
-            tx.oncomplete = resolve;
-            tx.onerror = () => reject(tx.error);
-            tx.commit();
-        });
-    });
+    return idb.delete(STORE, traceId);
 }
 
 /**
- * Delete multiple trace records from IndexedDB in a single transaction.
- * More efficient than calling deleteTrace() N times (each opens its own transaction).
- * Used by cascade delete to remove a root trace and all its descendants atomically.
+ * Delete multiple trace records from IndexedDB.
+ * Used by cascade delete to remove a root trace and all its descendants.
  */
 export async function deleteTraces(traceIds) {
     if (!traceIds.length) return;
-    return idb.execute((db) => {
-        if (!db) return;
-        if (!db.objectStoreNames.contains(STORE)) return;
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE, "readwrite");
-            const store = tx.objectStore(STORE);
-            for (const id of traceIds) {
-                store.delete(id);
-            }
-            tx.oncomplete = resolve;
-            tx.onerror = () => reject(tx.error);
-            tx.commit();
-        });
-    });
+    for (const id of traceIds) {
+        await idb.delete(STORE, id);
+    }
 }
 
 /**
@@ -156,14 +128,10 @@ export async function deleteTraces(traceIds) {
  * hydrateTrace() in app.js reconstructs the reactive Maps.
  */
 export async function loadAllTraces() {
-    return idb.execute((db) => {
-        if (!db) return [];
-        if (!db.objectStoreNames.contains(STORE)) return [];
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE, "readonly");
-            const req = tx.objectStore(STORE).getAll();
-            req.onsuccess = () => resolve(req.result ?? []);
-            tx.onerror = () => reject(tx.error);
-        });
-    });
+    try {
+        const entries = await idb.getAllEntries(STORE);
+        return entries.map(({ value }) => value);
+    } catch {
+        return [];
+    }
 }
