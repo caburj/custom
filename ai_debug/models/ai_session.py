@@ -177,6 +177,10 @@ class AiSession(models.TransientModel):
         parent_trace_id = self.env.context.get('ai_parent_trace_id')        # None for root
         parent_tool_call_id = self.env.context.get('ai_parent_tool_call_id')  # None for root
 
+        # Serialize tools once — included in every iteration payload
+        # (tools will vary per-iteration once "topics on demand" lands).
+        serialized_tools = self._ai_debug_serialize_tools(tools, model)
+
         self._ai_debug_bus_send('new_trace', {
             'type': 'new_trace',
             'trace_id': trace_id,
@@ -188,7 +192,6 @@ class AiSession(models.TransientModel):
             'user_query': user_query,
             # system prompt only; RAG context is in messages (captured in iteration events)
             'instructions': instructions,
-            'tools': self._ai_debug_serialize_tools(tools, model),
             'state_snapshot': self._ai_debug_state_snapshot(tools_context),
         })
 
@@ -237,6 +240,7 @@ class AiSession(models.TransientModel):
                         'has_tool_calls': 'tool_calls' in item,
                         'is_final': 'final_message' in item,
                         'provider': provider_name,
+                        'tools': serialized_tools,
                     }
                     # tokens is conditional — absence signals failed/unavailable extraction
                     if tokens is not None:
@@ -286,6 +290,7 @@ class AiSession(models.TransientModel):
                 'has_tool_calls': False,
                 'is_final': False,
                 'provider': provider_name,
+                'tools': serialized_tools,
             }
             if err_llm_duration_ms is not None:
                 err_iteration_payload['duration_ms'] = err_llm_duration_ms
@@ -315,6 +320,7 @@ class AiSession(models.TransientModel):
                 'has_tool_calls': False,
                 'is_final': False,
                 'provider': provider_name,
+                'tools': serialized_tools,
             }
             if err_llm_duration_ms is not None:
                 err_iteration_payload['duration_ms'] = err_llm_duration_ms

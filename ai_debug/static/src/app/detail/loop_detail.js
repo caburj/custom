@@ -41,10 +41,6 @@ export class LoopDetail extends Component {
         return this.props.trace.instructions || "";
     }
 
-    get toolsJson() {
-        return JSON.stringify(this.props.trace.tools, null, 2);
-    }
-
     get iterationRows() {
         return [...this.props.trace.iterations.values()].map((iter, i) => ({
             index: iter.iteration_index ?? i + 1,

@@ -67,6 +67,7 @@ function hydrateTrace(plain) {
             tokens: iter.tokens ?? { input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: 0, total: 0 },
             duration_ms: iter.duration_ms ?? 0,
             ai_provider: iter.ai_provider ?? null,
+            tools: iter.tools ?? [],
         });
     }
     return {
@@ -196,6 +197,7 @@ export class AiDebugApp extends Component {
                     is_final: payload.is_final || false,
                     error: payload.error || null,
                     request_body: payload.request_body || null,
+                    tools: payload.tools || [],
                     // Phase 17: token/timing/provider fields
                     tokens: normalizeTokens(payload.tokens),
                     duration_ms: payload.duration_ms ?? 0,
@@ -423,7 +425,6 @@ export class AiDebugApp extends Component {
             expanded: true,
             iterations,
             instructions: payload.instructions || "",
-            tools: payload.tools || [],
             state_snapshot: payload.state_snapshot || {},
             // Phase 13: parent linkage fields (null for root traces)
             parent_trace_id: payload.parent_trace_id || null,

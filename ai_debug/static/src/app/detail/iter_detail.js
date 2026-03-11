@@ -41,4 +41,8 @@ export class IterationDetail extends Component {
         return JSON.stringify(this.props.iteration.request_body, null, 2);
     }
 
+    get toolsJson() {
+        return JSON.stringify(this.props.iteration.tools, null, 2);
+    }
+
 }

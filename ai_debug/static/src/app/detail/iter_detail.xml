@@ -57,6 +57,17 @@
                 </div>
             </t>
 
+            <t t-set-slot="tools" title="'Tools Definition'" isVisible="true">
+                <div class="ai-detail-section">
+                    <div class="ai-detail-section-header">
+                        <span>Tools Definition</span>
+                        <CopyButton content="() => this.toolsJson" successText="'Copied!'"/>
+                    </div>
+                    <JsonTree data="props.iteration.tools"
+                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                </div>
+            </t>
+
         </Notebook>
     </div>
 </t>
