@@ -99,42 +99,47 @@ class AiSession(models.TransientModel):
         """Override to capture the raw user query before provider formatting.
 
         _generate_next_response receives the user message in Odoo's internal
-        format ({role, parts: [{type: 'text', content: '...'}]}) before it
+        format ([
+            {type: 'text', content: {'data': <textual_data>, ...}},
+            {type: 'inline_data', content: {'data': <base64_data>, ...}}
+        ]) before it
         gets transformed by _format_to_llm into provider-specific structures.
         We extract the text here and thread it via env context so
         _run_agentic_loop can include it in the new_trace bus event.
         """
         user_query = ""
-        if not confirm_pending and message.get('parts'):
-            for part in message['parts']:
-                if part.get('type') == 'text':
-                    user_query = part['content']
+        if not confirm_pending and message:
+            for part in message:
+                if part['type'] == 'text':
+                    user_query = part['content']['data']
                     break
         self = self.with_context(_ai_debug_user_query=user_query)
         yield from super()._generate_next_response(message, confirm_pending=confirm_pending)
 
     @api.model
-    def _get_direct_response(self, model, instructions, message, temperature=0.5, tools=None,
-            schema=None, web_grounding=False, record=None, tool_results_collector=None):
+    def _get_direct_response(self, model, instructions, message, tools=None,
+            record=None, tool_results_collector=None, **completion_options):
         """Override to capture the raw user query before provider formatting.
 
         _get_direct_response receives message as a raw parts list
-        ([{type: 'text', content: '...'}]) before _format_to_llm.
+        ([
+            {type: 'text', content: {'data': <textual_data>, ...}},
+            {type: 'inline_data', content: {'data': <base64_data>, ...}}
+        ]) before _format_to_llm.
         """
         user_query = ""
         for part in message or []:
-            if isinstance(part, dict) and part.get('type') == 'text':
-                user_query = part['content']
+            if part['type'] == 'text':
+                user_query = part['content']['data']
                 break
         self = self.with_context(_ai_debug_user_query=user_query)
         return super()._get_direct_response(
-            model, instructions, message, temperature=temperature, tools=tools,
-            schema=schema, web_grounding=web_grounding, record=record,
-            tool_results_collector=tool_results_collector,
+            model, instructions, message, tools=tools, record=record, tool_results_collector=tool_results_collector,
+            **completion_options
         )
 
     @api.model
-    def _run_agentic_loop(self, model, instructions, messages, temperature, tools, tools_context, record=None, schema=None, web_grounding=False):
+    def _run_agentic_loop(self, model, instructions, messages, tools, tools_context, record=None, **completion_options):
         """Override to instrument the agentic loop with bus events.
 
         Emits five event types over the 'ai_debug' bus channel:
@@ -203,8 +208,8 @@ class AiSession(models.TransientModel):
 
         try:
             for item in super()._run_agentic_loop(
-                model, instructions, messages, temperature, tools,
-                tools_context, record, schema, web_grounding,
+                model, instructions, messages, tools,
+                tools_context, record, **completion_options,
             ):
                 if 'tool_calls' in item or 'final_message' in item:
                     # LLM responded — emit iteration event before yielding to caller.
