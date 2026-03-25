@@ -39,7 +39,7 @@
                     <t t-if="resultIsObject">
                         <JsonTree data="props.toolCall.result"
                                   onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"
-                              onExpandImage="(title, src) => this.openImagePopup(title, src)"/>
+                                  onExpandImage="(title, src) => this.openImagePopup(title, src)"/>
                     </t>
                     <t t-else="">
                         <t t-if="resultIsLong">
