@@ -44,25 +44,77 @@ class AiSession(models.TransientModel):
             'llm_model': tools_context.get('llm_model'),
         }
 
-    def _ai_debug_strip_binary(self, messages):
-        """Return a copy of messages with binary content replaced by metadata stubs.
+    @staticmethod
+    def _ai_debug_is_image_type(mime):
+        return mime and 'image' in mime
 
-        Prevents base64-encoded image/file data from bloating bus payloads.
-        Replaces input_image and input_file parts with a lightweight placeholder.
+    def _ai_debug_strip_binary(self, messages):
+        """Return a copy of messages with non-image binary content replaced by
+        metadata stubs and image data normalized to data URIs.
+
+        Images are preserved as data URIs so the frontend can render previews.
+        Non-image files (PDFs, etc.) are replaced with lightweight stubs to
+        avoid bloating bus payloads.
         """
         result = []
         for msg in messages:
             msg_copy = dict(msg)
+
+            # OpenAI image_generation_call: normalize raw base64 result to data URI
+            if msg_copy.get('type') == 'image_generation_call' and 'result' in msg_copy:
+                fmt = msg_copy.get('output_format', 'png')
+                msg_copy['result'] = f'data:image/{fmt};base64,{msg_copy["result"]}'
+
+            # OpenAI format: content is a list of typed parts
             if isinstance(msg_copy.get('content'), list):
-                new_content = []
-                for part in msg_copy['content']:
-                    if part.get('type') in ('input_image', 'input_file'):
-                        new_content.append({'type': part['type'], '_binary_excluded': True})
+                msg_copy['content'] = self._ai_debug_process_openai_parts(msg_copy['content'])
+
+            # OpenAI function_call_output: output list has the same part structure
+            if isinstance(msg_copy.get('output'), list):
+                msg_copy['output'] = self._ai_debug_process_openai_parts(msg_copy['output'])
+
+            # Google format: parts list with inline_data dicts
+            if isinstance(msg_copy.get('parts'), list):
+                new_parts = []
+                for part in msg_copy['parts']:
+                    if 'inline_data' in part:
+                        mime = part['inline_data'].get('mimeType', '')
+                        if self._ai_debug_is_image_type(mime):
+                            data = part['inline_data'].get('data', '')
+                            new_parts.append({
+                                'inline_data': {
+                                    'mimeType': mime,
+                                    'data': f'data:{mime};base64,{data}',
+                                },
+                            })
+                        else:
+                            new_parts.append({
+                                'inline_data': {
+                                    'mimeType': mime,
+                                    '_binary_excluded': True,
+                                },
+                            })
                     else:
-                        new_content.append(part)
-                msg_copy['content'] = new_content
+                        new_parts.append(part)
+                msg_copy['parts'] = new_parts
+
             result.append(msg_copy)
         return result
+
+    @staticmethod
+    def _ai_debug_process_openai_parts(parts):
+        """Process a list of OpenAI-format parts: keep images, strip other binary."""
+        new_parts = []
+        for part in parts:
+            ptype = part.get('type', '')
+            if ptype in ('input_image', 'output_image'):
+                # Preserve image — image_url is already a data URI
+                new_parts.append(part)
+            elif ptype in ('input_file', 'output_file'):
+                new_parts.append({'type': ptype, '_binary_excluded': True})
+            else:
+                new_parts.append(part)
+        return new_parts
 
     def _ai_debug_serialize_tools(self, tools, model):
         """Return provider-formatted tool definitions (full JSON schemas) for new_trace payload.
@@ -98,43 +150,45 @@ class AiSession(models.TransientModel):
     def _generate_next_response(self, message, confirm_pending=False):
         """Override to capture the raw user query before provider formatting.
 
-        _generate_next_response receives the user message in Odoo's internal
-        format ({role, parts: [{type: 'text', content: '...'}]}) before it
-        gets transformed by _format_to_llm into provider-specific structures.
-        We extract the text here and thread it via env context so
-        _run_agentic_loop can include it in the new_trace bus event.
+        _generate_next_response receives the user message as AIMessageParts
+        ([{type: 'text', content: {data: '...'}}]) before it gets transformed
+        by _format_to_llm into provider-specific structures. We extract the
+        text here and thread it via env context so _run_agentic_loop can
+        include it in the new_trace bus event.
         """
         user_query = ""
-        if not confirm_pending and message.get('parts'):
-            for part in message['parts']:
-                if part.get('type') == 'text':
-                    user_query = part['content']
+        if not confirm_pending and message:
+            for part in message:
+                if isinstance(part, dict) and part.get('type') == 'text':
+                    content = part.get('content')
+                    user_query = content.get('data', '') if isinstance(content, dict) else content or ''
                     break
         self = self.with_context(_ai_debug_user_query=user_query)
         yield from super()._generate_next_response(message, confirm_pending=confirm_pending)
 
     @api.model
-    def _get_direct_response(self, model, instructions, message, temperature=0.5, tools=None,
-            schema=None, web_grounding=False, record=None, tool_results_collector=None):
+    def _get_direct_response(self, model, instructions, message, tools=None,
+            record=None, tool_results_collector=None, **completion_options):
         """Override to capture the raw user query before provider formatting.
 
-        _get_direct_response receives message as a raw parts list
-        ([{type: 'text', content: '...'}]) before _format_to_llm.
+        _get_direct_response receives message as AIMessageParts
+        ([{type: 'text', content: {data: '...'}}]) before _format_to_llm.
         """
         user_query = ""
         for part in message or []:
             if isinstance(part, dict) and part.get('type') == 'text':
-                user_query = part['content']
+                content = part.get('content')
+                user_query = content.get('data', '') if isinstance(content, dict) else content or ''
                 break
         self = self.with_context(_ai_debug_user_query=user_query)
         return super()._get_direct_response(
-            model, instructions, message, temperature=temperature, tools=tools,
-            schema=schema, web_grounding=web_grounding, record=record,
-            tool_results_collector=tool_results_collector,
+            model, instructions, message, tools=tools,
+            record=record, tool_results_collector=tool_results_collector,
+            **completion_options,
         )
 
     @api.model
-    def _run_agentic_loop(self, model, instructions, messages, temperature, tools, tools_context, record=None, schema=None, web_grounding=False):
+    def _run_agentic_loop(self, model, instructions, messages, tools, tools_context, record=None, **completion_options):
         """Override to instrument the agentic loop with bus events.
 
         Emits five event types over the 'ai_debug' bus channel:
@@ -203,8 +257,8 @@ class AiSession(models.TransientModel):
 
         try:
             for item in super()._run_agentic_loop(
-                model, instructions, messages, temperature, tools,
-                tools_context, record, schema, web_grounding,
+                model, instructions, messages, tools,
+                tools_context, record, **completion_options,
             ):
                 if 'tool_calls' in item or 'final_message' in item:
                     # LLM responded — emit iteration event before yielding to caller.

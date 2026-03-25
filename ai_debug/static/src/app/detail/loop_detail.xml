@@ -47,11 +47,11 @@
                             <div class="ai-detail-section">
                                 <div class="ai-detail-section-header">
                                     <span t-esc="'System Message ' + (msg_index + 1)"/>
-                                    <CopyButton content="() => msg.content" successText="'Copied!'"/>
+                                    <CopyButton content="() => msg._text" successText="'Copied!'"/>
                                 </div>
                                 <div class="ai-detail-text-preview"
-                                     t-on-click="() => this.openTextPopup('RAG Context', msg.content, 'markdown')"
-                                     t-esc="msg.content"/>
+                                     t-on-click="() => this.openTextPopup('RAG Context', msg._text, 'markdown')"
+                                     t-esc="msg._text"/>
                             </div>
                         </t>
                     </t>

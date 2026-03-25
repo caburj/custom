@@ -969,3 +969,65 @@ pre.ai-popup-content.ai-popup-nowrap {
     word-break: normal;
     overflow-x: auto;
 }
+
+// Image leaf in JsonTree — clickable label with hover overlay
+.ai-json-image-leaf {
+    position: relative;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+
+    .ai-json-value {
+        text-decoration: underline;
+        text-decoration-style: dotted;
+        text-decoration-color: $o-gray-500;
+    }
+
+    &:hover .ai-json-value {
+        color: $o-action;
+        text-decoration-color: $o-action;
+    }
+
+    // Hover overlay — fixed positioning escapes all overflow ancestors
+    .ai-json-image-overlay {
+        display: none;
+        position: fixed;
+        z-index: 1000;
+        padding: 4px;
+        background: $o-view-background-color;
+        border: 1px solid $border-color;
+        border-radius: 6px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+        pointer-events: none;
+    }
+
+    &:hover .ai-json-image-overlay {
+        display: block;
+    }
+}
+
+.ai-json-image-thumb {
+    display: block;
+    max-width: 240px;
+    max-height: 180px;
+    border-radius: 4px;
+    object-fit: contain;
+}
+
+// Image popup dialog content
+.ai-image-popup-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+    background: repeating-conic-gradient($o-gray-200 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+    border-radius: 6px;
+    min-height: 200px;
+}
+
+.ai-image-popup-img {
+    max-width: 100%;
+    max-height: 70vh;
+    border-radius: 4px;
+    object-fit: contain;
+}

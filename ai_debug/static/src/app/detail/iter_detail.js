@@ -5,6 +5,7 @@ import { CopyButton } from "@web/core/copy_button/copy_button";
 import { useService } from "@web/core/utils/hooks";
 import { JsonTree } from "./json_tree";
 import { TextPopupDialog } from "./text_popup";
+import { ImagePopupDialog } from "./image_popup";
 import { formatTokens, formatDuration } from "../format_metrics";
 
 export class IterationDetail extends Component {
@@ -27,6 +28,11 @@ export class IterationDetail extends Component {
     openTextPopup(title, content, language) {
         if (!this.dialog) return;
         this.dialog.add(TextPopupDialog, { title, content, language: language || "markdown" });
+    }
+
+    openImagePopup(title, src) {
+        if (!this.dialog) return;
+        this.dialog.add(ImagePopupDialog, { title, src });
     }
 
     get messagesJson() {

@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, onWillUpdateProps, useState } from "@odoo/owl";
+import { Component, onWillUpdateProps, useRef, useState } from "@odoo/owl";
 import { CopyButton } from "@web/core/copy_button/copy_button";
 
 const TRUNCATION_THRESHOLD = 300;
@@ -8,16 +8,18 @@ export class JsonTree extends Component {
     static template = "ai_debug.JsonTree";
     static components = { JsonTree, CopyButton };  // Self-reference for recursive rendering
     static props = {
-        data: true,                    // Any JSON value
+        data: { optional: true },       // Any JSON value (may be undefined before data arrives)
         label: { type: String, optional: true },
         depth: { type: Number, optional: true },
         onExpandText: { type: Function, optional: true },  // Callback for long-text popup
+        onExpandImage: { type: Function, optional: true },  // Callback for image popup
         forceCollapsed: { type: Boolean, optional: true },
         forceVersion: { type: Number, optional: true },
     };
     static defaultProps = { depth: 0 };
 
     setup() {
+        this.imageOverlayRef = useRef("imageOverlay");
         const forceActive = typeof this.props.forceCollapsed === "boolean";
         this.state = useState({
             expanded: forceActive ? !this.props.forceCollapsed : this.props.depth < 1,
@@ -59,8 +61,42 @@ export class JsonTree extends Component {
         return [];
     }
 
+    /**
+     * Base64 magic-byte prefixes for common image formats.
+     * Used to detect raw base64 image strings (without a data URI prefix).
+     */
+    static IMAGE_MAGIC = {
+        "iVBORw0KGg": "image/png",  // PNG (\x89PNG...)
+        "/9j/":       "image/jpeg", // JPEG (\xff\xd8\xff)
+        "R0lGOD":     "image/gif",  // GIF (GIF87a / GIF89a)
+        "UklGR":      "image/webp", // WebP (RIFF...WEBP)
+    };
+
+    get isImageValue() {
+        if (this.type !== "string" || typeof this.props.data !== "string") return false;
+        if (this.props.data.startsWith("data:image/")) return true;
+        // Detect raw base64 images by magic bytes (must be long enough to be actual image data)
+        if (this.props.data.length > 256) {
+            for (const prefix of Object.keys(JsonTree.IMAGE_MAGIC)) {
+                if (this.props.data.startsWith(prefix)) return true;
+            }
+        }
+        return false;
+    }
+
+    get imageSrc() {
+        if (this.props.data.startsWith("data:")) return this.props.data;
+        // Raw base64 — infer mimetype from magic bytes and build data URI
+        for (const [prefix, mime] of Object.entries(JsonTree.IMAGE_MAGIC)) {
+            if (this.props.data.startsWith(prefix)) {
+                return `data:${mime};base64,${this.props.data}`;
+            }
+        }
+        return `data:image/png;base64,${this.props.data}`;
+    }
+
     get isLongString() {
-        return this.type === "string" && this.props.data.length > TRUNCATION_THRESHOLD;
+        return this.type === "string" && !this.isImageValue && this.props.data.length > TRUNCATION_THRESHOLD;
     }
 
     get displayValue() {
@@ -99,6 +135,21 @@ export class JsonTree extends Component {
     onClickLongString() {
         if (this.props.onExpandText) {
             this.props.onExpandText(this.props.label || "Value", this.props.data);
+        }
+    }
+
+    onImageMouseEnter(ev) {
+        const overlay = this.imageOverlayRef.el;
+        if (!overlay) return;
+        const rect = ev.currentTarget.getBoundingClientRect();
+        // Position below the leaf, aligned to left edge
+        overlay.style.top = `${rect.bottom + 6}px`;
+        overlay.style.left = `${rect.left}px`;
+    }
+
+    onClickImage() {
+        if (this.props.onExpandImage) {
+            this.props.onExpandImage(this.props.label || "Image", this.imageSrc);
         }
     }
 }

@@ -25,6 +25,7 @@
                               label="entry[0]"
                               depth="props.depth + 1"
                               onExpandText="props.onExpandText"
+                              onExpandImage="props.onExpandImage"
                               forceCollapsed="state.childForceCollapsed"
                               forceVersion="state.childForceVersion"/>
                 </t>
@@ -38,7 +39,16 @@
                 <t t-if="props.label">
                     <span class="ai-json-key" t-esc="props.label"/>
                 </t>
-                <t t-if="type === 'string'">
+                <t t-if="isImageValue">
+                    <span class="ai-json-image-leaf" t-on-click="onClickImage"
+                          t-on-mouseenter="onImageMouseEnter">
+                        <span class="ai-json-string ai-json-value">"[image]"</span>
+                        <div class="ai-json-image-overlay" t-ref="imageOverlay">
+                            <img t-att-src="imageSrc" class="ai-json-image-thumb"/>
+                        </div>
+                    </span>
+                </t>
+                <t t-elif="type === 'string'">
                     <span class="ai-json-string ai-json-value ai-json-truncated" t-on-click="onClickLongString"
                           t-esc="displayValue" title="Click to expand"/>
                 </t>

@@ -31,7 +31,8 @@
                         <CopyButton content="() => this.messagesJson" successText="'Copied!'"/>
                     </div>
                     <JsonTree data="props.iteration.messages_sent"
-                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"
+                              onExpandImage="(title, src) => this.openImagePopup(title, src)"/>
                 </div>
             </t>
 
@@ -42,7 +43,8 @@
                         <CopyButton content="() => this.requestJson" successText="'Copied!'"/>
                     </div>
                     <JsonTree data="props.iteration.request_body"
-                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"
+                              onExpandImage="(title, src) => this.openImagePopup(title, src)"/>
                 </div>
             </t>
 
@@ -53,7 +55,8 @@
                         <CopyButton content="() => this.responseJson" successText="'Copied!'"/>
                     </div>
                     <JsonTree data="props.iteration.raw_response"
-                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"
+                              onExpandImage="(title, src) => this.openImagePopup(title, src)"/>
                 </div>
             </t>
 
@@ -64,7 +67,8 @@
                         <CopyButton content="() => this.toolsJson" successText="'Copied!'"/>
                     </div>
                     <JsonTree data="props.iteration.tools"
-                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"
+                              onExpandImage="(title, src) => this.openImagePopup(title, src)"/>
                 </div>
             </t>
 

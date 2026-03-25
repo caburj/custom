@@ -24,7 +24,8 @@
                         <CopyButton content="() => this.argsJson" successText="'Copied!'"/>
                     </div>
                     <JsonTree data="props.toolCall.args"
-                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"
+                              onExpandImage="(title, src) => this.openImagePopup(title, src)"/>
                 </div>
             </t>
 
@@ -37,7 +38,8 @@
                     <!-- If result is an object/array, use JsonTree; otherwise show as text -->
                     <t t-if="resultIsObject">
                         <JsonTree data="props.toolCall.result"
-                                  onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                                  onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"
+                              onExpandImage="(title, src) => this.openImagePopup(title, src)"/>
                     </t>
                     <t t-else="">
                         <t t-if="resultIsLong">

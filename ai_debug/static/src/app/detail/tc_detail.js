@@ -5,6 +5,7 @@ import { CopyButton } from "@web/core/copy_button/copy_button";
 import { useService } from "@web/core/utils/hooks";
 import { JsonTree } from "./json_tree";
 import { TextPopupDialog } from "./text_popup";
+import { ImagePopupDialog } from "./image_popup";
 
 export class ToolCallDetail extends Component {
     static template = "ai_debug.ToolCallDetail";
@@ -24,6 +25,11 @@ export class ToolCallDetail extends Component {
     openTextPopup(title, content, language) {
         if (!this.dialog) return;
         this.dialog.add(TextPopupDialog, { title, content, language: language || "markdown" });
+    }
+
+    openImagePopup(title, src) {
+        if (!this.dialog) return;
+        this.dialog.add(ImagePopupDialog, { title, src });
     }
 
     get argsJson() {

@@ -29,12 +29,36 @@ export class LoopDetail extends Component {
         this.dialog.add(TextPopupDialog, { title, content, language: language || "markdown" });
     }
 
+    /**
+     * Extract text from a provider-formatted message.
+     * OpenAI: {content: [{type: 'input_text', text: '...'}, ...]}
+     * Google: {parts: [{text: '...'}, ...]}
+     * Legacy: {content: '...'}
+     */
+    _getMessageText(msg) {
+        if (typeof msg.content === "string") return msg.content;
+        if (Array.isArray(msg.content)) {
+            return msg.content
+                .filter(p => typeof p.text === "string")
+                .map(p => p.text)
+                .join("\n");
+        }
+        if (Array.isArray(msg.parts)) {
+            return msg.parts
+                .filter(p => typeof p.text === "string")
+                .map(p => p.text)
+                .join("\n");
+        }
+        return "";
+    }
+
     get ragContextMessages() {
         const firstIter = [...this.props.trace.iterations.values()][0];
         if (!firstIter || !firstIter.messages_sent) return null;
-        return firstIter.messages_sent.filter(
-            m => m.role === "system" && m.content !== this.props.trace.instructions
-        );
+        const instructions = this.props.trace.instructions;
+        return firstIter.messages_sent
+            .filter(m => m.role === "system" && this._getMessageText(m) !== instructions)
+            .map(m => ({ ...m, _text: this._getMessageText(m) }));
     }
 
     get instructionsContent() {
