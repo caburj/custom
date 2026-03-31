@@ -9,6 +9,7 @@
             <span t-if="props.toolCall.success === null" class="ai-detail-meta" style="color: var(--warning);">Pending</span>
             <span t-elif="props.toolCall.success" class="ai-detail-meta success">Success</span>
             <span t-else="" class="ai-detail-meta error">Failed</span>
+            <CopyButton content="() => this.fullToolCallJson" successText="'Copied!'" className="'ms-auto'"/>
         </div>
 
         <!-- Error banner if failed -->

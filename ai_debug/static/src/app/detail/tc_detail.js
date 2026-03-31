@@ -32,6 +32,15 @@ export class ToolCallDetail extends Component {
         this.dialog.add(ImagePopupDialog, { title, src });
     }
 
+    get fullToolCallJson() {
+        const tc = this.props.toolCall;
+        return JSON.stringify({
+            tool_name: tc.tool_name,
+            args: tc.args,
+            result: tc.result,
+        }, null, 2);
+    }
+
     get argsJson() {
         return JSON.stringify(this.props.toolCall.args, null, 2);
     }
