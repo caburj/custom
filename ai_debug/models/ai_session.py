@@ -475,7 +475,7 @@ class AiSession(models.TransientModel):
                     args = tool_call_data.get('args', {})
                     result = result_item.get('result')
                     success = result_item.get('success', True)
-                    error = result if not success else None
+                    error = str(result) if not success and result is not None else None
 
                     _debug_ctx['tool_call_count'] += 1
 
