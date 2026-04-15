@@ -11,10 +11,6 @@
     'assets': {
         'ai_debug.assets': [
             ('include', 'web.assets_backend'),
-            # The ai_natural_language_service subscribes to AI_ADJUST_SEARCH /
-            # AI_SOFT_RELOAD bus events and tries actionService.switchView() —
-            # which crashes on this standalone page (no action window).
-            ('remove', 'ai/static/src/ai_natural_language_service.js'),
             'ai_debug/static/src/app/**/*.scss',
             ('remove', 'ai_debug/static/src/app/**/*.dark.scss'),
             'ai_debug/static/src/app/**/*.xml',
