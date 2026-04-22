@@ -117,7 +117,7 @@ class AiSession(models.TransientModel):
         return new_parts
 
     def _ai_debug_serialize_tools(self, tools, model):
-        """Return provider-formatted tool definitions (full JSON schemas) for new_trace payload.
+        """Return provider-formatted tool definitions (full JSON schemas) for the iteration payload.
 
         Calls _prepare_tools to get the same formatted list that will be sent to the LLM,
         including name, description, and full parameter schemas.
@@ -130,8 +130,24 @@ class AiSession(models.TransientModel):
             tools_by_name = self._get_tools_by_name(tools)
             return self._prepare_tools(tools_by_name, provider)
         except Exception:
-            _logger.exception("ai_debug: failed to serialize tools for new_trace")
+            _logger.exception("ai_debug: failed to serialize tools for iteration event")
             return []
+
+    def _ai_debug_current_tools(self, tools_context):
+        """Resolve the current tools recordset from tools_context["state"]["available_tools"].
+
+        Mirrors the parent _run_agentic_loop lookup so serialized tools in each
+        iteration event reflect the exact set available to the LLM at that point.
+        Returns an empty recordset on any failure.
+        """
+        try:
+            tool_ids = (tools_context.get('state') or {}).get('available_tools') or []
+            # Mirror parent's search() so serialized order matches what the LLM
+            # actually sees (model _order), not the available_tools list order.
+            return self.env['ir.actions.server'].sudo().search([('id', 'in', tool_ids)])
+        except Exception:
+            _logger.exception("ai_debug: failed to resolve current tools from tools_context")
+            return self.env['ir.actions.server']
 
     def _ai_debug_resolve_provider_name(self, model):
         """Return the provider name string ('openai', 'google', etc.) for a given model.
@@ -188,11 +204,11 @@ class AiSession(models.TransientModel):
         )
 
     @api.model
-    def _run_agentic_loop(self, model, instructions, messages, tools, tools_context, record=None, **completion_options):
+    def _run_agentic_loop(self, model, instructions, messages, tools_context, record=None, **completion_options):
         """Override to instrument the agentic loop with bus events.
 
         Emits five event types over the 'ai_debug' bus channel:
-          - new_trace: once at loop start (session_id, parent linkage, agent name, model, tools)
+          - new_trace: once at loop start (session_id, parent linkage, agent name, model, instructions)
           - iteration: once per LLM API call (messages sent, raw response, or error)
           - tool_call_started: once per tool BEFORE execution (name, args, stable tool_call_id)
           - tool_call_completed: once per tool AFTER execution (result, success, same tool_call_id)
@@ -231,10 +247,6 @@ class AiSession(models.TransientModel):
         parent_trace_id = self.env.context.get('ai_parent_trace_id')        # None for root
         parent_tool_call_id = self.env.context.get('ai_parent_tool_call_id')  # None for root
 
-        # Serialize tools once — included in every iteration payload
-        # (tools will vary per-iteration once "topics on demand" lands).
-        serialized_tools = self._ai_debug_serialize_tools(tools, model)
-
         self._ai_debug_bus_send('new_trace', {
             'type': 'new_trace',
             'trace_id': trace_id,
@@ -257,7 +269,7 @@ class AiSession(models.TransientModel):
 
         try:
             for item in super()._run_agentic_loop(
-                model, instructions, messages, tools,
+                model, instructions, messages,
                 tools_context, record, **completion_options,
             ):
                 if 'tool_calls' in item or 'final_message' in item:
@@ -284,6 +296,12 @@ class AiSession(models.TransientModel):
                     # sent to the LLM for this iteration (full accumulated history).
                     messages_snapshot = self._ai_debug_strip_binary(list(messages))
 
+                    # Resolve tools per-iteration: with on-demand topic loading,
+                    # available tools can change between iterations as the LLM
+                    # calls load_topic to bring new tools into scope.
+                    current_tools = self._ai_debug_current_tools(tools_context)
+                    iteration_tools = self._ai_debug_serialize_tools(current_tools, model)
+
                     iteration_payload = {
                         'type': 'iteration',
                         'trace_id': trace_id,
@@ -294,7 +312,7 @@ class AiSession(models.TransientModel):
                         'has_tool_calls': 'tool_calls' in item,
                         'is_final': 'final_message' in item,
                         'provider': provider_name,
-                        'tools': serialized_tools,
+                        'tools': iteration_tools,
                     }
                     # tokens is conditional — absence signals failed/unavailable extraction
                     if tokens is not None:
@@ -332,6 +350,9 @@ class AiSession(models.TransientModel):
             # Emit a failed iteration event so it appears in the sidebar tree.
             # Per locked decision: LLM API failures emit an iteration event with error
             # field instead of raw_response, before loop_end.
+            err_tools = self._ai_debug_serialize_tools(
+                self._ai_debug_current_tools(tools_context), model,
+            )
             err_iteration_payload = {
                 'type': 'iteration',
                 'trace_id': trace_id,
@@ -344,7 +365,7 @@ class AiSession(models.TransientModel):
                 'has_tool_calls': False,
                 'is_final': False,
                 'provider': provider_name,
-                'tools': serialized_tools,
+                'tools': err_tools,
             }
             if err_llm_duration_ms is not None:
                 err_iteration_payload['duration_ms'] = err_llm_duration_ms
@@ -362,6 +383,9 @@ class AiSession(models.TransientModel):
             except Exception:
                 err_llm_duration_ms = None
 
+            err_tools = self._ai_debug_serialize_tools(
+                self._ai_debug_current_tools(tools_context), model,
+            )
             err_iteration_payload = {
                 'type': 'iteration',
                 'trace_id': trace_id,
@@ -374,7 +398,7 @@ class AiSession(models.TransientModel):
                 'has_tool_calls': False,
                 'is_final': False,
                 'provider': provider_name,
-                'tools': serialized_tools,
+                'tools': err_tools,
             }
             if err_llm_duration_ms is not None:
                 err_iteration_payload['duration_ms'] = err_llm_duration_ms
