@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+<t t-inherit="ai_debug.App" t-inherit-mode="extension">
+
+    <!-- "Listening for agentic loops…" must not block MCP call details when traces.size === 0 -->
+    <xpath expr="//main[@class='ai-debug-detail']/div[@class='ai-debug-detail-empty' and @t-if]" position="attributes">
+        <attribute name="t-if">traces.size === 0 and state.selectedType !== 'mcp_call'</attribute>
+    </xpath>
+
+    <!-- Tab bar inserted between the header and the scrollable tree -->
+    <xpath expr="//div[@class='ai-tree-header']" position="after">
+        <div class="ai-mcp-tab-bar">
+            <button t-attf-class="ai-mcp-tab{{ !mcpTabActive ? ' active' : '' }}"
+                    t-on-click="() => this.setMcpTab(false)">Traces</button>
+            <button t-attf-class="ai-mcp-tab{{ mcpTabActive ? ' active' : '' }}"
+                    t-on-click="() => this.setMcpTab(true)">MCP</button>
+        </div>
+    </xpath>
+
+    <!-- Reuse the existing select-all checkbox for both tabs -->
+    <xpath expr="//div[@class='ai-tree-header']//input[@t-ref='selectAll']" position="replace">
+        <input t-if="!mcpTabActive"
+               type="checkbox"
+               class="ai-tree-select-all"
+               t-ref="selectAll"
+               t-att-checked="allChecked"
+               t-on-change.stop="toggleSelectAll"/>
+        <input t-elif="mcpTabActive"
+               type="checkbox"
+               class="ai-tree-select-all"
+               t-ref="mcpSelectAll"
+               t-att-checked="allMcpChecked"
+               t-on-change.stop="toggleSelectAllMcp"/>
+    </xpath>
+
+    <!-- Reuse the existing action buttons for both tabs -->
+    <xpath expr="//div[@class='ai-tree-header']/div[@class='ai-tree-header-actions']" position="replace">
+        <div class="ai-tree-header-actions">
+            <t t-if="!mcpTabActive">
+                <button class="ai-tree-action-btn ai-tree-nesting-toggle"
+                        t-on-click="toggleNestingMode"
+                        t-att-title="state.nestingMode === 'lines' ? 'Switch to indentation' : 'Switch to guide lines'">
+                    <t t-if="state.nestingMode === 'lines'">&#x2502;</t>
+                    <t t-else="">&#x2261;</t>
+                </button>
+                <button class="ai-tree-action-btn"
+                        t-att-disabled="state.checkedTraceIds.size === 0 or undefined"
+                        t-on-click="exportSelected"
+                        title="Export selected">&#x2913;</button>
+                <button class="ai-tree-action-btn"
+                        t-on-click="openImportPicker"
+                        title="Import traces">&#x2912;</button>
+                <button class="ai-tree-action-btn"
+                        t-att-disabled="state.checkedTraceIds.size === 0 or undefined"
+                        t-on-click="deleteCheckedTraces"
+                        title="Delete selected">&#x1F5D1;</button>
+            </t>
+            <t t-else="">
+                <button class="ai-tree-action-btn"
+                        t-att-disabled="_mcpState.checkedMcpCallIds.size === 0 or undefined"
+                        t-on-click="deleteCheckedMcpCalls"
+                        title="Delete selected">&#x1F5D1;</button>
+            </t>
+        </div>
+    </xpath>
+
+    <!-- Hide the trace tree when the MCP tab is active -->
+    <xpath expr="//div[@t-ref='sidebar']" position="attributes">
+        <attribute name="t-if">!mcpTabActive</attribute>
+    </xpath>
+
+    <!-- MCP calls list — replaces the trace tree when MCP tab is active -->
+    <xpath expr="//div[@t-ref='sidebar']" position="after">
+        <div t-if="mcpTabActive" class="ai-tree-content">
+            <div t-if="mcpCalls.length === 0" class="ai-debug-sidebar-empty">
+                <span class="ai-debug-pulse-dot"/>
+                <span>No MCP calls yet</span>
+            </div>
+            <t t-foreach="mcpCalls" t-as="call" t-key="call.call_id">
+                <div class="ai-tree-row ai-tree-mcp-row"
+                     t-att-class="{'selected': state.selectedId === call.call_id}"
+                     t-att-data-node-id="call.call_id">
+                    <input type="checkbox"
+                           class="ai-tree-row-check"
+                           t-att-checked="_mcpState.checkedMcpCallIds.has(call.call_id)"
+                           t-on-change.stop="() => this.toggleMcpCallCheck(call.call_id)"/>
+                    <span class="ai-tree-label"
+                          t-on-click="() => this.selectItem(call.call_id, 'mcp_call')">
+                        <t t-esc="call.tool_name"/>
+                        <span class="ai-tree-label-dim"> &#xB7; <t t-esc="this.formatDuration(call.duration_ms)"/></span>
+                    </span>
+                    <span t-if="call.success" class="ai-tree-status success">&#x2714;</span>
+                    <span t-elif="call.success === false" class="ai-tree-status error">&#x2717;</span>
+                </div>
+            </t>
+        </div>
+    </xpath>
+
+    <!-- Add MCP call detail panel entry. Replace the t-else fallback so the new
+         t-elif is part of the same if/elif/else chain as the existing entries. -->
+    <xpath expr="//main[@class='ai-debug-detail']/div[@t-else='']" position="replace">
+        <ToolCallDetail t-elif="state.selectedType === 'mcp_call'"
+                        t-key="state.selectedId"
+                        toolCall="getSelectedMcpCall()"/>
+        <div t-else="" class="ai-debug-detail-empty">
+            <p>Select a trace, iteration, or tool call to inspect it.</p>
+        </div>
+    </xpath>
+
+</t>
+
+</templates>
