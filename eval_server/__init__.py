@@ -15,12 +15,13 @@ SOCKET_DIR = '/tmp'
 SOCKET_PREFIX = 'odoo_eval_'
 
 
-def _eval_code(dbname, code, commit=False, env_vars=None):
+def _eval_code(dbname, code, commit=False, argv=None):
     """Execute Python code with an Odoo environment and return the result.
 
-    :param env_vars: dict of ODEV_* environment variables from the client,
-        injected into the execution namespace with the ODEV_ prefix stripped
-        and lowercased (e.g. ODEV_DRY_RUN=1 -> dry_run='1').
+    :param argv: list[str] of tokens passed after ``--`` on the ``odev eval``
+        command line. Injected into the execution namespace as the variable
+        ``argv``, ready to feed to ``argparse.ArgumentParser.parse_args(argv)``.
+        Always present in the namespace; defaults to an empty list.
     """
     from odoo import api  # noqa: PLC0415
     from odoo.modules.registry import Registry  # noqa: PLC0415
@@ -31,11 +32,12 @@ def _eval_code(dbname, code, commit=False, env_vars=None):
         ctx = api.Environment(cr, uid, {})['res.users'].context_get()
         env = api.Environment(cr, uid, ctx)
 
-        local_vars = {'env': env, 'self': env.user, 'odoo': __import__('odoo')}
-        # Inject ODEV_* env vars as script-level variables (stripped & lowercased)
-        for key, value in (env_vars or {}).items():
-            var_name = key.removeprefix('ODEV_').lower()
-            local_vars[var_name] = value
+        local_vars = {
+            'env': env,
+            'self': env.user,
+            'odoo': __import__('odoo'),
+            'argv': list(argv or []),
+        }
         stdout_capture = io.StringIO()
         old_stdout = sys.stdout
 
@@ -99,8 +101,8 @@ def _handle_client(conn):
             response = {'ok': False, 'error': 'Missing "code" in request'}
         else:
             try:
-                env_vars = request.get('env', {})
-                response = _eval_code(dbname, code, commit=commit, env_vars=env_vars)
+                argv = request.get('argv', [])
+                response = _eval_code(dbname, code, commit=commit, argv=argv)
             except Exception:
                 response = {'ok': False, 'error': traceback.format_exc()}
 
