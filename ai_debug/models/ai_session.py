@@ -204,7 +204,7 @@ class AiSession(models.TransientModel):
         )
 
     @api.model
-    def _run_agentic_loop(self, model, instructions, messages, tools_context, record=None, **completion_options):
+    def _run_agentic_loop(self, model, instructions, messages, tools_context, reasoning=None, record=None, **completion_options):
         """Override to instrument the agentic loop with bus events.
 
         Emits five event types over the 'ai_debug' bus channel:
@@ -270,7 +270,7 @@ class AiSession(models.TransientModel):
         try:
             for item in super()._run_agentic_loop(
                 model, instructions, messages,
-                tools_context, record, **completion_options,
+                tools_context, reasoning, record, **completion_options,
             ):
                 if 'tool_calls' in item or 'final_message' in item:
                     # LLM responded — emit iteration event before yielding to caller.
