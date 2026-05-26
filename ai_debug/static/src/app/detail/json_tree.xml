@@ -2,32 +2,32 @@
 <templates xml:space="preserve">
 
 <t t-name="ai_debug.JsonTree">
-    <div t-att-class="'ai-json-node' + (props.depth > 0 ? ' ai-json-nested' : '')">
+    <div t-att-class="'ai-json-node' + (this.props.depth > 0 ? ' ai-json-nested' : '')">
 
         <!-- Expandable node (object or array) -->
-        <t t-if="isExpandable">
+        <t t-if="this.isExpandable">
             <div class="ai-json-row ai-json-row-expandable">
-                <span class="ai-json-toggle" t-on-click="toggle">
-                    <t t-if="state.expanded">&#x2212;</t>
+                <span class="ai-json-toggle" t-on-click="this.toggle">
+                    <t t-if="this.state.expanded">&#x2212;</t>
                     <t t-else="">+</t>
                 </span>
-                <t t-if="props.label">
-                    <span class="ai-json-key" t-esc="props.label"/>
+                <t t-if="this.props.label">
+                    <span class="ai-json-key" t-out="this.props.label"/>
                 </t>
-                <span class="ai-json-preview ai-json-value" t-esc="collapsedPreview"/>
+                <span class="ai-json-preview ai-json-value" t-out="this.collapsedPreview"/>
                 <CopyButton content="() => this.subtreeJson"
                             className="'ai-json-copy-btn'"
                             successText="'Copied!'"/>
             </div>
-            <t t-if="state.expanded">
-                <t t-foreach="entries" t-as="entry" t-key="entry[0]">
+            <t t-if="this.state.expanded">
+                <t t-foreach="this.entries" t-as="entry" t-key="entry[0]">
                     <JsonTree data="entry[1]"
                               label="entry[0]"
-                              depth="props.depth + 1"
-                              onExpandText="props.onExpandText"
-                              onExpandImage="props.onExpandImage"
-                              forceCollapsed="state.childForceCollapsed"
-                              forceVersion="state.childForceVersion"/>
+                              depth="this.props.depth + 1"
+                              onExpandText="this.props.onExpandText"
+                              onExpandImage="this.props.onExpandImage"
+                              forceCollapsed="this.state.childForceCollapsed"
+                              forceVersion="this.state.childForceVersion"/>
                 </t>
             </t>
         </t>
@@ -36,30 +36,30 @@
         <t t-else="">
             <div class="ai-json-row">
                 <span class="ai-json-toggle-placeholder"/>
-                <t t-if="props.label">
-                    <span class="ai-json-key" t-esc="props.label"/>
+                <t t-if="this.props.label">
+                    <span class="ai-json-key" t-out="this.props.label"/>
                 </t>
-                <t t-if="isImageValue">
-                    <span class="ai-json-image-leaf" t-on-click="onClickImage"
-                          t-on-mouseenter="onImageMouseEnter">
+                <t t-if="this.isImageValue">
+                    <span class="ai-json-image-leaf" t-on-click="this.onClickImage"
+                          t-on-mouseenter="this.onImageMouseEnter">
                         <span class="ai-json-string ai-json-value">"[image]"</span>
-                        <div class="ai-json-image-overlay" t-ref="imageOverlay">
-                            <img t-att-src="imageSrc" class="ai-json-image-thumb"/>
+                        <div class="ai-json-image-overlay" t-custom-ref="imageOverlay">
+                            <img t-att-src="this.imageSrc" class="ai-json-image-thumb"/>
                         </div>
                     </span>
                 </t>
-                <t t-elif="type === 'string'">
-                    <span class="ai-json-string ai-json-value ai-json-truncated" t-on-click="onClickLongString"
-                          t-esc="displayValue" title="Click to expand"/>
+                <t t-elif="this.type === 'string'">
+                    <span class="ai-json-string ai-json-value ai-json-truncated" t-on-click="this.onClickLongString"
+                          t-out="this.displayValue" title="Click to expand"/>
                 </t>
-                <t t-elif="type === 'number'">
-                    <span class="ai-json-number ai-json-value" t-esc="displayValue"/>
+                <t t-elif="this.type === 'number'">
+                    <span class="ai-json-number ai-json-value" t-out="this.displayValue"/>
                 </t>
-                <t t-elif="type === 'boolean'">
-                    <span class="ai-json-boolean ai-json-value" t-esc="displayValue"/>
+                <t t-elif="this.type === 'boolean'">
+                    <span class="ai-json-boolean ai-json-value" t-out="this.displayValue"/>
                 </t>
                 <t t-else="">
-                    <span class="ai-json-null ai-json-value" t-esc="displayValue"/>
+                    <span class="ai-json-null ai-json-value" t-out="this.displayValue"/>
                 </t>
             </div>
         </t>

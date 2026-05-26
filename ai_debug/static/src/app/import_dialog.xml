@@ -4,26 +4,26 @@
 <t t-name="ai_debug.ImportPreviewDialog">
     <Dialog title="'Import Traces'" size="'sm'">
         <t t-set-slot="default">
-            <t t-if="props.errorMessage">
-                <p class="text-danger mb-0" t-esc="props.errorMessage"/>
+            <t t-if="this.props.errorMessage">
+                <p class="text-danger mb-0" t-out="this.props.errorMessage"/>
             </t>
             <t t-else="">
                 <p class="mb-0">
-                    <strong t-esc="props.traceCount"/> trace(s) found.
-                    <t t-if="props.duplicateCount > 0">
-                        <br/><strong t-esc="props.duplicateCount"/> duplicate(s) will be overwritten.
+                    <strong t-out="this.props.traceCount"/> trace(s) found.
+                    <t t-if="this.props.duplicateCount > 0">
+                        <br/><strong t-out="this.props.duplicateCount"/> duplicate(s) will be overwritten.
                     </t>
                 </p>
             </t>
         </t>
         <t t-set-slot="footer">
-            <t t-if="!props.errorMessage">
+            <t t-if="!this.props.errorMessage">
                 <button class="btn btn-primary"
-                        t-on-click="() => { props.onConfirm(); props.close(); }">
+                        t-on-click="() => { this.props.onConfirm(); this.props.close(); }">
                     Import
                 </button>
             </t>
-            <button class="btn btn-secondary" t-on-click="props.close">Cancel</button>
+            <button class="btn btn-secondary" t-on-click="this.props.close">Cancel</button>
         </t>
     </Dialog>
 </t>

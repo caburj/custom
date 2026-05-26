@@ -2,21 +2,21 @@
 <templates xml:space="preserve">
 
 <t t-name="ai_debug.TextPopupDialog">
-    <Dialog title="props.title" size="'xl'">
+    <Dialog title="this.props.title" size="'xl'">
         <div class="ai-popup-toolbar">
             <button class="btn btn-sm"
-                    t-attf-class="ai-popup-toolbar-btn {{ state.wrap ? 'active' : '' }}"
-                    t-on-click="toggleWrap"
+                    t-attf-class="ai-popup-toolbar-btn {{ this.state.wrap ? 'active' : '' }}"
+                    t-on-click="this.toggleWrap"
                     title="Toggle text wrapping">
                 <i class="fa fa-align-left"/> Wrap
             </button>
-            <CopyButton content="props.content"
+            <CopyButton content="this.props.content"
                         className="'btn-sm ai-popup-toolbar-btn'"
                         copyText="'Copy'"
                         successText="'Copied!'"
                         icon="'fa-clone'"/>
         </div>
-        <pre t-attf-class="ai-popup-content {{ state.wrap ? '' : 'ai-popup-nowrap' }}"><code t-ref="codeEl" t-attf-class="language-{{props.language or 'json'}}"/></pre>
+        <pre t-attf-class="ai-popup-content {{ this.state.wrap ? '' : 'ai-popup-nowrap' }}"><code t-custom-ref="codeEl" t-attf-class="language-{{this.props.language or 'json'}}"/></pre>
     </Dialog>
 </t>
 

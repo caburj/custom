@@ -2,9 +2,9 @@
 <templates xml:space="preserve">
 
 <t t-name="ai_debug.ImagePopupDialog">
-    <Dialog title="props.title" size="'xl'">
+    <Dialog title="this.props.title" size="'xl'">
         <div class="ai-image-popup-content">
-            <img t-att-src="props.src" class="ai-image-popup-img"/>
+            <img t-att-src="this.props.src" class="ai-image-popup-img"/>
         </div>
     </Dialog>
 </t>

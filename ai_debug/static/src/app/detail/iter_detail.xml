@@ -2,35 +2,35 @@
 <templates xml:space="preserve">
 
 <t t-name="ai_debug.IterationDetail">
-    <div t-if="props.iteration" class="ai-detail-view">
+    <div t-if="this.props.iteration" class="ai-detail-view">
         <div class="ai-detail-header">
             <span class="ai-detail-type-badge">Iteration</span>
-            <span class="ai-detail-name">Iteration <t t-esc="props.iteration.iteration_index"/></span>
-            <span t-if="props.iteration.is_final" class="ai-detail-meta">Final</span>
-            <span t-if="props.iteration.has_error" class="ai-detail-meta error">Error</span>
-            <span t-if="props.iteration.duration_ms"
+            <span class="ai-detail-name">Iteration <t t-out="this.props.iteration.iteration_index"/></span>
+            <span t-if="this.props.iteration.is_final" class="ai-detail-meta">Final</span>
+            <span t-if="this.props.iteration.has_error" class="ai-detail-meta error">Error</span>
+            <span t-if="this.props.iteration.duration_ms"
                   class="ai-metric-chip">
-                <t t-esc="this.formatDuration(props.iteration.duration_ms)"/>
+                <t t-out="this.formatDuration(this.props.iteration.duration_ms)"/>
             </span>
-            <span t-if="props.iteration.tokens and props.iteration.tokens.total > 0"
+            <span t-if="this.props.iteration.tokens and this.props.iteration.tokens.total > 0"
                   class="ai-metric-chip">
-                <t t-esc="this.formatTokens(props.iteration.tokens.total)"/> tok
+                <t t-out="this.formatTokens(this.props.iteration.tokens.total)"/> tok
             </span>
         </div>
 
         <!-- Error banner if iteration has error -->
-        <div t-if="props.iteration.error" class="alert alert-danger mb-0 rounded-0 border-start-0 border-end-0 py-2 px-3">
-            <strong>Error:</strong> <t t-esc="props.iteration.error"/>
+        <div t-if="this.props.iteration.error" class="alert alert-danger mb-0 rounded-0 border-start-0 border-end-0 py-2 px-3">
+            <strong>Error:</strong> <t t-out="this.props.iteration.error"/>
         </div>
 
         <Notebook>
             <t t-set-slot="messages" title="'Messages Sent'" isVisible="true">
                 <div class="ai-detail-section">
                     <div class="ai-detail-section-header">
-                        <span>Messages Sent (<t t-esc="(props.iteration.messages_sent || []).length"/> messages)</span>
+                        <span>Messages Sent (<t t-out="(this.props.iteration.messages_sent || []).length"/> messages)</span>
                         <CopyButton content="() => this.messagesJson" successText="'Copied!'"/>
                     </div>
-                    <JsonTree data="props.iteration.messages_sent"
+                    <JsonTree data="this.props.iteration.messages_sent"
                               onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"
                               onExpandImage="(title, src) => this.openImagePopup(title, src)"/>
                 </div>
@@ -42,7 +42,7 @@
                         <span>HTTP Request Body</span>
                         <CopyButton content="() => this.requestJson" successText="'Copied!'"/>
                     </div>
-                    <JsonTree data="props.iteration.request_body"
+                    <JsonTree data="this.props.iteration.request_body"
                               onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"
                               onExpandImage="(title, src) => this.openImagePopup(title, src)"/>
                 </div>
@@ -54,7 +54,7 @@
                         <span>Raw LLM Response</span>
                         <CopyButton content="() => this.responseJson" successText="'Copied!'"/>
                     </div>
-                    <JsonTree data="props.iteration.raw_response"
+                    <JsonTree data="this.props.iteration.raw_response"
                               onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"
                               onExpandImage="(title, src) => this.openImagePopup(title, src)"/>
                 </div>
@@ -66,7 +66,7 @@
                         <span>Tools Definition</span>
                         <CopyButton content="() => this.toolsJson" successText="'Copied!'"/>
                     </div>
-                    <JsonTree data="props.iteration.tools"
+                    <JsonTree data="this.props.iteration.tools"
                               onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"
                               onExpandImage="(title, src) => this.openImagePopup(title, src)"/>
                 </div>

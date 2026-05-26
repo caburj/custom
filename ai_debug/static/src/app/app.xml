@@ -7,9 +7,9 @@
         <header class="ai-debug-header">
             <div class="ai-debug-header-title">AI Debugger</div>
             <div class="ai-debug-header-status">
-                <span t-attf-class="ai-debug-status-dot {{statusColor}}"/>
-                <span class="ai-debug-status-label" t-esc="statusLabel"/>
-                <span t-if="state.ephemeralMode"
+                <span t-attf-class="ai-debug-status-dot {{this.statusColor}}"/>
+                <span class="ai-debug-status-label" t-out="this.statusLabel"/>
+                <span t-if="this.state.ephemeralMode"
                       class="ai-ephemeral-indicator"
                       title="IndexedDB unavailable — traces won't persist across refreshes">
                     Ephemeral
@@ -21,49 +21,49 @@
         <div class="ai-debug-main">
 
             <!-- Sidebar -->
-            <aside class="ai-debug-sidebar" t-attf-style="width: {{state.sidebarWidth}}px; min-width: {{state.sidebarWidth}}px;">
+            <aside class="ai-debug-sidebar" t-attf-style="width: {{this.state.sidebarWidth}}px; min-width: {{this.state.sidebarWidth}}px;">
 
                 <!-- Traces header bar with select-all + action buttons — stays pinned -->
                 <div class="ai-tree-header">
                     <div class="ai-tree-header-left">
                         <input type="checkbox"
                                class="ai-tree-select-all"
-                               t-ref="selectAll"
-                               t-att-checked="allChecked"
-                               t-on-change.stop="toggleSelectAll"/>
+                               t-custom-ref="selectAll"
+                               t-att-checked="this.allChecked"
+                               t-on-change.stop="this.toggleSelectAll"/>
                         <span>Traces</span>
                     </div>
                     <div class="ai-tree-header-actions">
                         <button class="ai-tree-action-btn ai-tree-nesting-toggle"
-                                t-on-click="toggleNestingMode"
-                                t-att-title="state.nestingMode === 'lines' ? 'Switch to indentation' : 'Switch to guide lines'">
-                            <t t-if="state.nestingMode === 'lines'">&#x2502;</t>
+                                t-on-click="this.toggleNestingMode"
+                                t-att-title="this.state.nestingMode === 'lines' ? 'Switch to indentation' : 'Switch to guide lines'">
+                            <t t-if="this.state.nestingMode === 'lines'">&#x2502;</t>
                             <t t-else="">&#x2261;</t>
                         </button>
                         <button class="ai-tree-action-btn"
-                                t-att-disabled="state.checkedTraceIds.size === 0 or undefined"
-                                t-on-click="exportSelected"
+                                t-att-disabled="this.state.checkedTraceIds.size === 0 or undefined"
+                                t-on-click="this.exportSelected"
                                 title="Export selected">&#x2913;</button>
                         <button class="ai-tree-action-btn"
-                                t-on-click="openImportPicker"
+                                t-on-click="this.openImportPicker"
                                 title="Import traces">&#x2912;</button>
                         <button class="ai-tree-action-btn"
-                                t-att-disabled="state.checkedTraceIds.size === 0 or undefined"
-                                t-on-click="deleteCheckedTraces"
+                                t-att-disabled="this.state.checkedTraceIds.size === 0 or undefined"
+                                t-on-click="this.deleteCheckedTraces"
                                 title="Delete selected">&#x1F5D1;</button>
                     </div>
                 </div>
 
-                <!-- Scrollable tree content area — t-ref here so scrollIntoView targets the right container -->
-                <div t-attf-class="ai-tree-content {{ state.nestingMode === 'indent' ? 'ai-indent-mode' : '' }}" t-ref="sidebar">
+                <!-- Scrollable tree content area — t-custom-ref here so scrollIntoView targets the right container -->
+                <div t-attf-class="ai-tree-content {{ this.state.nestingMode === 'indent' ? 'ai-indent-mode' : '' }}" t-custom-ref="sidebar">
 
                 <!-- Depth staircase line — SVG overlay, scrolls with content -->
-                <svg t-if="sidebarNodes.length > 0 and state.nestingMode === 'lines'"
+                <svg t-if="this.sidebarNodes.length > 0 and this.state.nestingMode === 'lines'"
                      class="ai-depth-line-svg"
-                     t-att-height="depthLineTotalHeight"
+                     t-att-height="this.depthLineTotalHeight"
                      width="50"
                      aria-hidden="true">
-                    <t t-foreach="depthLinePaths" t-as="seg" t-key="seg_index">
+                    <t t-foreach="this.depthLinePaths" t-as="seg" t-key="seg_index">
                         <path t-att-d="seg.d"
                               t-att-stroke="seg.color"
                               stroke-width="2.5"
@@ -73,26 +73,26 @@
                 </svg>
 
                 <!-- Empty state — only when no traces -->
-                <div t-if="traces.size === 0" class="ai-debug-sidebar-empty">
+                <div t-if="this.traces.size === 0" class="ai-debug-sidebar-empty">
                     <span class="ai-debug-pulse-dot"/>
                     <span>No traces yet</span>
                 </div>
 
                 <!-- Tree entries — flat list from sidebarNodes computed getter -->
-                <t t-foreach="sidebarNodes" t-as="node" t-key="node.id">
+                <t t-foreach="this.sidebarNodes" t-as="node" t-key="node.id">
 
                     <!-- Trace row (two-line format: query title + agent/model meta) -->
                     <t t-if="node.type === 'trace'">
                         <div t-attf-class="ai-tree-row ai-tree-trace-row ai-depth-{{ node.depth > 4 ? 4 : node.depth }}"
                              t-att-class="{
-                                 'selected': state.selectedId === node.id,
-                                 'ancestor': selectedTraceId === node.id and state.selectedId !== node.id,
+                                 'selected': this.state.selectedId === node.id,
+                                 'ancestor': this.selectedTraceId === node.id and this.state.selectedId !== node.id,
                              }"
                              t-att-data-node-id="node.id">
                             <input t-if="node.depth === 0"
                                    type="checkbox"
                                    class="ai-tree-row-check"
-                                   t-att-checked="state.checkedTraceIds.has(node.id)"
+                                   t-att-checked="this.state.checkedTraceIds.has(node.id)"
                                    t-on-change.stop="() => this.toggleTraceCheck(node.id)"/>
                             <span t-else="" class="ai-tree-row-check-spacer"/>
                             <span class="ai-tree-chevron"
@@ -104,21 +104,21 @@
                                     <span class="ai-tree-query-title"
                                           t-att-title="node.trace.user_query"
                                           t-on-click="(ev) => this.showFullQuery(ev, node.trace.user_query)"
-                                          t-esc="node.trace.user_query"/>
+                                          t-out="node.trace.user_query"/>
                                 </t>
                                 <t t-else="">
-                                    <t t-esc="node.trace.agent_name or 'Unknown Agent'"/>
+                                    <t t-out="node.trace.agent_name or 'Unknown Agent'"/>
                                 </t>
                                 <t t-set="totals" t-value="this.getTraceTotals(node.trace)"/>
                                 <span class="ai-tree-meta-line">
-                                    <t t-esc="node.trace.agent_name or 'Agent'"/> &#xB7; <t t-esc="node.trace.model_name or ''"/>
+                                    <t t-out="node.trace.agent_name or 'Agent'"/> &#xB7; <t t-out="node.trace.model_name or ''"/>
                                     <t t-if="totals.total_duration_ms > 0 or totals.total_tokens > 0">
-                                        &#xB7; <t t-esc="this.formatDuration(totals.total_duration_ms)"/>
+                                        &#xB7; <t t-out="this.formatDuration(totals.total_duration_ms)"/>
                                         <t t-if="totals.total_input > 0 and totals.total_output > 0">
-                                            &#xB7; <t t-esc="this.formatTokens(totals.total_input)"/>&#x2191; <t t-esc="this.formatTokens(totals.total_output)"/>&#x2193;
+                                            &#xB7; <t t-out="this.formatTokens(totals.total_input)"/>&#x2191; <t t-out="this.formatTokens(totals.total_output)"/>&#x2193;
                                         </t>
                                         <t t-elif="totals.total_tokens > 0">
-                                            &#xB7; <t t-esc="this.formatTokens(totals.total_tokens)"/> tok
+                                            &#xB7; <t t-out="this.formatTokens(totals.total_tokens)"/> tok
                                         </t>
                                     </t>
                                 </span>
@@ -135,8 +135,8 @@
                     <t t-elif="node.type === 'iter'">
                         <div t-attf-class="ai-tree-row ai-tree-iter-row ai-depth-{{ node.depth > 4 ? 4 : node.depth }}"
                              t-att-class="{
-                                 'selected': state.selectedId === node.id,
-                                 'ancestor': selectedIterationId === node.id and state.selectedId !== node.id,
+                                 'selected': this.state.selectedId === node.id,
+                                 'ancestor': this.selectedIterationId === node.id and this.state.selectedId !== node.id,
                              }"
                              t-att-data-node-id="node.id">
                             <span class="ai-tree-row-check-spacer"/>
@@ -147,18 +147,18 @@
                             <span t-else="" class="ai-tree-chevron-placeholder"/>
                             <span class="ai-tree-label"
                                   t-on-click="() => this.selectItem(node.id, 'iteration')">
-                                Iteration <t t-esc="node.iter.iteration_index"/>
+                                Iteration <t t-out="node.iter.iteration_index"/>
                                 <span class="ai-tree-label-dim">
-                                    &#xB7; <t t-esc="node.iter.toolCalls.size"/> call<t t-if="node.iter.toolCalls.size !== 1">s</t>
+                                    &#xB7; <t t-out="node.iter.toolCalls.size"/> call<t t-if="node.iter.toolCalls.size !== 1">s</t>
                                 </span>
                                 <t t-if="node.iter.duration_ms > 0">
-                                    <span class="ai-tree-label-dim"> &#xB7; <t t-esc="this.formatDuration(node.iter.duration_ms)"/></span>
+                                    <span class="ai-tree-label-dim"> &#xB7; <t t-out="this.formatDuration(node.iter.duration_ms)"/></span>
                                 </t>
                                 <t t-elif="node.trace.status === 'running' and node.id === [...node.trace.iterations.keys()].pop()">
                                     <span class="ai-tree-label-dim"> &#xB7; <span class="ai-debug-pulse-dot tiny"/></span>
                                 </t>
                                 <t t-if="node.iter.tokens and (node.iter.tokens.input > 0 or node.iter.tokens.output > 0)">
-                                    <span class="ai-tree-label-dim"> &#xB7; <t t-esc="this.formatTokens(node.iter.tokens.input)"/>&#x2191; <t t-esc="this.formatTokens(node.iter.tokens.output)"/>&#x2193;</span>
+                                    <span class="ai-tree-label-dim"> &#xB7; <t t-out="this.formatTokens(node.iter.tokens.input)"/>&#x2191; <t t-out="this.formatTokens(node.iter.tokens.output)"/>&#x2193;</span>
                                 </t>
                                 <t t-if="node.iter.has_error"><span class="ai-tree-label-error"> &#xB7; error</span></t>
                             </span>
@@ -169,7 +169,7 @@
                     <t t-elif="node.type === 'tc'">
                         <div t-attf-class="ai-tree-row ai-tree-tc-row ai-depth-{{ node.depth > 4 ? 4 : node.depth }}"
                              t-att-class="{
-                                 'selected': state.selectedId === node.id,
+                                 'selected': this.state.selectedId === node.id,
                              }"
                              t-att-data-node-id="node.id">
                             <span class="ai-tree-row-check-spacer"/>
@@ -180,7 +180,7 @@
                             <span t-else="" class="ai-tree-chevron-placeholder"/>
                             <span class="ai-tree-label"
                                   t-on-click="() => this.selectItem(node.id, 'tool_call')">
-                                <t t-esc="node.tc.tool_name"/>
+                                <t t-out="node.tc.tool_name"/>
                             </span>
                             <span t-if="node.tc.status === 'running'" class="ai-debug-pulse-dot tiny"/>
                             <span t-elif="node.tc.success" class="ai-tree-status success">&#x2714;</span>
@@ -195,12 +195,12 @@
             </aside>
 
             <div class="ai-debug-resize-handle"
-                 t-on-pointerdown="onResizeStart"/>
+                 t-on-pointerdown="this.onResizeStart"/>
 
             <!-- Detail panel -->
             <main class="ai-debug-detail">
                 <!-- Empty state: no traces at all (SESS-03) -->
-                <div t-if="traces.size === 0" class="ai-debug-detail-empty">
+                <div t-if="this.traces.size === 0" class="ai-debug-detail-empty">
                     <span class="ai-debug-pulse-dot large"/>
                     <p>Listening for agentic loops...</p>
                     <p class="ai-debug-detail-hint">
@@ -208,17 +208,17 @@
                     </p>
                 </div>
                 <!-- Loop detail -->
-                <LoopDetail t-elif="state.selectedType === 'trace'"
-                            t-key="state.selectedId"
-                            trace="getSelectedTrace()"/>
+                <LoopDetail t-elif="this.state.selectedType === 'trace'"
+                            t-key="this.state.selectedId"
+                            trace="this.getSelectedTrace()"/>
                 <!-- Iteration detail -->
-                <IterationDetail t-elif="state.selectedType === 'iteration'"
-                                 t-key="state.selectedId"
-                                 iteration="getSelectedIteration()"/>
+                <IterationDetail t-elif="this.state.selectedType === 'iteration'"
+                                 t-key="this.state.selectedId"
+                                 iteration="this.getSelectedIteration()"/>
                 <!-- Tool call detail -->
-                <ToolCallDetail t-elif="state.selectedType === 'tool_call'"
-                                t-key="state.selectedId"
-                                toolCall="getSelectedToolCall()"/>
+                <ToolCallDetail t-elif="this.state.selectedType === 'tool_call'"
+                                t-key="this.state.selectedId"
+                                toolCall="this.getSelectedToolCall()"/>
                 <!-- Fallback: traces exist but nothing selected (safety net; normally unreachable due to auto-select) -->
                 <div t-else="" class="ai-debug-detail-empty">
                     <p>Select a trace, iteration, or tool call to inspect it.</p>
@@ -230,8 +230,8 @@
         <input type="file"
                accept=".json"
                class="d-none"
-               t-ref="fileInput"
-               t-on-change="onFileSelected"/>
+               t-custom-ref="fileInput"
+               t-on-change="this.onFileSelected"/>
     </div>
 </t>
 

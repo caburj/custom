@@ -2,17 +2,17 @@
 <templates xml:space="preserve">
 
 <t t-name="ai_debug.LoopDetail">
-    <div t-if="props.trace" class="ai-detail-view">
+    <div t-if="this.props.trace" class="ai-detail-view">
         <!-- Header -->
         <div class="ai-detail-header">
             <span class="ai-detail-type-badge">Loop</span>
-            <span class="ai-detail-name" t-esc="props.trace.agent_name"/>
-            <span class="ai-detail-meta" t-esc="props.trace.model_name"/>
-            <span t-if="props.trace.status === 'running'"
+            <span class="ai-detail-name" t-out="this.props.trace.agent_name"/>
+            <span class="ai-detail-meta" t-out="this.props.trace.model_name"/>
+            <span t-if="this.props.trace.status === 'running'"
                   class="ai-metric-chip ai-metric-chip--live">running</span>
-            <span t-elif="props.trace.duration_ms"
+            <span t-elif="this.props.trace.duration_ms"
                   class="ai-metric-chip">
-                <t t-esc="this.formatDuration(props.trace.duration_ms)"/>
+                <t t-out="this.formatDuration(this.props.trace.duration_ms)"/>
             </span>
         </div>
 
@@ -26,8 +26,8 @@
                     </div>
                     <!-- Truncated text preview; click opens popup -->
                     <div class="ai-detail-text-preview"
-                         t-on-click="() => this.openTextPopup('System Prompt', props.trace.instructions, 'markdown')"
-                         t-esc="props.trace.instructions"/>
+                         t-on-click="() => this.openTextPopup('System Prompt', this.props.trace.instructions, 'markdown')"
+                         t-out="this.props.trace.instructions"/>
                 </div>
             </t>
 
@@ -36,22 +36,22 @@
                     <div class="ai-detail-section-header">
                         <span>RAG Context</span>
                     </div>
-                    <div t-if="!ragContextMessages" class="ai-detail-empty-tab">
+                    <div t-if="!this.ragContextMessages" class="ai-detail-empty-tab">
                         Waiting for first iteration to capture RAG context...
                     </div>
-                    <div t-elif="ragContextMessages.length === 0" class="ai-detail-empty-tab">
+                    <div t-elif="this.ragContextMessages.length === 0" class="ai-detail-empty-tab">
                         No RAG context detected in this trace.
                     </div>
                     <t t-else="">
-                        <t t-foreach="ragContextMessages" t-as="msg" t-key="msg_index">
+                        <t t-foreach="this.ragContextMessages" t-as="msg" t-key="msg_index">
                             <div class="ai-detail-section">
                                 <div class="ai-detail-section-header">
-                                    <span t-esc="'System Message ' + (msg_index + 1)"/>
+                                    <span t-out="'System Message ' + (msg_index + 1)"/>
                                     <CopyButton content="() => msg._text" successText="'Copied!'"/>
                                 </div>
                                 <div class="ai-detail-text-preview"
                                      t-on-click="() => this.openTextPopup('RAG Context', msg._text, 'markdown')"
-                                     t-esc="msg._text"/>
+                                     t-out="msg._text"/>
                             </div>
                         </t>
                     </t>
@@ -74,23 +74,23 @@
                         <tbody>
                             <t t-foreach="this.iterationRows" t-as="row" t-key="row.index">
                                 <tr>
-                                    <td t-esc="row.index"/>
-                                    <td t-esc="row.duration_ms > 0 ? this.formatDuration(row.duration_ms) : '\u2013'"/>
-                                    <td t-esc="row.tokens.input > 0 ? this.formatTokens(row.tokens.input) : '\u2013'"/>
-                                    <td t-esc="row.tokens.output > 0 ? this.formatTokens(row.tokens.output) : '\u2013'"/>
-                                    <td t-esc="row.tokens.cache_read > 0 ? this.formatTokens(row.tokens.cache_read) : '\u2013'"/>
-                                    <td t-esc="row.tokens.reasoning > 0 ? this.formatTokens(row.tokens.reasoning) : '\u2013'"/>
+                                    <td t-out="row.index"/>
+                                    <td t-out="row.duration_ms > 0 ? this.formatDuration(row.duration_ms) : '–'"/>
+                                    <td t-out="row.tokens.input > 0 ? this.formatTokens(row.tokens.input) : '–'"/>
+                                    <td t-out="row.tokens.output > 0 ? this.formatTokens(row.tokens.output) : '–'"/>
+                                    <td t-out="row.tokens.cache_read > 0 ? this.formatTokens(row.tokens.cache_read) : '–'"/>
+                                    <td t-out="row.tokens.reasoning > 0 ? this.formatTokens(row.tokens.reasoning) : '–'"/>
                                 </tr>
                             </t>
                         </tbody>
                         <tfoot>
                             <tr class="ai-metrics-totals-row">
                                 <td><strong>Total</strong></td>
-                                <td><strong t-esc="this.traceTotals.total_duration_ms > 0 ? this.formatDuration(this.traceTotals.total_duration_ms) : '\u2013'"/></td>
-                                <td><strong t-esc="this.traceTotals.total_input > 0 ? this.formatTokens(this.traceTotals.total_input) : '\u2013'"/></td>
-                                <td><strong t-esc="this.traceTotals.total_output > 0 ? this.formatTokens(this.traceTotals.total_output) : '\u2013'"/></td>
-                                <td><strong t-esc="this.traceTotals.total_cached > 0 ? this.formatTokens(this.traceTotals.total_cached) : '\u2013'"/></td>
-                                <td><strong t-esc="this.traceTotals.total_reasoning > 0 ? this.formatTokens(this.traceTotals.total_reasoning) : '\u2013'"/></td>
+                                <td><strong t-out="this.traceTotals.total_duration_ms > 0 ? this.formatDuration(this.traceTotals.total_duration_ms) : '–'"/></td>
+                                <td><strong t-out="this.traceTotals.total_input > 0 ? this.formatTokens(this.traceTotals.total_input) : '–'"/></td>
+                                <td><strong t-out="this.traceTotals.total_output > 0 ? this.formatTokens(this.traceTotals.total_output) : '–'"/></td>
+                                <td><strong t-out="this.traceTotals.total_cached > 0 ? this.formatTokens(this.traceTotals.total_cached) : '–'"/></td>
+                                <td><strong t-out="this.traceTotals.total_reasoning > 0 ? this.formatTokens(this.traceTotals.total_reasoning) : '–'"/></td>
                             </tr>
                         </tfoot>
                     </table>
