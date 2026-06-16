@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, onWillUpdateProps, useRef, useState } from "@odoo/owl";
+import { Component, onWillUpdateProps, useRef, proxy } from "@odoo/owl";
 import { CopyButton } from "@web/core/copy_button/copy_button";
 
 const TRUNCATION_THRESHOLD = 300;
@@ -21,7 +21,7 @@ export class JsonTree extends Component {
     setup() {
         this.imageOverlayRef = useRef("imageOverlay");
         const forceActive = typeof this.props.forceCollapsed === "boolean";
-        this.state = useState({
+        this.state = proxy({
             expanded: forceActive ? !this.props.forceCollapsed : this.props.depth < 1,
             childForceCollapsed: forceActive ? this.props.forceCollapsed : undefined,
             childForceVersion: forceActive ? 1 : 0,

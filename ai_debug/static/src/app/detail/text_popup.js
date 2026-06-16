@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, onMounted, useRef, useState } from "@odoo/owl";
+import { Component, onMounted, useRef, proxy } from "@odoo/owl";
 import { Dialog } from "@web/core/dialog/dialog";
 import { CopyButton } from "@web/core/copy_button/copy_button";
 
@@ -15,7 +15,7 @@ export class TextPopupDialog extends Component {
 
     setup() {
         this.codeRef = useRef("codeEl");
-        this.state = useState({ wrap: true });
+        this.state = proxy({ wrap: true });
         onMounted(() => {
             const el = this.codeRef.el;
             if (!el) return;

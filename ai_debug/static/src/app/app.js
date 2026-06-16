@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, useState, reactive, onMounted, onWillStart, onWillUnmount, onPatched, useRef } from "@odoo/owl";
+import { Component, proxy, onMounted, onWillStart, onWillUnmount, onPatched, useRef } from "@odoo/owl";
 import { useService } from "@web/core/utils/hooks";
 import { MainComponentsContainer } from "@web/core/main_components_container";
 import { LoopDetail } from "./detail/loop_detail";
@@ -49,9 +49,9 @@ function normalizeTokens(t) {
  * template to display the "archived" badge.
  */
 function hydrateTrace(plain) {
-    const iterations = reactive(new Map());
+    const iterations = proxy(new Map());
     for (const [iterId, iter] of plain.iterations ?? []) {
-        const toolCalls = reactive(new Map());
+        const toolCalls = proxy(new Map());
         for (const [tcId, tc] of iter.toolCalls ?? []) {
             toolCalls.set(tcId, { ...tc, expanded: tc.expanded !== false });
         }
@@ -87,14 +87,14 @@ export class AiDebugApp extends Component {
     setup() {
         this.busService = useService("bus_service");
 
-        // Trace data store — useState wraps the Map so OWL's render function
+        // Trace data store — proxy() wraps the Map so OWL's render function
         // observes mutations (.set/.delete/.clear) and triggers re-renders.
         // Nested reactive Maps (iterations, toolCalls) inherit the render
         // callback when accessed through this proxy chain.
-        this.traces = useState(new Map());
+        this.traces = proxy(new Map());
 
         // Selection state — completely separate from trace data (SIDE-05)
-        this.state = useState({
+        this.state = proxy({
             selectedId: null,
             selectedType: null,   // 'trace' | 'iteration' | 'tool_call'
             ephemeralMode: false, // true when IDB is unavailable (private browsing or write failure)
@@ -183,7 +183,7 @@ export class AiDebugApp extends Component {
             if (!trace) return;
             // Only create if not already present (avoid blowing away existing toolCalls)
             if (!trace.iterations.has(payload.iteration_id)) {
-                const toolCalls = reactive(new Map());
+                const toolCalls = proxy(new Map());
                 trace.iterations.set(payload.iteration_id, {
                     iteration_id: payload.iteration_id,
                     trace_id: payload.trace_id,
@@ -413,7 +413,7 @@ export class AiDebugApp extends Component {
     // ----------------------------------------------------------------
 
     _placeTrace(payload) {
-        const iterations = reactive(new Map());
+        const iterations = proxy(new Map());
         this.traces.set(payload.trace_id, {
             trace_id: payload.trace_id,
             agent_name: payload.agent_name || "Unknown Agent",
