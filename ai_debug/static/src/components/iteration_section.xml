@@ -1,0 +1,140 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.IterationSection">
+    <section t-attf-class="iteration-section {{ this.props.iteration.is_running ? 'is-running' : '' }}">
+        <div t-attf-class="iteration-header {{ this.isRefused ? 'refused' : '' }}"
+             t-on-click="this.toggleExpanded">
+            <button t-attf-class="icon-btn {{ !this.state.expanded ? 'collapsed' : '' }}">
+                <i class="fa fa-chevron-right" aria-hidden="true"/>
+            </button>
+            <span class="iteration-number">#<t t-out="this.props.iteration.sequence"/></span>
+            <t t-if="this.props.iteration.is_running">
+                <span class="iteration-summary iteration-summary--running">
+                    <i class="fa fa-spinner spin" aria-hidden="true"/>
+                    Waiting for LLM response
+                </span>
+            </t>
+            <t t-else="">
+                <span class="iteration-summary" t-out="this.summary"/>
+                <div class="iteration-meta">
+                    <span t-if="this.props.iteration.tool_call_ids.length">
+                        <i class="fa fa-wrench" aria-hidden="true" style="font-size: .75em; margin-right: .15rem;"/>
+                        <t t-out="this.props.iteration.tool_call_ids.length"/>
+                    </span>
+                    <span>
+                        <t t-out="this.formatTokens(this.props.iteration.tokens_in)"/>
+                        <span t-if="this.props.iteration.tokens_cached"
+                              style="opacity: 0.55;"
+                              t-att-title="this.props.iteration.tokens_cached + ' cached input tokens'">
+                            (<t t-out="this.formatTokens(this.props.iteration.tokens_cached)"/> cached)
+                        </span>
+                        <span style="opacity: 0.4;">/</span>
+                        <t t-out="this.formatTokens(this.props.iteration.tokens_out)"/>
+                    </span>
+                    <span><t t-out="this.formatDuration(this.props.iteration.duration_ms)"/></span>
+                    <StatusBadge t-if="this.isFinal" status="'success'" label="'final'"/>
+                </div>
+            </t>
+        </div>
+
+        <div class="iteration-body" t-if="this.state.expanded">
+            <!-- Tab bar -->
+            <div class="iter-tabs">
+                <button t-attf-class="iter-tab {{ this.state.activeTab === 'tools' ? 'active' : '' }}"
+                        t-on-click.stop="() => this.setTab('tools')">
+                    Tool Calls
+                    <span class="iter-tab-count" t-if="this.props.iteration.tool_call_ids.length">
+                        <t t-out="this.props.iteration.tool_call_ids.length"/>
+                    </span>
+                </button>
+                <button t-attf-class="iter-tab {{ this.state.activeTab === 'available' ? 'active' : '' }}"
+                        t-on-click.stop="() => this.setTab('available')">
+                    Available Tools
+                    <span class="iter-tab-count" t-if="this.props.iteration.available_tool_ids.length">
+                        <t t-out="this.props.iteration.available_tool_ids.length"/>
+                    </span>
+                </button>
+                <button t-attf-class="iter-tab {{ this.state.activeTab === 'system' ? 'active' : '' }}"
+                        t-on-click.stop="() => this.setTab('system')">
+                    System Prompt
+                </button>
+                <button t-attf-class="iter-tab {{ this.state.activeTab === 'messages' ? 'active' : '' }}"
+                        t-on-click.stop="() => this.setTab('messages')">
+                    Messages Sent
+                </button>
+                <button t-attf-class="iter-tab {{ this.state.activeTab === 'request' ? 'active' : '' }}"
+                        t-on-click.stop="() => this.setTab('request')">
+                    Raw Request
+                </button>
+                <button t-attf-class="iter-tab {{ this.state.activeTab === 'response' ? 'active' : '' }}"
+                        t-on-click.stop="() => this.setTab('response')">
+                    Raw Response
+                </button>
+            </div>
+
+            <!-- Tab: Tool Calls -->
+            <div class="iter-tab-content" t-if="this.state.activeTab === 'tools'">
+                <t t-if="this.props.iteration.output_message">
+                    <div style="margin-bottom: .75rem;">
+                        <div class="tool-call-section-label">Assistant Response</div>
+                        <TextBlock text="this.props.iteration.output_message"
+                                       dialogTitle="'Assistant Response'"/>
+                    </div>
+                </t>
+
+                <t t-if="this.props.iteration.tool_call_ids.length">
+                    <t t-foreach="this.props.iteration.tool_call_ids" t-as="tc" t-key="tc.id">
+                        <ToolCallCard toolCall="tc"/>
+                    </t>
+                </t>
+                <t t-else="">
+                    <div class="text-muted" style="padding: .5rem 0;">No tool calls in this iteration</div>
+                </t>
+            </div>
+
+            <!-- Tab: Available Tools -->
+            <div class="iter-tab-content" t-if="this.state.activeTab === 'available'">
+                <t t-if="this.props.iteration.available_tool_ids.length">
+                    <t t-foreach="this.props.iteration.available_tool_ids" t-as="entry" t-key="entry.id">
+                        <AvailableToolCard entry="entry"/>
+                    </t>
+                </t>
+                <t t-else="">
+                    <div class="text-muted" style="padding: .5rem 0;">No tools provided</div>
+                </t>
+            </div>
+
+            <!-- Tab: System Prompt -->
+            <div class="iter-tab-content" t-if="this.state.activeTab === 'system'">
+                <t t-if="this.props.iteration.instructions">
+                    <TextBlock text="this.props.iteration.instructions"
+                                   dialogTitle="'System Prompt'"/>
+                </t>
+                <t t-else="">
+                    <div class="text-muted" style="padding: .5rem 0;">No system prompt captured</div>
+                </t>
+            </div>
+
+            <!-- Tab: Messages Sent -->
+            <div class="iter-tab-content" t-if="this.state.activeTab === 'messages'">
+                <JsonViewer data="this.messagesSent"/>
+            </div>
+
+            <!-- Tab: Raw Request -->
+            <div class="iter-tab-content" t-if="this.state.activeTab === 'request'">
+                <t t-if="this.props.iteration.raw_request">
+                    <JsonViewer data="this.props.iteration.raw_request"/>
+                </t>
+                <t t-else="">
+                    <div class="text-muted" style="padding: .5rem 0;">No request payload captured</div>
+                </t>
+            </div>
+
+            <!-- Tab: Raw Response -->
+            <div class="iter-tab-content" t-if="this.state.activeTab === 'response'">
+                <JsonViewer data="this.props.iteration.raw_response"/>
+            </div>
+        </div>
+    </section>
+</t>
+</templates>

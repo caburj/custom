@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.LoopDetailStrip">
+    <div class="loop-detail-strip" t-ref="this.rootRef">
+        <!-- Header: agent label + metrics (clickable to toggle) -->
+        <div t-attf-class="loop-strip-header {{ this.state.expanded ? 'expanded' : '' }}"
+             t-on-click="this.toggle">
+            <button t-attf-class="icon-btn {{ !this.state.expanded ? 'collapsed' : '' }}">
+                <i class="fa fa-chevron-right" aria-hidden="true"/>
+            </button>
+            <span class="loop-strip-agent">
+                <i class="fa fa-android" aria-hidden="true"/>
+                <t t-out="this.props.agentName or 'Agent'"/>
+                <span t-if="this.props.modelName" class="mono loop-strip-model">
+                    · <t t-out="this.props.modelName"/>
+                </span>
+            </span>
+            <div class="loop-strip-metrics">
+                <span class="metric">
+                    <span class="metric-value"><t t-out="this.iterationCount"/></span>
+                    iter.
+                </span>
+                <span class="metric">
+                    <span class="metric-value"><t t-out="this.toolCallCount"/></span>
+                    tools
+                </span>
+                <span class="metric">
+                    <span class="metric-value">
+                        <t t-out="this.formatTokens(this.props.loop.tokens_in)"/>
+                        <span t-if="this.props.loop.tokens_cached"
+                              style="opacity: 0.55;"
+                              t-att-title="this.props.loop.tokens_cached + ' cached input tokens'">
+                            (<t t-out="this.formatTokens(this.props.loop.tokens_cached)"/> cached)
+                        </span>
+                        <span style="opacity: 0.4;">/</span>
+                        <t t-out="this.formatTokens(this.props.loop.tokens_out)"/>
+                    </span>
+                </span>
+                <span class="metric">
+                    <span class="metric-value"><t t-out="this.formatDuration(this.props.loop.duration_ms)"/></span>
+                </span>
+            </div>
+            <StatusBadge status="this.props.loop.termination_reason" isRunning="this.props.loop.is_running"/>
+        </div>
+
+        <!-- Expanded body -->
+        <div class="loop-strip-body" t-if="this.state.expanded">
+            <!-- Error banner -->
+            <ErrorBanner t-if="this.props.loop.error_message" message="this.props.loop.error_message"/>
+
+            <!-- Iterations -->
+            <t t-foreach="this.props.loop.iteration_ids" t-as="iteration" t-key="iteration.id">
+                <IterationSection iteration="iteration" total="this.iterationCount" isLoopRunning="this.props.loop.is_running"/>
+            </t>
+        </div>
+    </div>
+</t>
+</templates>

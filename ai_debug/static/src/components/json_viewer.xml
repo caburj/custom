@@ -1,0 +1,81 @@
+<?xml version="1.0"?>
+<templates>
+
+<t t-name="ai_debug.JsonTree">
+    <div t-att-class="'ai-json-node' + (this.props.depth > 0 ? ' ai-json-nested' : '')">
+
+        <!-- Expandable node (object or array) -->
+        <t t-if="this.isExpandable">
+            <div class="ai-json-row ai-json-row-expandable">
+                <span class="ai-json-toggle" t-on-click="this.toggle">
+                    <t t-if="this.state.expanded">&#x2212;</t>
+                    <t t-else="">+</t>
+                </span>
+                <t t-if="this.props.label">
+                    <span class="ai-json-key" t-out="this.props.label"/>
+                </t>
+                <span class="ai-json-preview ai-json-value" t-out="this.collapsedPreview"/>
+                <CopyButton content="() => this.subtreeJson"
+                            className="'ai-json-copy-btn'"
+                            successText="'Copied!'"/>
+            </div>
+            <t t-if="this.state.expanded">
+                <t t-foreach="this.entries" t-as="entry" t-key="entry[0]">
+                    <JsonTree data="entry[1]"
+                              label="entry[0]"
+                              depth="this.props.depth + 1"
+                              forceCollapsed="this.state.childForceCollapsed"
+                              forceVersion="this.state.childForceVersion"
+                              expandDepth="this.state.childExpandDepth"/>
+                </t>
+            </t>
+        </t>
+
+        <!-- Leaf node (string, number, boolean, null) -->
+        <t t-else="">
+            <div class="ai-json-row">
+                <span class="ai-json-toggle-placeholder"/>
+                <t t-if="this.props.label">
+                    <span class="ai-json-key" t-out="this.props.label"/>
+                </t>
+                <t t-if="this.isImageValue">
+                    <span class="ai-json-image-leaf">
+                        <span class="ai-json-string ai-json-value">"[image]"</span>
+                        <div class="ai-json-image-overlay">
+                            <img t-att-src="this.imageSrc" class="ai-json-image-thumb"/>
+                        </div>
+                    </span>
+                </t>
+                <t t-elif="this.type === 'string'">
+                    <span t-ref="this.stringRef"
+                          t-att-class="'ai-json-string ai-json-value' + (this.isStringTruncated ? ' ai-json-truncated' : '')"
+                          t-att-title="this.isStringTruncated ? 'Click to view full text' : ''"
+                          t-on-click.stop="this.onClickStringValue"
+                          t-out="this.displayValue"/>
+                </t>
+                <t t-elif="this.type === 'number'">
+                    <span class="ai-json-number ai-json-value" t-out="this.displayValue"/>
+                </t>
+                <t t-elif="this.type === 'boolean'">
+                    <span class="ai-json-boolean ai-json-value" t-out="this.displayValue"/>
+                </t>
+                <t t-else="">
+                    <span class="ai-json-null ai-json-value" t-out="this.displayValue"/>
+                </t>
+            </div>
+        </t>
+
+    </div>
+</t>
+
+<t t-name="ai_debug.JsonViewer">
+    <div t-if="this.parsed.type === 'json'" class="jv-root">
+        <JsonTree data="this.parsed.value" depth="0" expandDepth="this.expandDepth"/>
+    </div>
+    <TextBlock t-elif="this.parsed.type === 'text'"
+               text="this.parsed.value"
+               dialogTitle="this.title"/>
+    <span t-elif="this.props.placeholder" class="text-muted" t-out="this.props.placeholder"/>
+</t>
+
+</templates>

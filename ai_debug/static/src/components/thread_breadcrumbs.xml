@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.ThreadBreadcrumbs">
+    <div class="breadcrumbs">
+        <t t-foreach="this.path" t-as="t" t-key="t.id">
+            <t t-if="!t_first">
+                <span class="breadcrumb-sep">›</span>
+            </t>
+            <t t-if="t_last">
+                <span class="breadcrumb-current" t-out="this.displayName(t)"/>
+            </t>
+            <t t-else="">
+                <a class="breadcrumb-link"
+                   t-on-click="() => this.onLinkClick(t.id)"
+                   t-out="this.displayName(t)"/>
+            </t>
+        </t>
+    </div>
+</t>
+</templates>

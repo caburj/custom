@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.TextDialog">
+    <Dialog title="this.props.title" size="'xl'">
+        <div class="ai-popup-toolbar">
+            <button t-attf-class="btn btn-sm ai-popup-toolbar-btn {{ this.state.wrap ? 'active' : '' }}"
+                    t-on-click="this.toggleWrap"
+                    title="Toggle text wrapping">
+                <i class="fa fa-align-left" aria-hidden="true"/> Wrap
+            </button>
+            <CopyButton content="this.props.content"
+                        className="'btn-sm ai-popup-toolbar-btn'"
+                        copyText="'Copy'"
+                        successText="'Copied!'"
+                        icon="'fa-clone'"/>
+        </div>
+        <pre t-attf-class="ai-popup-content {{ this.state.wrap ? '' : 'ai-popup-nowrap' }}"><code t-out="this.props.content"/></pre>
+    </Dialog>
+</t>
+</templates>

@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.ChatMessage">
+    <div t-attf-class="chat-message chat-message-{{ this.props.role }}">
+        <div class="chat-message-label">
+            <t t-slot="preLabel"/>
+            <i t-attf-class="fa {{ this.icon }}" aria-hidden="true"/>
+            <t t-out="this.label"/>
+            <span t-if="this.props.role === 'agent' and this.props.modelName"
+                  class="mono" style="opacity: 0.5; font-size: .9em;">
+                · <t t-out="this.props.modelName"/>
+            </span>
+        </div>
+        <div class="chat-bubble">
+            <t t-if="this.showTyping">
+                <span class="typing-indicator">
+                    <span class="typing-dot"/>
+                    <span class="typing-dot"/>
+                    <span class="typing-dot"/>
+                </span>
+            </t>
+            <t t-elif="this.props.content">
+                <t t-out="this.contentMarkup"/>
+            </t>
+            <t t-else="">
+                <span class="text-muted">No message</span>
+            </t>
+        </div>
+        <div t-if="this.props.content and !this.showTyping" class="chat-message-actions">
+            <CopyButton content="this.props.content"
+                        className="'chat-bubble-copy-btn'"
+                        successText="'Copied!'"/>
+        </div>
+    </div>
+</t>
+</templates>

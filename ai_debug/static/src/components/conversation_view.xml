@@ -1,0 +1,103 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.ConversationView">
+    <div class="conversation-view" t-ref="this.containerRef">
+        <div class="conversation-content" t-ref="this.contentRef">
+        <t t-if="this.props.thread">
+            <!-- Lazy-load sentinel: triggers fetch of older loops -->
+            <div t-ref="this.sentinelRef" t-if="this.props.thread and !this.store.isFullyLoaded(this.props.thread.id)"
+                 class="lazy-load-sentinel">
+                <t t-if="this.store.isLoading(this.props.thread.id)">
+                    <div class="d-flex justify-content-center p-3">
+                        <div class="spinner-border spinner-border-sm text-muted" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </t>
+            </div>
+
+            <t t-foreach="this.props.thread.loop_ids" t-as="loop" t-key="loop.id">
+                <!-- User bubble. In a subagent thread the "user" message
+                     is authored by the parent agent (via start_session /
+                     continue_session), not the human user — attribute it to
+                     the parent agent so the label and icon match. The
+                     content prefers the server-rendered HTML
+                     (markdown_format) so the parent's markdown prompt
+                     keeps its structure; falls back to the plain text
+                     for old imported bundles that pre-date
+                     input_message_html.
+
+                     The optional preLabel slot inlines a back-link to the
+                     parent tool call that drove this specific loop. Each
+                     loop in a subagent thread can come from a different
+                     parent call (spawn for the first, ask for follow-ups),
+                     so the link lives on the message label, not on the
+                     thread. -->
+                <ChatMessage
+                    role="'user'"
+                    content="loop.input_message_html or loop.input_message"
+                    userName="this.props.thread.parent_thread_id
+                              ? (this.props.thread.parent_thread_id.agent_id?.name || 'Parent agent')
+                              : this.props.thread.user_id?.name"
+                    iconClass="this.props.thread.parent_thread_id ? 'fa-android' : 'fa-user'">
+                    <t t-if="this.props.thread.parent_thread_id and loop.parent_tool_call_id"
+                       t-set-slot="preLabel">
+                        <button class="loop-trigger-link"
+                                t-on-click="() => this.onJumpToParentCall(loop)"
+                                t-att-title="'Jump to the parent tool call that drove this loop'">
+                            <i class="fa fa-arrow-left" aria-hidden="true"/>
+                            <span>from <t t-out="loop.parent_tool_call_id.name or 'tool'"/></span>
+                        </button>
+                        <span class="chat-message-label-sep">|</span>
+                    </t>
+                </ChatMessage>
+
+                <!-- Agent: strip header (acts as label) + bubble -->
+                <div class="chat-message chat-message-agent">
+                    <LoopDetailStrip
+                        loop="loop"
+                        agentName="loop.agent_id?.name"
+                        modelName="loop.model_name"
+                        defaultExpanded="loop.is_running"
+                    />
+
+                    <div t-attf-class="chat-bubble {{ loop.termination_reason === 'confirmation' ? 'chat-bubble-warning' : '' }}">
+                        <t t-if="loop.is_running and !loop.output_message">
+                            <span class="typing-indicator">
+                                <span class="typing-dot"/>
+                                <span class="typing-dot"/>
+                                <span class="typing-dot"/>
+                            </span>
+                        </t>
+                        <t t-elif="loop.termination_reason === 'confirmation' and loop.output_message">
+                            <div class="chat-bubble-warning-label">
+                                <i class="fa fa-shield chat-bubble-warning-icon" aria-hidden="true"/>
+                                Confirmation required:
+                            </div>
+                            <t t-out="this.toMarkup(loop.output_message)"/>
+                        </t>
+                        <t t-elif="loop.output_message">
+                            <t t-out="this.toMarkup(loop.output_message)"/>
+                        </t>
+                        <t t-else="">
+                            <span class="text-muted">No message</span>
+                        </t>
+                    </div>
+                    <div t-if="loop.output_message" class="chat-message-actions">
+                        <CopyButton content="loop.output_message"
+                                    className="'chat-bubble-copy-btn'"
+                                    successText="'Copied!'"/>
+                    </div>
+                </div>
+            </t>
+        </t>
+        <t t-else="">
+            <div class="empty-state">
+                <i class="fa fa-comments-o" aria-hidden="true"/>
+                <div>Select a thread to view the conversation</div>
+            </div>
+        </t>
+        </div>
+    </div>
+</t>
+</templates>

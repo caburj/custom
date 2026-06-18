@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="layout">
+        <t t-set="head">
+            <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"/>
+            <script type="text/javascript">
+                odoo.__session_info__ = <t t-out="json.dumps(session_info)"/>;
+            </script>
+            <t t-call-assets="ai_debug.assets" />
+        </t>
+        <t t-call="web.layout"
+            html_data="{'style': 'height: 100%;'}"
+            title.translate="AI Debug"
+            head="head"/>
+    </template>
+</odoo>

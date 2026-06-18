@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.StatusBadge">
+    <t t-if="this.props.isRunning">
+        <span class="pulse-dot"/>
+    </t>
+    <t t-else="">
+        <span t-attf-class="status-badge {{ this.cssClass }}">
+            <t t-out="this.displayLabel"/>
+        </span>
+    </t>
+</t>
+</templates>

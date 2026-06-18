@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.ThreadTreeItem">
+    <div t-attf-class="t-item {{ this.isSelected ? 'active' : '' }}"
+         t-on-click="this.onItemClick">
+        <span t-foreach="this.indents" t-as="i" t-key="i" class="t-indent"/>
+        <button t-if="this.hasChildren" class="t-toggle"
+                t-on-click.stop="this.toggleExpanded"
+                t-att-title="this.expanded ? 'Collapse' : 'Expand'">
+            <t t-out="this.expanded ? '−' : '+'"/>
+        </button>
+        <span t-else="" class="t-toggle-spacer"/>
+        <div class="t-body">
+            <div class="t-name" t-out="this.displayName"/>
+            <div class="t-meta">
+                <span class="t-session-id" t-out="this.sessionIdLabel"/>
+                <t t-if="this.metaLine"> · <t t-out="this.metaLine"/></t>
+                <t t-if="this.isBackground"> · <span class="t-bg-flag">background</span></t>
+            </div>
+        </div>
+        <t t-set="elapsed" t-value="this.elapsedDisplay"/>
+        <span t-if="elapsed"
+              t-attf-class="t-elapsed-time {{ elapsed.running ? 'running' : '' }}"
+              t-out="elapsed.label"/>
+    </div>
+    <t t-if="this.hasChildren and this.expanded">
+        <t t-foreach="this.orderedChildren" t-as="child" t-key="child.id">
+            <ThreadTreeItem thread="child"
+                            depth="this.props.depth + 1"
+                            selectedThreadId="this.props.selectedThreadId"
+                            onSelect="this.props.onSelect"/>
+        </t>
+    </t>
+</t>
+</templates>

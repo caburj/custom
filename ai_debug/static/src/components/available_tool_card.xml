@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.AvailableToolCard">
+    <t t-if="this.props.entry.state === 'loaded' and this.props.entry.record">
+        <FoldableCard>
+            <t t-set-slot="header">
+                <span class="available-tool-name" t-out="this.props.entry.record.display_name"/>
+                <code class="available-tool-llm-name" t-out="this.props.entry.record.llm_name"/>
+            </t>
+
+            <div class="tool-call-section">
+                <div class="tool-call-section-label">Description</div>
+                <t t-if="this.props.entry.record.ai_tool_description">
+                    <TextBlock text="this.props.entry.record.ai_tool_description"
+                                   dialogTitle="'Tool Description'"/>
+                </t>
+                <t t-else="">
+                    <span class="text-muted">No description</span>
+                </t>
+            </div>
+
+            <div class="tool-call-section">
+                <div class="tool-call-section-label">Input Schema</div>
+                <t t-if="this.parsedSchema">
+                    <JsonViewer data="this.parsedSchema" defaultExpanded="2"/>
+                </t>
+                <t t-else="">
+                    <span class="text-muted">No schema</span>
+                </t>
+            </div>
+        </FoldableCard>
+    </t>
+    <t t-elif="this.props.entry.state === 'loaded'">
+        <!-- Server returned no row for this id (tool deleted etc.) -->
+        <div class="foldable-card">
+            <div class="foldable-card-header collapsed" style="cursor: default;">
+                <span class="text-muted">Tool #<t t-out="this.props.entry.id"/> (unavailable)</span>
+            </div>
+        </div>
+    </t>
+    <t t-else="">
+        <!-- "loading" or transient "missing": render a spinner row -->
+        <div class="foldable-card">
+            <div class="foldable-card-header collapsed" style="cursor: default;">
+                <i class="fa fa-spinner fa-spin" aria-hidden="true" style="margin-right: .35rem; opacity: .6;"/>
+                <span class="text-muted">Tool #<t t-out="this.props.entry.id"/></span>
+            </div>
+        </div>
+    </t>
+</t>
+</templates>

@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.ErrorBanner">
+    <div class="alert-error" style="margin: .75rem 1.25rem;">
+        <strong>Error: </strong>
+        <t t-out="this.props.message"/>
+    </div>
+</t>
+</templates>

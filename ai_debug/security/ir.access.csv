@@ -1,0 +1,9 @@
+id,name,model_id,group_id/id,operation,domain
+access_ai_debug_thread_user,ai.debug.thread: own runs,ai.debug.thread,base.group_user,crud,"[('user_id', '=', user.id)]"
+access_ai_debug_thread_system,ai.debug.thread: all runs (admin),ai.debug.thread,base.group_system,crud,
+access_ai_debug_loop_user,ai.debug.loop: own runs,ai.debug.loop,base.group_user,crud,"[('thread_id.user_id', '=', user.id)]"
+access_ai_debug_loop_system,ai.debug.loop: all runs (admin),ai.debug.loop,base.group_system,crud,
+access_ai_debug_iteration_user,ai.debug.iteration: own runs,ai.debug.iteration,base.group_user,crud,"[('loop_id.thread_id.user_id', '=', user.id)]"
+access_ai_debug_iteration_system,ai.debug.iteration: all runs (admin),ai.debug.iteration,base.group_system,crud,
+access_ai_debug_tool_call_user,ai.debug.tool.call: own runs,ai.debug.tool.call,base.group_user,crud,"[('iteration_id.loop_id.thread_id.user_id', '=', user.id)]"
+access_ai_debug_tool_call_system,ai.debug.tool.call: all runs (admin),ai.debug.tool.call,base.group_system,crud,

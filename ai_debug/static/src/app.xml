@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.App">
+    <ImportedBanner/>
+    <header class="position-fixed bg-1 d-flex flex-nowrap align-items-center justify-content-between w-100">
+        <div class="d-flex flex-nowrap align-items-center gap-2">
+            <i class="ai-debug-logo fa fa-bug" aria-hidden="true"/>
+            <h2>AI Debug</h2>
+        </div>
+        <div class="d-flex flex-nowrap gap-1">
+            <button class="btn" t-on-click="this.toggleTheme">
+                <i class="fa fa-moon-o" aria-hidden="true"/>
+            </button>
+        </div>
+    </header>
+
+    <main class="d-flex flex-nowrap">
+        <t t-if="this.sidebar.collapsed">
+            <div class="sidebar-collapsed-bar" t-on-click="this.toggleSidebar"
+                 title="Show sidebar">
+                <i class="fa fa-chevron-right" aria-hidden="true"/>
+            </div>
+        </t>
+        <t t-else="">
+            <div class="sidebar-panel" t-att-style="'width:' + this.sidebar.width + 'px'">
+                <ThreadSidebar
+                    selectedThreadId="this.store.selectedThreadId()"
+                    onSelectThread.bind="this.onSelectThread"
+                    onToggle.bind="this.toggleSidebar"
+                    orm="this.orm"
+                />
+            </div>
+            <div class="resize-handle" t-on-mousedown="this.startResize"/>
+        </t>
+        <div class="main-panel">
+            <div t-if="this.selectedThread" class="main-panel-header">
+                <ThreadBreadcrumbs thread="this.selectedThread"
+                                   onSelect.bind="this.onSelectThread"/>
+                <ExportButton t-if="!this.selectedThread.parent_thread_id"
+                              threadId="this.selectedThread.id"
+                              orm="this.orm"/>
+            </div>
+            <ConversationView thread="this.selectedThread" orm="this.orm"/>
+        </div>
+    </main>
+
+    <MainComponentsContainer/>
+</t>
+</templates>

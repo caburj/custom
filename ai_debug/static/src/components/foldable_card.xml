@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.FoldableCard">
+    <div class="foldable-card" t-ref="this.rootRef">
+        <div t-attf-class="foldable-card-header {{ !this.state.expanded ? 'collapsed' : '' }}"
+             t-on-click="this.toggle">
+            <button t-attf-class="icon-btn {{ !this.state.expanded ? 'collapsed' : '' }}">
+                <i class="fa fa-chevron-right" aria-hidden="true"/>
+            </button>
+            <t t-slot="header"/>
+        </div>
+        <div class="foldable-card-body" t-if="this.state.expanded">
+            <t t-slot="default"/>
+        </div>
+    </div>
+</t>
+</templates>

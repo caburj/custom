@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.ImportedBanner">
+    <div t-if="this.store.isImported()" class="imported-banner">
+        <div class="imported-banner-text">
+            <i class="fa fa-folder-open-o" aria-hidden="true"/>
+            <span>
+                Viewing imported trace
+                <t t-if="this.meta.source_db"> from <strong t-out="this.meta.source_db"/></t>
+                <t t-if="this.meta.exported_at"> · exported <span t-out="this.meta.exported_at"/></t>
+            </span>
+        </div>
+        <button class="imported-banner-action" t-on-click="this.onReturnToLive">
+            Return to live
+        </button>
+    </div>
+</t>
+</templates>

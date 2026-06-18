@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.ThreadSidebar">
+    <aside class="thread-sidebar">
+        <div class="thread-sidebar-header">
+            Threads
+            <span style="margin-left: auto; opacity: 0.5;">
+                <t t-out="this.store.threadCount()"/>
+            </span>
+            <ImportButton/>
+            <button t-if="this.hasExpandableThreads" class="icon-btn" t-on-click="this.onToggleAll"
+                    t-att-title="this.allExpanded ? 'Collapse all threads' : 'Expand all threads'"
+                    style="transform: none;">
+                <i t-attf-class="fa fa-{{ this.allExpanded ? 'compress' : 'expand' }}"
+                   aria-hidden="true" style="transform: none;"/>
+            </button>
+            <button t-if="this.props.onToggle" class="icon-btn" t-on-click="this.props.onToggle"
+                    title="Hide sidebar" style="transform: none;">
+                <i class="fa fa-chevron-left" aria-hidden="true" style="transform: none;"/>
+            </button>
+        </div>
+        <div class="thread-sidebar-list" t-ref="this.listRef">
+            <t t-foreach="this.rootThreads" t-as="thread" t-key="thread.id">
+                <ThreadTreeItem thread="thread"
+                                depth="0"
+                                selectedThreadId="this.props.selectedThreadId"
+                                onSelect="this.props.onSelectThread"/>
+            </t>
+            <!-- Lazy-load sentinel: triggers fetch of older threads -->
+            <div t-ref="this.sentinelRef" t-if="!this.store.threadListFullyLoaded"
+                 class="lazy-load-sentinel">
+                <t t-if="this.store.threadListLoading">
+                    <div class="d-flex justify-content-center p-3">
+                        <div class="spinner-border spinner-border-sm text-muted" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </t>
+            </div>
+            <div t-if="!this.rootThreads.length and this.store.threadListFullyLoaded"
+                 class="thread-sidebar-empty text-muted">
+                No threads yet
+            </div>
+        </div>
+    </aside>
+</t>
+</templates>

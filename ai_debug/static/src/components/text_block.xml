@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.TextBlock">
+    <div t-if="this.props.text" class="text-block">
+        <pre t-ref="this.preRef"
+             t-attf-class="text-block-pre {{ this.overflow() ? 'is-overflow' : '' }}"
+             t-att-title="this.overflow() ? 'Click to view full text' : ''"
+             t-on-click="this.onClick"><code t-out="this.props.text"/></pre>
+        <CopyButton content="this.props.text"
+                    className="'text-block-copy-btn'"
+                    successText="'Copied!'"/>
+    </div>
+</t>
+</templates>

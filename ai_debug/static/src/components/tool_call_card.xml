@@ -1,0 +1,65 @@
+<?xml version="1.0"?>
+<templates>
+<t t-name="ai_debug.ToolCallCard">
+    <div t-attf-class="tool-call {{ this.props.toolCall.refused ? 'refused' : '' }}"
+         t-ref="this.rootRef"
+         t-att-id="'tool-call-' + this.props.toolCall.id">
+        <div t-attf-class="tool-call-header {{ !this.state.expanded ? 'collapsed' : '' }}"
+             t-on-click="this.toggleExpanded">
+            <button t-attf-class="icon-btn {{ !this.state.expanded ? 'collapsed' : '' }}">
+                <i class="fa fa-chevron-right" aria-hidden="true"/>
+            </button>
+            <span class="tool-call-name" t-out="this.props.toolCall.name"/>
+            <!-- Child loop badges: each loop this tool call drove inside a
+                 subagent thread. start_session typically links one loop
+                 (the very first); continue_session links a single follow-up loop. -->
+            <t t-foreach="this.props.toolCall.child_loop_ids" t-as="childLoop" t-key="childLoop.id">
+                <span class="child-thread-badge"
+                      t-on-click.stop="() => this.openChildLoop(childLoop.thread_id?.id, childLoop.id)"
+                      t-att-title="'Jump to subagent loop: ' + (childLoop.thread_id?.agent_id?.name or childLoop.thread_id?.name or '')">
+                    <i class="fa fa-external-link" aria-hidden="true"/>
+                    <t t-out="childLoop.thread_id?.agent_id?.name or childLoop.thread_id?.name"/>
+                </span>
+            </t>
+            <span t-if="this.props.toolCall.triggered_confirmation"
+                  class="status-badge confirmation"
+                  title="This tool triggered a confirmation request">
+                <i class="fa fa-shield" aria-hidden="true"/>
+                confirmation
+            </span>
+            <!-- Data-driven refused pill: the user declined this confirmation,
+                 or this spawn/ask was resolved by a superseded fold
+                 (ai.debug.tool.call.refused, derived from the actual records). -->
+            <span t-if="this.props.toolCall.refused"
+                  class="status-badge refused"
+                  title="The user refused this tool's confirmation; the delegated task was not completed">
+                <i class="fa fa-ban" aria-hidden="true"/>
+                refused
+            </span>
+            <span class="tool-call-status">
+                <span t-if="this.props.toolCall.refused" class="refused">did not approve</span>
+                <span t-else="" t-att-class="this.statusIcon.cls">
+                    <i t-attf-class="fa {{ this.statusIcon.icon }}" aria-hidden="true"/>
+                    <t t-out="this.statusIcon.label"/>
+                </span>
+            </span>
+            <span style="font-size: .8em; color: var(--text-light); margin-left: .5rem;"
+                  t-if="this.props.toolCall.duration_ms">
+                <t t-out="this.formatDuration(this.props.toolCall.duration_ms)"/>
+            </span>
+        </div>
+
+        <div class="tool-call-body" t-if="this.state.expanded">
+            <div class="tool-call-section">
+                <div class="tool-call-section-label">Arguments</div>
+                <JsonViewer data="this.props.toolCall.arguments" title="'Arguments'" defaultExpanded="true"/>
+            </div>
+
+            <div class="tool-call-section">
+                <div class="tool-call-section-label">Result</div>
+                <JsonViewer data="this.result" placeholder="'Pending...'" title="'Result'"/>
+            </div>
+        </div>
+    </div>
+</t>
+</templates>
