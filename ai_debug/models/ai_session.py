@@ -10,7 +10,7 @@ from odoo.addons.ai_debug.models.ai_provider_patch import pop_last_completion_da
 _logger = logging.getLogger(__name__)
 
 
-class AiSession(models.TransientModel):
+class AiSession(models.Model):
     _inherit = 'ai.session'
 
     def _ai_debug_bus_send(self, notification_type, payload):
