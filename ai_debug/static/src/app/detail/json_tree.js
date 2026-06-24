@@ -16,13 +16,12 @@ export class JsonTree extends Component {
         forceCollapsed: { type: Boolean, optional: true },
         forceVersion: { type: Number, optional: true },
     };
-    static defaultProps = { depth: 0 };
 
     setup() {
         this.imageOverlayRef = useRef("imageOverlay");
         const forceActive = typeof this.props.forceCollapsed === "boolean";
         this.state = proxy({
-            expanded: forceActive ? !this.props.forceCollapsed : this.props.depth < 1,
+            expanded: forceActive ? !this.props.forceCollapsed : this.depth < 1,
             childForceCollapsed: forceActive ? this.props.forceCollapsed : undefined,
             childForceVersion: forceActive ? 1 : 0,
         });
@@ -36,6 +35,14 @@ export class JsonTree extends Component {
                 this.state.childForceVersion = this.state.childForceVersion + 1;
             }
         });
+    }
+
+    // Owl 3 ignores `static defaultProps`, so default the depth here instead.
+    // Without this, the root node's depth is `undefined`, and the recursive
+    // `depth + 1` cascades to NaN at every level — breaking both indentation
+    // (NaN > 0 is always false) and the default-expanded root (NaN < 1 is false).
+    get depth() {
+        return this.props.depth ?? 0;
     }
 
     get type() {
