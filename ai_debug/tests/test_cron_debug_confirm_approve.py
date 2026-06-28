@@ -44,7 +44,7 @@ class TestCronDebugConfirmApprove(TestAICommon):
                 'name': 'Confirm Approve Specialist', 'provider': 'openai', 'system_prompt': 'x'})
             tool = env['ir.actions.server'].create({
                 'model_id': env['ir.model']._get_id('ai.agent'),
-                'state': 'code', 'name': 'tool_w_confirm_appr', 'use_in_ai': True,
+                'state': 'code', 'name': 'tool_w_confirm_appr', 'ai_tool_name': 'tool_w_confirm_appr', 'use_in_ai': True,
                 'code': "if not ai['tool_request_confirmed']:\n"
                         "    ai['tool_request_message'] = 'Do this?'\n"
                         "else:\n"

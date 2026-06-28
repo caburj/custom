@@ -46,7 +46,7 @@ class TestCronDebugFold(TestAICommon):
                 'name': 'Cron Debug Fold Specialist', 'provider': 'openai', 'system_prompt': 'x'})
             tool = env['ir.actions.server'].create({
                 'model_id': env['ir.model']._get_id('ai.agent'),
-                'state': 'code', 'name': 'tool_w_confirm_fold', 'use_in_ai': True,
+                'state': 'code', 'name': 'tool_w_confirm_fold', 'ai_tool_name': 'tool_w_confirm_fold', 'use_in_ai': True,
                 'code': "if not ai['tool_request_confirmed']:\n"
                         "    ai['tool_request_message'] = 'Do this?'\n"
                         "else:\n"

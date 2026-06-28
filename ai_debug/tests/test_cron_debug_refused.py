@@ -43,7 +43,7 @@ class TestCronDebugRefused(TestAICommon):
                 'name': 'Cron Debug Refused Specialist', 'provider': 'openai', 'system_prompt': 'x'})
             tool = env['ir.actions.server'].create({
                 'model_id': env['ir.model']._get_id('ai.agent'),
-                'state': 'code', 'name': 'tool_w_confirm_refused', 'use_in_ai': True,
+                'state': 'code', 'name': 'tool_w_confirm_refused', 'ai_tool_name': 'tool_w_confirm_refused', 'use_in_ai': True,
                 'code': "if not ai['tool_request_confirmed']:\n"
                         "    ai['tool_request_message'] = 'Do this?'\n"
                         "else:\n"

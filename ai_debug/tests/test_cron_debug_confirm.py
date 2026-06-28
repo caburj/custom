@@ -40,7 +40,7 @@ class TestCronDebugConfirm(TestAICommon):
                 'name': 'Cron Debug Confirm', 'provider': 'openai', 'system_prompt': 'x'})
             tool = env['ir.actions.server'].create({
                 'model_id': env['ir.model']._get_id('ai.agent'),
-                'state': 'code', 'name': 'tool_w_confirm_dbg', 'use_in_ai': True,
+                'state': 'code', 'name': 'tool_w_confirm_dbg', 'ai_tool_name': 'tool_w_confirm_dbg', 'use_in_ai': True,
                 'code': dedent("""
                     if not ai['tool_request_confirmed']:
                         ai['tool_request_message'] = 'Do this?'

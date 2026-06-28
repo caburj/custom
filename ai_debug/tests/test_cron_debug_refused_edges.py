@@ -47,7 +47,7 @@ class TestCronDebugRefusedEdges(TestCronDebugRefused):
             env = Environment(cr, SUPERUSER_ID, {})
             tool = env['ir.actions.server'].create({
                 'model_id': env['ir.model']._get_id('ai.agent'),
-                'state': 'code', 'name': 'tool_plain_ok', 'use_in_ai': True,
+                'state': 'code', 'name': 'tool_plain_ok', 'ai_tool_name': 'tool_plain_ok', 'use_in_ai': True,
                 'code': "ai['result'] = 'plain ok'\n",
                 'ai_tool_schema': '{"type": "object", "properties": {}, "required": []}',
             })
