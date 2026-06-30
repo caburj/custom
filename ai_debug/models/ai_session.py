@@ -127,7 +127,7 @@ class AiSession(models.Model):
         try:
             from odoo.addons.ai.services.ai_provider import AIProvider
             provider = AIProvider.get_by_model(self.env, model)
-            tools_by_name = self._get_tools_by_name(tools)
+            tools_by_name = {tool.sudo().ai_tool_name: tool for tool in tools}
             return self._prepare_tools(tools_by_name, provider)
         except Exception:
             _logger.exception("ai_debug: failed to serialize tools for iteration event")
