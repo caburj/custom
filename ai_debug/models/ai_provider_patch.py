@@ -56,7 +56,25 @@ def _patched_request(self, method, endpoint, body, **kwargs):
 
     # Completion path: stash request body, time the call, and stash the raw response.
     # Request body is captured BEFORE the call so it's available even if the request fails.
-    ai_debug_tracker.last_request_body = body
+    #
+    # SNAPSHOT the message list(s) at request time: the straight-line
+    # `_advance_one_step` reuses ONE `messages` list per step and extends it in
+    # place (the assistant event, then the tool outputs) AFTER this call returns.
+    # The provider builds its request body around that same list by reference, so
+    # a bare `= body` would let those later in-place appends grow the captured
+    # `input`/`contents` — the per-iteration `messages_sent` would then read the
+    # POST-tool-batch history instead of what was actually sent this iteration
+    # (the old generator dodged this by popping at its pre-batch yield seam).
+    # Freezing the top-level lists here keeps `messages_sent` == the request as
+    # sent; the item dicts are shared (never mutated in place, only appended).
+    if isinstance(body, dict):
+        snapshot = dict(body)
+        for _k, _v in snapshot.items():
+            if isinstance(_v, list):
+                snapshot[_k] = list(_v)
+        ai_debug_tracker.last_request_body = snapshot
+    else:
+        ai_debug_tracker.last_request_body = body
 
     # Give the agentic-loop instrumentation a chance to create a pending
     # iteration row before the (potentially long) HTTP call begins, so the
@@ -164,7 +182,7 @@ def _extract_tokens_google(raw_response):
 def pop_last_completion_data():
     """Retrieve and clear the most recent completion response, LLM duration, and request body.
 
-    Called by ai_session._run_agentic_loop immediately after each iteration
+    Called by ai_session._advance_one_step immediately after each iteration
     item arrives from the generator. The tracker fields are cleared
     immediately after reading to prevent cross-iteration contamination.
 

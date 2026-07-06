@@ -21,7 +21,7 @@ class AiDebugToolCall(models.Model):
     # a confirmation call the user declined, or a spawn/ask call resolved by a
     # superseded fold (the user redirected away from the turn). Persisted at fold
     # time from the call_ids the fold closes (see ai_session.py
-    # _ai_debug_mark_refused_calls / _ai_debug_update_confirmation_tool_results).
+    # _on_tool_calls_refused / _ai_debug_update_confirmation_tool_results).
     refused = fields.Boolean(default=False)
     # Loops triggered by this tool call (typically zero or one per call):
     # start_session links the very first loop of a child thread, continue_session

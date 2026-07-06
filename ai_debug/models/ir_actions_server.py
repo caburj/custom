@@ -18,7 +18,7 @@ class IrActionsServer(models.Model):
 
     def _ai_tool_run(self, record, arguments, tools_context):
         """Track the currently-executing tool call on the shared tracker so that any
-        nested _run_agentic_loop invocations (e.g. generate_image or
+        nested _advance_one_step invocations (e.g. generate_image or
         start_session) can link their synthetic thread to the ai.debug.tool.call
         row that spawned them.
 
@@ -33,6 +33,11 @@ class IrActionsServer(models.Model):
         side-effects on this flag, so flipping it here makes them execute in
         the same iteration without surfacing a confirmation prompt.
         """
+        if tools_context is None:
+            # The base _ai_tool_run tolerates a None tools_context (it does
+            # `tools_context or {}`); direct callers such as the ai_crm tests pass
+            # None. Normalise here so this override's reads/writes don't crash.
+            tools_context = {}
         debug_env = ai_debug_tracker.debug_env
         call_id = tools_context.get('tool_call_id')
         previous = ai_debug_tracker.current_tool_call_db_id

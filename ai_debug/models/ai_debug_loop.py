@@ -42,7 +42,7 @@ class AiDebugLoop(models.Model):
         # _ai_debug_supersede_stale_loop) and the refusal opens its own loop.
         ('superseded', 'Superseded'),
         # A cancel/Stop terminates the session at the TOP of the tick, before
-        # _run_agentic_loop runs, so the loop's own finally never finalizes it.
+        # _advance_one_step runs, so the loop's own finally never finalizes it.
         # ai_debug closes the still-running loop here so the viewer's spinner
         # stops and the loop reads 'cancelled' (see ai_session.py
         # _consume_cancel_signal / _ai_debug_close_cancelled_loop).

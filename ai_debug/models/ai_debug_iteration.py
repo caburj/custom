@@ -12,7 +12,7 @@ class AiDebugIteration(models.Model):
     sequence = fields.Integer()
     is_running = fields.Boolean(default=False)
     # Augmented system prompt actually sent to the provider for this iteration:
-    # the base instructions arg passed into _run_agentic_loop with
+    # the base instructions arg passed into _advance_one_step with
     # <loaded_skills>...</loaded_skills> appended by
     # ai.session._append_loaded_skills. Captured per-iteration because
     # load_skills can mutate tools_context["state"]["loaded_skills"] mid-loop,

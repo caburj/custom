@@ -7,7 +7,7 @@ A tool call is marked refused ONLY from actual records, never from row position:
 A second-round re-delegation that DELIVERS NORMALLY must stay refused=False.
 
 Both marks are driven from the (session_id, call_id) pairs the fold closes
-(`ai.session._fold_superseded` → `_ai_debug_mark_refused_calls`), so they persist
+(`ai.session._fold_superseded` → `_on_tool_calls_refused`), so they persist
 even though the wait edge is unlinked at drain. Drives the real production
 supersede-fold-then-redelegate path (mocked LLM tokens) on the dual-cursor
 harness, then reads the committed ai.debug.tool.call rows back on a fresh
