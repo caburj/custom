@@ -1077,7 +1077,7 @@ class AiSession(models.Model):
                 # Scope to THIS session's debug thread: call_id is unique only
                 # within a session, so an unscoped search could resolve (and
                 # later refuse-mark) another session's row sharing the call_id.
-                tc_record = debug_env['ai.debug.tool.call'].sudo().search(
+                tc_record = debug_env['ai.debug.tool.call'].search(
                     [('call_id', '=', call_id),
                      ('iteration_id.loop_id.thread_id.session_id', '=', str(self.id))],
                     limit=1,
@@ -1663,7 +1663,7 @@ class AiSession(models.Model):
                 # invariant imports/replays/custom providers can break), so an
                 # unscoped search would falsely mark another session's row that
                 # happens to share the call_id.
-                rows = debug_env['ai.debug.tool.call'].sudo().search([
+                rows = debug_env['ai.debug.tool.call'].search([
                     ('call_id', 'in', list(call_ids)), ('refused', '=', False),
                     ('iteration_id.loop_id.thread_id.session_id', '=', str(self.id)),
                 ])
