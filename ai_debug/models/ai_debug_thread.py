@@ -370,8 +370,11 @@ class AiDebugThread(models.Model):
     #   3. ``debug_expand(kind, id, field)`` -- pull the full body of one
     #      truncated field when a preview isn't enough.
     #
-    # All three call ``sudo()`` internally so that an ``odev eval`` script
-    # running as a non-system user still works.
+    # All three are scoped to the caller's identity: they return only the runs
+    # the caller may read under the standard record rules -- their own runs, or
+    # every user's runs for an administrator (Settings/Administration access).
+    # A script that needs to inspect all users' runs must run as an
+    # administrator; run as a regular user it sees only that user's runs.
 
     @api.model
     def debug_recent(self, limit=20, agent_id=None, user_id=None,
@@ -404,7 +407,11 @@ class AiDebugThread(models.Model):
         if since is not None:
             domain.append(('loop_ids.start_time', '>=', since))
 
-        threads = self.sudo().search(domain, order='id desc', limit=limit)
+        # Identity scope: no sudo -- the search obeys the standard record rules,
+        # so a regular user only ever sees their own root threads (even when a
+        # user_id filter names someone else, the own-run rule ANDs it away) and
+        # an administrator sees every user's. This mirrors the viewer's list.
+        threads = self.search(domain, order='id desc', limit=limit)
 
         if status is not None:
             kept = []
@@ -418,9 +425,14 @@ class AiDebugThread(models.Model):
                 )
                 if last_term and last_term.termination_reason == status:
                     kept.append(t.id)
-            threads = self.sudo().browse(kept)
+            # ``kept`` is a subset of the already-scoped ``threads`` above.
+            threads = self.browse(kept)
 
-        return [t._debug_recent_row() for t in threads]
+        # ``threads`` is already scoped to what the caller may see (above); the
+        # row build runs under sudo so it can read the shared agent/user
+        # metadata it renders, exactly as before -- the visibility decision was
+        # already made by the record-rule-scoped search.
+        return [t.sudo()._debug_recent_row() for t in threads]
 
     def _debug_recent_row(self):
         """Build a single ``debug_recent`` row for ``self``."""
@@ -480,6 +492,18 @@ class AiDebugThread(models.Model):
         caller can recurse explicitly.
         """
         self.ensure_one()
+        # Identity scope: build the transcript only when the caller may read
+        # this thread under the standard record rules -- its owner, or an
+        # administrator who can read every user's threads. A caller who cannot
+        # see the thread receives no trace data; it is treated as if the thread
+        # does not exist for them (no access error, no cross-user leak).
+        if not self.search([('id', '=', self.id)]):
+            return {}
+        # Visibility is decided above. The build itself runs under sudo (as
+        # before) because the transcript renders shared tool metadata (e.g.
+        # ir.actions.server ``llm_name``) that a regular user cannot read
+        # directly; the run subtree it walks belongs to the same initiating
+        # user, so no other user's data is reachable here.
         return self.sudo()._debug_build_thread_node(
             preview_chars, max_depth, _seen=set(),
         )
@@ -713,9 +737,15 @@ class AiDebugThread(models.Model):
                 f"allowed: {list(spec['fields'])}"
             )
 
-        record = self.env[spec['model']].sudo().browse(record_id).exists()
-        if not record:
+        # Identity scope: gate visibility through the standard record rules by
+        # searching for the id, so the caller only reaches a record they may
+        # read -- their own, or any record for an administrator. A record the
+        # caller may not see is indistinguishable from a missing one: both raise
+        # the same "not found" below, leaking no confirmation that the trace
+        # exists. The visible record is then read under sudo, exactly as before.
+        if not self.env[spec['model']].search([('id', '=', record_id)]):
             raise ValueError(f"debug_expand: {kind} {record_id} not found")
+        record = self.env[spec['model']].sudo().browse(record_id)
 
         if kind == 'iteration' and field == 'messages_sent' and not record.messages_sent:
             # Row without a stored messages_sent (legacy capture, or capture
@@ -847,6 +877,23 @@ class AiDebugThread(models.Model):
         """
         self.ensure_one()
 
+        # Identity scope: export a bundle only when the caller may read this
+        # root thread under the standard record rules -- its owner, or an
+        # administrator who can read every user's threads. A caller who cannot
+        # see it gets no bundle (returns False), treated as if the thread does
+        # not exist for them; the export never falls back to another user's
+        # data nor to an empty-but-successful bundle.
+        if not self.search([('id', '=', self.id)]):
+            return False
+
+        # Visibility is decided by the gate above. The subtree walk and reads
+        # below run under sudo (as before): the whole run subtree -- root plus
+        # subagent sub-runs -- belongs to the same initiating user (a subagent
+        # runs under the root initiator's identity), so sudo here only ever
+        # reaches that one user's rows, and it keeps the shared tool metadata
+        # (``tool_id`` / ``available_tool_ids`` -> ir.actions.server) that a
+        # regular user cannot read directly complete in the bundle.
+        #
         # 1. Walk descendant threads (BFS via parent_thread_id). ``id asc`` so
         # the bundle JSON reads in spawn order for humans inspecting it -- the
         # frontend re-sorts on read, so this is cosmetic, not load-bearing.

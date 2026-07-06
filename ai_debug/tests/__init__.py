@@ -11,3 +11,4 @@ from . import test_cron_debug_refused_edges
 from . import test_cron_debug_cancel
 from . import test_capture_request_response
 from . import test_background_flag_sync
+from . import test_trace_visibility
