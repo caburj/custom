@@ -97,8 +97,8 @@ class TestCronDebugFoldEdges(TestCronDebugFold):
         turn REUSES the original loop instead of opening its own. The two turns
         render as ONE loop.
 
-        This is the accepted boundary of the text-equality heuristic the spec
-        endorsed (option b): rendering-only, production fold/refuse is unaffected,
+        This is the accepted boundary of the text-equality heuristic:
+        rendering-only, production fold/refuse is unaffected,
         and a user refusing with the exact original text is implausible. Pinned so
         the behaviour is explicit; if a future change makes this split into two
         loops, that is an improvement and this test should be updated."""

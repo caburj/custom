@@ -81,7 +81,7 @@ class TestCronDebugCancel(TestAICommon):
     def _running_parent(self, env, query='delegate'):
         """A front root session with a queued fresh-turn prompt signal, ready to
         tick. `originating_uid` is set so the background start / cancelled chat
-        notifications have an author (D6)."""
+        notifications have an author."""
         agent = env['ai.agent'].browse(self.parent_agent_id)
         session = env['ai.session'].create({
             'agent_id': agent.id, 'provider': agent.provider,
@@ -136,7 +136,7 @@ class TestCronDebugCancel(TestAICommon):
     @mute_logger('odoo.addons.ai.models.ai_session')
     def test_cancelled_background_loop_is_finalized_cancelled(self):
         """A background subagent with an OPEN running debug loop is cancelled; its
-        tick consumes the cancel and TERMINATES (FR-17). The debug loop must be
+        tick consumes the cancel and TERMINATES. The debug loop must be
         finalized `is_running=False`, `termination_reason='cancelled'` — NOT left
         spinning forever (the bug this guards: the cancel never re-enters
         `_run_agentic_loop`, so the loop's own finally never runs)."""
@@ -162,7 +162,7 @@ class TestCronDebugCancel(TestAICommon):
             child._run_session_tick()           # cancel consumed first, no LLM call
 
         self.assertEqual(child.queue_state, 'terminated',
-                         "an explicitly cancelled background task terminates (FR-17)")
+                         "an explicitly cancelled background task terminates")
         loop = self._child_loop(child.id)
         self.assertIsNotNone(loop)
         self.assertFalse(loop['is_running'],

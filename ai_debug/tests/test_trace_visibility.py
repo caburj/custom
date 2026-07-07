@@ -11,7 +11,7 @@ class TestTraceVisibility(TransactionCase):
     sees all users' traces; a regular internal user sees only their own -- a run
     and all its subagent sub-runs belong to the initiating user. A regular user
     asking for another user's trace by identifier gets no data, treated as not
-    found. Covers the functional-spec (rev-001) acceptance scenarios that
+    found. Covers the acceptance scenarios that
     concern the four programmatic/export methods on ``ai.debug.thread``:
     ``debug_recent``, ``debug_transcript``, ``debug_expand``,
     ``export_transcript``.
