@@ -39,6 +39,17 @@ class AiSession(models.Model):
         string="Current Debug Loop", copy=False,
         help="ai.debug.loop id of the in-flight turn (spans cron ticks).")
 
+    # The two-cron split fills one model round's iteration across two commits:
+    # the LLM-batch persist seam (`_persist_llm_reply`) opens the iteration and
+    # writes the response, the tool-batch seam (`_run_tools_and_route`) attaches
+    # that round's tool.call rows to the SAME committed iteration. This durable
+    # pointer bridges them (mirrors `current_debug_loop_id`; plain Integer, since
+    # ai.debug.* rows live on a separate debug cursor). Set by CRON1 for a
+    # tool-calling reply, read + cleared by CRON2.
+    current_debug_iteration_id = fields.Integer(
+        string="Current Debug Iteration", copy=False,
+        help="ai.debug.iteration id CRON2's tool rows re-attach to (one round, two commits).")
+
     # The child persists the spawning parent's spawn/ask tool-call debug-row id
     # on ITS OWN row at its first tick (resolved from its waiting wait edge
     # call_id — NOT written by the parent, which would race the cron claim), then
@@ -374,23 +385,23 @@ class AiSession(models.Model):
                           allow_subagents=True, on_resume=False,
                           confirm_pending=False, refusal_reason=None,
                           model, instructions, record=None, **completion_options):
-        """Instrument one straight-line agentic step (== one debug iteration).
+        """Instrument the two drive sites that STILL run a single-frame step.
 
-        Loop ownership differs by drive site:
-          - cron tick (persist=True, on_resume=False): THIS method owns the
-            ai.debug.loop, reused across the turn's ticks via
-            ``current_debug_loop_id`` and finalized (or deferred) here by the
-            returned outcome ``kind``.
-          - confirmation-resume tick (on_resume=True): no LLM call and the
-            tool.call rows already exist — update those rows and record the
-            confirmed final message, without opening a new iteration/loop.
+        The two-cron split moved the cron model round OFF ``_advance_one_step``:
+        the model reply is now persisted by ``_persist_llm_reply`` (CRON1) and its
+        tools run by ``_run_tools_and_route`` (CRON2), each instrumented on its own
+        seam. Only two callers still reach this method, and each keeps its existing
+        instrumentation unchanged:
+          - confirmation-resume (on_resume=True): no LLM call and the tool.call rows
+            already exist — update those rows and record the confirmed final message,
+            without opening a new iteration/loop.
           - sync one-shot (persist=False): ``_get_direct_response`` owns the loop
-            that spans the drain's steps; here only the per-step iteration is
+            spanning the drain's steps; here only the per-step iteration is
             created+finalized against the tracker it set up.
 
-        Instrumentation NEVER propagates a failure to the base step: a debug
-        write error is logged and swallowed, and the base outcome is returned
-        (or the base exception re-raised) unchanged.
+        A cron model round (persist=True, on_resume=False) is no longer routed here;
+        should any future caller reach it, run it uninstrumented rather than open a
+        second loop that would race the seam-driven one.
         """
         if on_resume:
             return self._ai_debug_step_resume(
@@ -403,28 +414,47 @@ class AiSession(models.Model):
                 messages, tools_context, allow_subagents=allow_subagents,
                 model=model, instructions=instructions, record=record,
                 **completion_options)
+        return super()._advance_one_step(
+            messages, tools_context, persist=persist,
+            allow_subagents=allow_subagents, on_resume=on_resume,
+            confirm_pending=confirm_pending, refusal_reason=refusal_reason,
+            model=model, instructions=instructions, record=record,
+            **completion_options)
 
-        # Cron tick: own the debug loop for this tick.
-        is_cron_tick = bool(self.env.context.get('_ai_cron_tick'))
+    # ------------------------------------------------------------------
+    # Two-cron seam instrumentation (CRON1 persist / CRON2 tools)
+    # ------------------------------------------------------------------
+
+    def _persist_llm_reply(self, response, call):
+        """CRON1 seam: instrument the model round the LLM-batch persists.
+
+        Opens (or reuses, across the turn's rounds) the ai.debug.loop, creates
+        this round's iteration, and writes the captured request/response/tokens/
+        duration onto it. A no-tool reply is the FINAL answer — finalize the
+        iteration and the loop (success) here. A tool-calling reply leaves the
+        iteration open (is_running, tools pending) and stashes its id on
+        ``current_debug_iteration_id`` so CRON2 re-attaches the tool rows to this
+        same committed iteration, DEFERRING the loop finalize. Best-effort: any
+        debug failure is logged and the base outcome returned unchanged.
+        """
         with self._ai_debug_tracker_scope(), self.env.registry.cursor() as debug_cr:
-            ctx = self._ai_debug_open_loop(debug_cr, model, messages, is_cron_tick)
+            messages = call.get('messages')
+            ctx = self._ai_debug_open_loop(debug_cr, call['model'], messages, is_cron_tick=True)
             if ctx is None:
-                # Debug records could not be created: run uninstrumented.
-                return super()._advance_one_step(
-                    messages, tools_context, persist=persist,
-                    allow_subagents=allow_subagents, on_resume=on_resume,
-                    confirm_pending=confirm_pending, refusal_reason=refusal_reason,
-                    model=model, instructions=instructions, record=record,
-                    **completion_options)
+                return super()._persist_llm_reply(response, call)
+            instructions = call.get('instructions')
+            tools_context = call.get('tools_context')
             try:
+                # Create the pending iteration row NOW (the LLM call already ran —
+                # in a worker thread for the batch, or before this seam inline — so
+                # the pre-call start hook did not open it on this cursor).
                 self._ai_debug_install_iteration_hook(ctx, instructions, tools_context)
+                self._before_tool_calls()
+                # Bridge the executed request/response onto the thread-local the
+                # finalize reads (the batch ran the HTTP on another thread).
+                self._ai_debug_stash_completion(call)
                 try:
-                    outcome = super()._advance_one_step(
-                        messages, tools_context, persist=persist,
-                        allow_subagents=allow_subagents, on_resume=on_resume,
-                        confirm_pending=confirm_pending, refusal_reason=refusal_reason,
-                        model=model, instructions=instructions, record=record,
-                        **completion_options)
+                    outcome = super()._persist_llm_reply(response, call)
                 except Exception as e:
                     reason = self._ai_debug_termination_reason(e)
                     self._ai_debug_finalize_error_iteration(
@@ -432,27 +462,189 @@ class AiSession(models.Model):
                         messages, ctx['prev_messages_len'], tools_context,
                         ctx['pending_iteration_id'], ctx['iteration_count'],
                         e, str(e), instructions)
-                    self._ai_debug_finalize_loop(ctx, reason, str(e), is_cron_tick)
+                    self._ai_debug_finalize_loop(ctx, reason, str(e), is_cron_tick=True)
+                    self._ai_debug_release_iteration_handle()
                     raise
-                # Success: finalize this step's iteration, then the loop by kind.
+                has_tools = outcome.get('kind') != 'terminal'
+                # Write the response fields. A tools-pending round leaves the
+                # iteration running until CRON2 closes it; a terminal round closes it.
                 self._ai_debug_finalize_iteration(
-                    ctx, outcome, messages, instructions, tools_context)
-                kind = outcome.get('kind')
-                if kind == 'confirmation':
-                    self._ai_debug_finalize_loop(
-                        ctx, 'confirmation', None, is_cron_tick,
-                        confirmation_html=ai_debug_tracker.last_confirmation_message)
-                elif kind == 'terminal':
-                    self._ai_debug_finalize_loop(ctx, 'success', None, is_cron_tick)
-                elif kind == 'collision':
-                    self._ai_debug_finalize_loop(
-                        ctx, 'error', 'unrouted spawn/confirmation collision',
-                        is_cron_tick)
-                # 'continue' / 'awaiting_subagents': DEFER the loop finalize — the
-                # turn continues on a later tick (loop stays running, handle kept).
+                    ctx, outcome, messages, instructions, tools_context,
+                    is_running=has_tools)
+                if has_tools:
+                    if self.id:
+                        # On the MAIN cursor: committed with the per-session persist,
+                        # read by CRON2's tool batch.
+                        self.sudo().current_debug_iteration_id = ai_debug_tracker.iteration_id or False
+                else:
+                    self._ai_debug_finalize_loop(ctx, 'success', None, is_cron_tick=True)
+                    self._ai_debug_release_iteration_handle()
                 return outcome
             finally:
                 ai_debug_tracker.last_confirmation_message = None
+
+    def _run_tools_and_route(self):
+        """CRON2 seam: attach this round's tool.call rows to CRON1's iteration.
+
+        Re-open the loop CRON1 left running (``current_debug_loop_id``) and wire
+        the tracker's ``iteration_id`` to the iteration CRON1 committed
+        (``current_debug_iteration_id``), so the ``_handle_tool_calls`` override
+        attaches this round's tool rows to that SAME iteration. Run the base tool
+        batch, close the iteration, then finalize the loop by outcome: continue /
+        awaiting_subagents defer (the turn goes on); terminal -> success;
+        confirmation -> confirmation; collision -> error. Best-effort.
+        """
+        iteration_id = self.sudo().current_debug_iteration_id if self.id else False
+        loop_id = self.sudo().current_debug_loop_id if self.id else False
+        if not iteration_id or not loop_id:
+            # CRON1 declined instrumentation (or this is a non-model tool tick) —
+            # run the base routing bare.
+            return super()._run_tools_and_route()
+        original_uid = self.env.uid
+        with self._ai_debug_tracker_scope(), self.env.registry.cursor() as debug_cr:
+            debug_env = api.Environment(debug_cr, original_uid, {})
+            # Acting user not committed on this sibling cursor (uncommitted test
+            # user) — run bare, as _ai_debug_open_loop would have declined.
+            if not debug_env['res.users'].sudo().browse(original_uid).exists():
+                return super()._run_tools_and_route()
+            loop = debug_env['ai.debug.loop'].sudo().browse(loop_id).exists()
+            iteration = debug_env['ai.debug.iteration'].sudo().browse(iteration_id).exists()
+            if not loop or not iteration:
+                return super()._run_tools_and_route()
+            # Wire the tracker so _handle_tool_calls / _before_tool_calls attach to
+            # the committed iteration instead of opening a new one.
+            ai_debug_tracker.debug_env = debug_env
+            ai_debug_tracker.loop_id = loop_id
+            ai_debug_tracker.iteration_id = iteration_id
+            ai_debug_tracker.uid = original_uid
+            # A confirmation tool sets this on the tracker inside the batch; clear
+            # it first so a `confirmation` outcome reads THIS round's message, never
+            # a prior round's leftover.
+            ai_debug_tracker.last_confirmation_message = None
+            try:
+                outcome = super()._run_tools_and_route()
+            except Exception as e:
+                reason = self._ai_debug_termination_reason(e)
+                self._ai_debug_close_iteration_after_tools(debug_env, debug_cr, iteration, loop_id, None)
+                self._ai_debug_finalize_split_loop(debug_env, debug_cr, loop, reason, str(e))
+                self._ai_debug_release_iteration_handle()
+                raise
+            self._ai_debug_close_iteration_after_tools(debug_env, debug_cr, iteration, loop_id, outcome)
+            kind = outcome.get('kind')
+            if kind == 'terminal':
+                self._ai_debug_finalize_split_loop(
+                    debug_env, debug_cr, loop, 'success', None,
+                    last_output=self._ai_debug_extract_text(outcome.get('final_message')))
+            elif kind == 'confirmation':
+                self._ai_debug_finalize_split_loop(
+                    debug_env, debug_cr, loop, 'confirmation', None,
+                    confirmation_html=ai_debug_tracker.last_confirmation_message)
+            elif kind == 'collision':
+                self._ai_debug_finalize_split_loop(
+                    debug_env, debug_cr, loop, 'error',
+                    'unrouted spawn/confirmation collision')
+            # 'continue' / 'awaiting_subagents': DEFER the loop finalize (the turn
+            # continues on a later round; the loop stays running, handle kept).
+            self._ai_debug_release_iteration_handle()
+            return outcome
+
+    def _ai_debug_release_iteration_handle(self):
+        """Clear the per-round iteration pointer (main cursor). The next model
+        round opens its own iteration; leaving a stale id would misdirect CRON2."""
+        if self.id and self.sudo().current_debug_iteration_id:
+            self.sudo().current_debug_iteration_id = False
+
+    def _ai_debug_stash_completion(self, call):
+        """Bridge the CRON1 seam's executed request/response onto the thread-local
+        the finalize reads (``pop_last_completion_data``). The LLM batch runs the
+        HTTP in a bare worker thread, so the capture travels in
+        ``call['prepared']``/``call['result']`` rather than this cron thread's
+        tracker — copy it across so the existing finalize path is uniform. The
+        inline/sync path leaves both keys absent (the _execute_prepared_request
+        patch already stashed on THIS thread during get_completions)."""
+        prepared = call.get('prepared')
+        result = call.get('result')
+        if prepared is None and result is None:
+            return
+        try:
+            body = prepared.get('body') if isinstance(prepared, dict) else None
+            if isinstance(body, dict):
+                snapshot = dict(body)
+                for _k, _v in snapshot.items():
+                    if isinstance(_v, list):
+                        snapshot[_k] = list(_v)
+                ai_debug_tracker.last_request_body = snapshot
+            else:
+                ai_debug_tracker.last_request_body = body
+            if isinstance(result, dict) and result.get('ok'):
+                ai_debug_tracker.last_completion_response = result.get('raw_response')
+                ai_debug_tracker.last_llm_duration_ms = result.get('duration_ms')
+        except Exception:
+            _logger.warning("ai_debug: failed to stash completion from call bundle", exc_info=True)
+
+    def _ai_debug_close_iteration_after_tools(self, debug_env, debug_cr, iteration, loop_id, outcome):
+        """CRON2: close CRON1's still-running iteration after its tool batch ran.
+
+        The tool.call rows are already attached (via the _handle_tool_calls
+        override, to ``current_debug_iteration_id``); here just clear the spinner
+        and, if the tools produced the turn's final answer, record it. The
+        response fields (raw_request/response/tokens) were written by CRON1 and
+        are NOT touched. Best-effort; never raises to the caller."""
+        try:
+            values = {'is_running': False}
+            is_final = bool(outcome) and outcome.get('kind') == 'terminal'
+            output_text = ''
+            if outcome and (final_msg := outcome.get('final_message')):
+                output_text = self._ai_debug_extract_text(final_msg)
+                if output_text:
+                    values['output_message'] = output_text
+            iteration.with_user(SUPERUSER_ID).write(values)
+            debug_env.user._bus_send("AI_DEBUG_ITERATION", {
+                'id': iteration.id,
+                'loop_id': loop_id,
+                'sequence': iteration.sequence,
+                'is_running': False,
+                'instructions': iteration.instructions,
+                'messages_delta': iteration.messages_delta,
+                'messages_sent': iteration.messages_sent,
+                'raw_request': iteration.raw_request,
+                'raw_response': iteration.raw_response,
+                'output_message': iteration.output_message or output_text or '',
+                'tokens_in': iteration.tokens_in,
+                'tokens_cached': iteration.tokens_cached,
+                'tokens_out': iteration.tokens_out,
+                'duration_ms': iteration.duration_ms,
+                'has_tool_calls': True,
+                'is_final': is_final,
+                'available_tool_ids': iteration.available_tool_ids.ids,
+            })
+            debug_cr.commit()
+        except Exception:
+            _logger.exception("ai_debug: failed to close iteration after tools")
+            try:
+                debug_cr.rollback()
+            except Exception:
+                _logger.exception("ai_debug: failed to roll back after iteration-close error")
+
+    def _ai_debug_finalize_split_loop(self, debug_env, debug_cr, loop, termination_reason,
+                                      error_text, last_output=None, confirmation_html=None):
+        """CRON2 loop finalize: build the minimal ctx ``_ai_debug_finalize_loop``
+        needs and delegate to it, so the thread-name refresh + LOOP_END bus + the
+        cross-tick handle release stay in one place. Loop duration is measured from
+        the persisted ``start_time`` (the loop spans separate CRON1/CRON2
+        invocations, so a single monotonic delta cannot bridge them)."""
+        ctx = {
+            'debug_cr': debug_cr,
+            'debug_loop': loop,
+            'user': debug_env.user,
+            'thread': loop.thread_id,
+            'started_at': None,
+            'iteration_count': len(loop.iteration_ids),
+            'last_output': last_output or '',
+        }
+        self._ai_debug_finalize_loop(
+            ctx, termination_reason, error_text, is_cron_tick=True,
+            confirmation_html=confirmation_html)
 
     def _ai_debug_step_sync(self, messages, tools_context, *, allow_subagents,
                             model, instructions, record, **completion_options):
@@ -817,11 +1009,16 @@ class AiSession(models.Model):
         ai_debug_tracker.iteration_start_hook = _start_iteration
 
     def _ai_debug_finalize_iteration(self, ctx, outcome, messages, instructions,
-                                     tools_context):
+                                     tools_context, is_running=False):
         """Finalize the iteration row for this step: token usage + timing from
         the patched request, per-tick messages delta, terminal output text, and
         the end-of-step tool ids. Prefers the pending row created by the start
-        hook; synthesizes one if the hook never fired."""
+        hook; synthesizes one if the hook never fired.
+
+        ``is_running`` is left True by the CRON1 persist seam for a tool-calling
+        reply: the model half is written now, but the iteration stays in-flight
+        until CRON2 attaches its tool rows and closes it. Every other caller (the
+        single-frame terminal step, the sync one-shot) closes the iteration here."""
         debug_env = ctx['debug_env']
         debug_cr = ctx['debug_cr']
         debug_loop = ctx['debug_loop']
@@ -869,7 +1066,7 @@ class AiSession(models.Model):
 
         try:
             values = {
-                'is_running': False,
+                'is_running': is_running,
                 'messages_delta': delta,
                 'messages_sent': messages_sent,
                 'raw_request': raw_request,
@@ -906,7 +1103,7 @@ class AiSession(models.Model):
                 'id': debug_iteration.id,
                 'loop_id': debug_loop.id,
                 'sequence': ctx['iteration_count'],
-                'is_running': False,
+                'is_running': is_running,
                 'instructions': debug_iteration.instructions,
                 'messages_delta': delta,
                 'messages_sent': messages_sent,
@@ -958,7 +1155,16 @@ class AiSession(models.Model):
                     output_html = ctx['last_output']
             else:
                 output_html = None
-            duration_ms = int((time.monotonic() - started_at) * 1000)
+            if started_at is not None:
+                duration_ms = int((time.monotonic() - started_at) * 1000)
+            else:
+                # The CRON2 seam finalizes a loop opened in a SEPARATE CRON1
+                # invocation, so no single monotonic origin bridges them — measure
+                # from the loop's persisted wall-clock start instead.
+                start_time = debug_loop.start_time
+                duration_ms = (
+                    int((fields.Datetime.now() - start_time).total_seconds() * 1000)
+                    if start_time else 0)
             debug_loop.with_user(SUPERUSER_ID).write({
                 'is_running': False,
                 'output_message': output_html,
@@ -993,6 +1199,10 @@ class AiSession(models.Model):
             debug_cr.commit()
             if is_cron_tick and self.id and self.sudo().current_debug_loop_id:
                 self.sudo().current_debug_loop_id = False
+            # The loop ended: drop any dangling per-round iteration pointer too
+            # (a tools-pending round whose loop was finalized before CRON2 ran).
+            if is_cron_tick and self.id and self.sudo().current_debug_iteration_id:
+                self.sudo().current_debug_iteration_id = False
         except Exception:
             _logger.exception("ai_debug: failed to finalize loop record")
 
@@ -1594,6 +1804,7 @@ class AiSession(models.Model):
                     self._ai_debug_supersede_stale_loop(
                         debug_env, debug_cr, candidate, candidate.thread_id)
             self.sudo().current_debug_loop_id = False
+            self._ai_debug_release_iteration_handle()
         except Exception:
             _logger.exception("ai_debug: failed to close superseded loop on fold")
 
@@ -1641,6 +1852,7 @@ class AiSession(models.Model):
                     debug_env, debug_cr, candidate, candidate.thread_id,
                     termination_reason='cancelled')
         self.sudo().current_debug_loop_id = False
+        self._ai_debug_release_iteration_handle()
 
     def _ai_debug_mark_tool_calls_refused(self, call_ids):
         """Persist ``refused=True`` on the ai.debug.tool.call rows for *call_ids*

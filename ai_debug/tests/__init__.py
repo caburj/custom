@@ -1,6 +1,7 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 from . import test_export_transcript
 from . import test_cron_debug_loop
+from . import test_cron_debug_split_round
 from . import test_cron_debug_subagent
 from . import test_cron_debug_confirm
 from . import test_cron_debug_confirm_approve

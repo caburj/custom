@@ -1,72 +1,77 @@
-"""Monkey-patch AIApiService._request to capture LLM completion responses.
+"""Monkey-patch AIApiService._execute_prepared_request to capture LLM completions.
 
-The patch intercepts the low-level HTTP layer so the agentic-loop
-instrumentation in ai_session can read token usage, per-iteration LLM call
-duration, and the raw HTTP request body after every iteration. Captured
+The patch intercepts the env-free HTTP phase of the completion pipeline so the
+agentic-loop instrumentation in ai_session can read token usage, per-iteration
+LLM call duration, and the raw HTTP request body after every iteration. Captured
 values are stashed on the shared ``ai_debug_tracker`` thread-local (see
 agent_runtime_tracker) and retrieved via ``pop_last_completion_data``.
+
+``_execute_prepared_request`` (not ``_request``) is the seam because the tick
+split routes every completion through the three-phase pipeline
+(``_prepare_completion_request`` -> ``_execute_prepared_request`` ->
+``_finalize_completion_response``); the socket call lives in the middle phase,
+which ``requests.request`` performs directly, never via ``_request``. Capturing
+here is the only way to read token data without modifying enterprise code:
+``get_completions`` strips usage before returning to the loop.
+
+This same-thread capture serves the sync one-shot and the single-frame tick
+(both run the pipeline on the thread that instruments the iteration). The
+production LLM batch runs the pipeline in a bare worker thread instead, so its
+persist seam reads the request/response off the ``call`` bundle rather than this
+thread-local (see ai_session ``_persist_llm_reply``). The stash still runs on the
+worker thread, but no iteration hook is installed there so it is inert.
 
 Token extraction is provider-specific (OpenAI ``usage`` vs Google
 ``usageMetadata``); keeping the helpers here keeps all provider-format
 knowledge in one place.
-
-Intercepting _request is the only way to access token data without modifying
-enterprise code: get_completions() in each provider strips usage data before
-returning to the agentic loop.
 
 The patch is applied at module load time (bottom of this file). It is
 imported as the first item in ai_debug/models/__init__.py so it runs before
 any provider service is instantiated.
 """
 import logging
-import time
 
 from odoo.addons.ai.services.ai_api_service import AIApiService
 from odoo.addons.ai_debug.models.agent_runtime_tracker import ai_debug_tracker
 
 _logger = logging.getLogger(__name__)
 
-# Preserve the original _request so the patch can delegate to it.
-_original_request = AIApiService._request
+# Preserve the original (env-free) executor so the patch can delegate to it.
+# Accessing the staticmethod on the class yields the plain underlying function.
+_original_execute_prepared_request = AIApiService._execute_prepared_request
 
 
-def _patched_request(self, method, endpoint, body, **kwargs):
-    """Instrumented replacement for AIApiService._request.
+def _patched_execute_prepared_request(prepared):
+    """Instrumented replacement for AIApiService._execute_prepared_request.
 
-    For completion endpoints (/responses, :generateContent), records the raw
-    JSON response and wall-clock LLM API call duration on the shared tracker
-    so pop_last_completion_data() can retrieve them after each iteration.
+    For completion requests (URL /responses or :generateContent), records the
+    raw JSON response and the LLM API call duration (already measured by the
+    executor) on the shared tracker so pop_last_completion_data() can retrieve
+    them after each iteration. Any non-completion prepared request is passed
+    through unchanged (``_execute_prepared_request`` is completion-only today;
+    the URL guard keeps this robust if that ever widens).
 
-    All other endpoints (embeddings, transcriptions, etc.) are passed through
-    unchanged.
-
-    Instrumentation failures are caught and logged -- the LLM call result is
-    always returned normally regardless.
+    Instrumentation failures are caught and logged -- the call result is always
+    returned normally regardless.
     """
-    # Only intercept completion endpoints.
-    # OpenAI: endpoint == "/responses"
-    # Google: endpoint contains ":generateContent"
-    is_completion = (
-        endpoint.strip('/').endswith('responses')
-        or 'generateContent' in endpoint
-    )
-
+    url = prepared.get('url', '') if isinstance(prepared, dict) else ''
+    is_completion = url.strip('/').endswith('responses') or 'generateContent' in url
     if not is_completion:
-        return _original_request(self, method, endpoint, body, **kwargs)
+        return _original_execute_prepared_request(prepared)
 
-    # Completion path: stash request body, time the call, and stash the raw response.
-    # Request body is captured BEFORE the call so it's available even if the request fails.
+    # Completion path: stash the request body BEFORE the call so it is available
+    # even if the request fails.
     #
-    # SNAPSHOT the message list(s) at request time: the straight-line
-    # `_advance_one_step` reuses ONE `messages` list per step and extends it in
-    # place (the assistant event, then the tool outputs) AFTER this call returns.
-    # The provider builds its request body around that same list by reference, so
-    # a bare `= body` would let those later in-place appends grow the captured
-    # `input`/`contents` — the per-iteration `messages_sent` would then read the
-    # POST-tool-batch history instead of what was actually sent this iteration
-    # (the old generator dodged this by popping at its pre-batch yield seam).
-    # Freezing the top-level lists here keeps `messages_sent` == the request as
-    # sent; the item dicts are shared (never mutated in place, only appended).
+    # SNAPSHOT the message list(s) at request time: the single-frame tick reuses
+    # ONE `messages` list per step and extends it in place (the assistant event,
+    # then the tool outputs) AFTER this call returns. The provider builds its
+    # request body around that same list by reference, so a bare `= body` would
+    # let those later in-place appends grow the captured `input`/`contents` — the
+    # per-iteration `messages_sent` would then read the POST-tool-batch history
+    # instead of what was actually sent. Freezing the top-level lists here keeps
+    # `messages_sent` == the request as sent; item dicts are shared (never mutated
+    # in place, only appended).
+    body = prepared.get('body') if isinstance(prepared, dict) else None
     if isinstance(body, dict):
         snapshot = dict(body)
         for _k, _v in snapshot.items():
@@ -79,7 +84,8 @@ def _patched_request(self, method, endpoint, body, **kwargs):
     # Give the agentic-loop instrumentation a chance to create a pending
     # iteration row before the (potentially long) HTTP call begins, so the
     # frontend can render a spinner for the in-flight iteration instead of
-    # only seeing it pop in after the response arrives.
+    # only seeing it pop in after the response arrives. None on the batch worker
+    # thread (no hook installed there) -> skipped.
     start_hook = ai_debug_tracker.iteration_start_hook
     if start_hook is not None:
         try:
@@ -90,12 +96,15 @@ def _patched_request(self, method, endpoint, body, **kwargs):
                 exc_info=True,
             )
 
-    t0 = time.monotonic()
-    result = _original_request(self, method, endpoint, body, **kwargs)
+    result = _original_execute_prepared_request(prepared)
 
     try:
-        ai_debug_tracker.last_completion_response = result
-        ai_debug_tracker.last_llm_duration_ms = int((time.monotonic() - t0) * 1000)
+        # The executor returns {ok, raw_response, duration_ms} on success and a
+        # structured error dict (no raw_response) on failure — leave the response
+        # unstashed on failure so a failed iteration surfaces the request only.
+        if isinstance(result, dict) and result.get('ok'):
+            ai_debug_tracker.last_completion_response = result.get('raw_response')
+            ai_debug_tracker.last_llm_duration_ms = result.get('duration_ms')
     except Exception:
         _logger.warning(
             "ai_debug: failed to stash completion response on tracker",
@@ -105,8 +114,10 @@ def _patched_request(self, method, endpoint, body, **kwargs):
     return result
 
 
-# Apply the patch at module load time.
-AIApiService._request = _patched_request
+# Apply the patch at module load time. Keep it a staticmethod so callers that
+# reach it via the class (the LLM batch) or an instance (get_completions) both
+# invoke it with the single ``prepared`` argument.
+AIApiService._execute_prepared_request = staticmethod(_patched_execute_prepared_request)
 
 
 def _extract_tokens_openai(raw_response):
@@ -182,8 +193,9 @@ def _extract_tokens_google(raw_response):
 def pop_last_completion_data():
     """Retrieve and clear the most recent completion response, LLM duration, and request body.
 
-    Called by ai_session._advance_one_step immediately after each iteration
-    item arrives from the generator. The tracker fields are cleared
+    Called by the ai_session iteration finalizers (the single-frame/sync path via
+    ``_ai_debug_finalize_iteration``, the CRON1 persist seam via
+    ``_persist_llm_reply``) after each model round. The tracker fields are cleared
     immediately after reading to prevent cross-iteration contamination.
 
     Returns a dict with four keys:
