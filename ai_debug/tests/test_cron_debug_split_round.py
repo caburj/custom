@@ -1,5 +1,5 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
-"""Scenario 14 — the two-cron tick split keeps capturing every model call.
+"""The two-cron tick split keeps capturing every model call.
 
 The agent tick is split into two independently scheduled seams: CRON1
 (``_persist_llm_reply``) obtains + persists the model reply, CRON2
@@ -25,7 +25,9 @@ from odoo.api import Environment
 from odoo.tests import tagged
 
 from odoo.addons.ai.tests.common import (
-    TestAICommon, create_committed_ai_tool, mock_post_ai_response__flush_bus,
+    TestAICommon,
+    create_committed_ai_tool,
+    mock_post_ai_response__flush_bus,
 )
 
 
@@ -184,7 +186,9 @@ class TestCronDebugSplitRound(TestAICommon):
         bridge, which the in-process pump (inline path, no worker thread) can't
         reach because only the threaded persist surfaces the two keys on ``call``."""
         from odoo.addons.ai_debug.models.agent_runtime_tracker import ai_debug_tracker
-        from odoo.addons.ai_debug.models.ai_provider_patch import pop_last_completion_data
+        from odoo.addons.ai_debug.models.ai_provider_patch import (
+            pop_last_completion_data,
+        )
         ai_debug_tracker.__init__()  # pristine slots
         call = {
             'prepared': {'body': {
@@ -210,9 +214,12 @@ class TestCronDebugSplitRound(TestAICommon):
         raw response + duration onto the tracker for the same-thread finalize; a
         non-completion prepared-request is passed through untouched."""
         from unittest.mock import patch
+
         from odoo.addons.ai.services.ai_api_service import AIApiService
         from odoo.addons.ai_debug.models.agent_runtime_tracker import ai_debug_tracker
-        from odoo.addons.ai_debug.models.ai_provider_patch import pop_last_completion_data
+        from odoo.addons.ai_debug.models.ai_provider_patch import (
+            pop_last_completion_data,
+        )
         ai_debug_tracker.__init__()
         prepared = {
             'method': 'POST',
