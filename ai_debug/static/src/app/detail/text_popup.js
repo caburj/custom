@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, onMounted, useRef, proxy } from "@odoo/owl";
+import { Component, onMounted, signal, proxy } from "@odoo/owl";
 import { Dialog } from "@web/core/dialog/dialog";
 import { CopyButton } from "@web/core/copy_button/copy_button";
 
@@ -14,10 +14,10 @@ export class TextPopupDialog extends Component {
     };
 
     setup() {
-        this.codeRef = useRef("codeEl");
+        this.codeRef = signal.ref();
         this.state = proxy({ wrap: true });
         onMounted(() => {
-            const el = this.codeRef.el;
+            const el = this.codeRef();
             if (!el) return;
             el.textContent = this.props.content;
             // Apply Prism highlighting if available
