@@ -28,7 +28,7 @@
                     <div class="ai-tree-header-left">
                         <input type="checkbox"
                                class="ai-tree-select-all"
-                               t-custom-ref="selectAll"
+                               t-ref="this.selectAllRef"
                                t-att-checked="this.allChecked"
                                t-on-change.stop="this.toggleSelectAll"/>
                         <span>Traces</span>
@@ -54,8 +54,8 @@
                     </div>
                 </div>
 
-                <!-- Scrollable tree content area — t-custom-ref here so scrollIntoView targets the right container -->
-                <div t-attf-class="ai-tree-content {{ this.state.nestingMode === 'indent' ? 'ai-indent-mode' : '' }}" t-custom-ref="sidebar">
+                <!-- Scrollable tree content area — t-ref here so scrollIntoView targets the right container -->
+                <div t-attf-class="ai-tree-content {{ this.state.nestingMode === 'indent' ? 'ai-indent-mode' : '' }}" t-ref="this.sidebarRef">
 
                 <!-- Depth staircase line — SVG overlay, scrolls with content -->
                 <svg t-if="this.sidebarNodes.length > 0 and this.state.nestingMode === 'lines'"
@@ -230,7 +230,7 @@
         <input type="file"
                accept=".json"
                class="d-none"
-               t-custom-ref="fileInput"
+               t-ref="this.fileInputRef"
                t-on-change="this.onFileSelected"/>
     </div>
 </t>

@@ -43,7 +43,7 @@
                     <span class="ai-json-image-leaf" t-on-click="this.onClickImage"
                           t-on-mouseenter="this.onImageMouseEnter">
                         <span class="ai-json-string ai-json-value">"[image]"</span>
-                        <div class="ai-json-image-overlay" t-custom-ref="imageOverlay">
+                        <div class="ai-json-image-overlay" t-ref="this.imageOverlayRef">
                             <img t-att-src="this.imageSrc" class="ai-json-image-thumb"/>
                         </div>
                     </span>

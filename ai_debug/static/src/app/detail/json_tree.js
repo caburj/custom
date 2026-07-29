@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, onWillUpdateProps, useRef, proxy } from "@odoo/owl";
+import { Component, onWillUpdateProps, signal, proxy } from "@odoo/owl";
 import { CopyButton } from "@web/core/copy_button/copy_button";
 
 const TRUNCATION_THRESHOLD = 300;
@@ -18,7 +18,7 @@ export class JsonTree extends Component {
     };
 
     setup() {
-        this.imageOverlayRef = useRef("imageOverlay");
+        this.imageOverlayRef = signal.ref();
         const forceActive = typeof this.props.forceCollapsed === "boolean";
         this.state = proxy({
             expanded: forceActive ? !this.props.forceCollapsed : this.depth < 1,
@@ -146,7 +146,7 @@ export class JsonTree extends Component {
     }
 
     onImageMouseEnter(ev) {
-        const overlay = this.imageOverlayRef.el;
+        const overlay = this.imageOverlayRef();
         if (!overlay) return;
         const rect = ev.currentTarget.getBoundingClientRect();
         // Position below the leaf, aligned to left edge

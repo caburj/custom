@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, proxy, onMounted, onWillStart, onWillUnmount, onPatched, useRef } from "@odoo/owl";
+import { Component, proxy, onMounted, onWillStart, onWillUnmount, onPatched, signal } from "@odoo/owl";
 import { useService } from "@web/core/utils/hooks";
 import { MainComponentsContainer } from "@web/core/main_components_container";
 import { LoopDetail } from "./detail/loop_detail";
@@ -111,11 +111,11 @@ export class AiDebugApp extends Component {
         this.formatDuration = formatDuration;
 
         // Sidebar DOM ref for auto-scroll
-        this.sidebarRef = useRef("sidebar");
+        this.sidebarRef = signal.ref();
         // Select-all checkbox DOM ref for indeterminate state sync
-        this.selectAllRef = useRef("selectAll");
+        this.selectAllRef = signal.ref();
         // Hidden file input ref for import file picker
-        this.fileInputRef = useRef("fileInput");
+        this.fileInputRef = signal.ref();
         try {
             this.dialog = useService("dialog");
         } catch {
@@ -382,11 +382,11 @@ export class AiDebugApp extends Component {
         // ----------------------------------------------------------------
         onPatched(() => {
             // Indeterminate state for select-all checkbox (DOM property, not HTML attribute)
-            if (this.selectAllRef.el) {
-                this.selectAllRef.el.indeterminate = this.someChecked;
+            if (this.selectAllRef()) {
+                this.selectAllRef().indeterminate = this.someChecked;
             }
-            if (this._needsScroll && this._lastArrivedId && this.sidebarRef.el) {
-                const el = this.sidebarRef.el.querySelector(
+            if (this._needsScroll && this._lastArrivedId && this.sidebarRef()) {
+                const el = this.sidebarRef().querySelector(
                     `[data-node-id="${this._lastArrivedId}"]`,
                 );
                 if (el) {
@@ -394,8 +394,8 @@ export class AiDebugApp extends Component {
                 }
                 this._needsScroll = false;
             }
-            if (this._flashId && this.sidebarRef.el) {
-                const el = this.sidebarRef.el.querySelector(
+            if (this._flashId && this.sidebarRef()) {
+                const el = this.sidebarRef().querySelector(
                     `[data-node-id="${this._flashId}"]`,
                 );
                 if (el) {
@@ -920,8 +920,8 @@ export class AiDebugApp extends Component {
     }
 
     openImportPicker() {
-        if (!this.fileInputRef.el) return;
-        this.fileInputRef.el.click();
+        if (!this.fileInputRef()) return;
+        this.fileInputRef().click();
     }
 
     async onFileSelected(ev) {

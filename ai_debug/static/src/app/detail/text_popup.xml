@@ -16,7 +16,7 @@
                         successText="'Copied!'"
                         icon="'fa-clone'"/>
         </div>
-        <pre t-attf-class="ai-popup-content {{ this.state.wrap ? '' : 'ai-popup-nowrap' }}"><code t-custom-ref="codeEl" t-attf-class="language-{{this.props.language or 'json'}}"/></pre>
+        <pre t-attf-class="ai-popup-content {{ this.state.wrap ? '' : 'ai-popup-nowrap' }}"><code t-ref="this.codeRef" t-attf-class="language-{{this.props.language or 'json'}}"/></pre>
     </Dialog>
 </t>
 
