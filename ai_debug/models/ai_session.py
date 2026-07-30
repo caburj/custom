@@ -163,7 +163,7 @@ class AiSession(models.Model):
             _logger.exception("ai_debug: failed to resolve provider name for model %r", model)
             return None
 
-    def _generate_next_response(self, message, confirm_pending=False):
+    def _generate_next_response(self, message, ai_session_config={}):
         """Override to capture the raw user query before provider formatting.
 
         _generate_next_response receives the user message as AIMessageParts
@@ -173,6 +173,7 @@ class AiSession(models.Model):
         include it in the new_trace bus event.
         """
         user_query = ""
+        confirm_pending = ai_session_config.get("ai_confirm_tool")
         if not confirm_pending and message:
             for part in message:
                 if isinstance(part, dict) and part.get('type') == 'text':
@@ -180,7 +181,7 @@ class AiSession(models.Model):
                     user_query = content.get('data', '') if isinstance(content, dict) else content or ''
                     break
         self = self.with_context(_ai_debug_user_query=user_query)
-        yield from super()._generate_next_response(message, confirm_pending=confirm_pending)
+        yield from super()._generate_next_response(message, ai_session_config)
 
     @api.model
     def _get_direct_response(self, model, instructions, message, tools=None,
