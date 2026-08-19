@@ -40,7 +40,7 @@
                     </div>
                     <!-- If result is an object/array, use JsonTree; otherwise show as text -->
                     <t t-if="this.resultIsObject">
-                        <JsonTree data="this.props.toolCall.result"
+                        <JsonTree data="this.renderedResult"
                                   onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"
                                   onExpandImage="(title, src) => this.openImagePopup(title, src)"/>
                     </t>

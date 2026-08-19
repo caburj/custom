@@ -7,6 +7,22 @@ import { JsonTree } from "./json_tree";
 import { TextPopupDialog } from "./text_popup";
 import { ImagePopupDialog } from "./image_popup";
 
+function parseJsonContentData(part) {
+    const data = part?.type === "text" ? part.content?.data : undefined;
+    if (typeof data !== "string") {
+        return part;
+    }
+    try {
+        const parsed = JSON.parse(data);
+        if (parsed === null || typeof parsed !== "object") {
+            return part;
+        }
+        return { ...part, content: { ...part.content, data: parsed } };
+    } catch {
+        return part;
+    }
+}
+
 export class ToolCallDetail extends Component {
     static template = "ai_debug.ToolCallDetail";
     static components = { Notebook, CopyButton, JsonTree };
@@ -46,15 +62,20 @@ export class ToolCallDetail extends Component {
     }
 
     get resultString() {
-        const result = this.props.toolCall.result;
+        const result = this.renderedResult;
         if (result !== null && typeof result === "object") {
             return JSON.stringify(result, null, 2);
         }
         return String(result);
     }
 
-    get resultIsObject() {
+    get renderedResult() {
         const result = this.props.toolCall.result;
+        return Array.isArray(result) ? result.map(parseJsonContentData) : result;
+    }
+
+    get resultIsObject() {
+        const result = this.renderedResult;
         return result !== null && typeof result === "object";
     }
 
