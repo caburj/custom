@@ -24,6 +24,10 @@
         'web.assets_backend': [
             'ai_debug/static/src/debug_menu_button.js',
         ],
+        'web.assets_unit_tests': [
+            'ai_debug/static/src/app/event_payload.js',
+            'ai_debug/static/tests/**/*.test.js',
+        ],
     },
     'installable': True,
     'application': False,

@@ -6,6 +6,7 @@ import { useService } from "@web/core/utils/hooks";
 import { JsonTree } from "./json_tree";
 import { TextPopupDialog } from "./text_popup";
 import { formatTokens, formatDuration } from "../format_metrics";
+import { extractMessageText } from "../event_payload";
 
 export class LoopDetail extends Component {
     static template = "ai_debug.LoopDetail";
@@ -36,20 +37,7 @@ export class LoopDetail extends Component {
      * Legacy: {content: '...'}
      */
     _getMessageText(msg) {
-        if (typeof msg.content === "string") return msg.content;
-        if (Array.isArray(msg.content)) {
-            return msg.content
-                .filter(p => typeof p.text === "string")
-                .map(p => p.text)
-                .join("\n");
-        }
-        if (Array.isArray(msg.parts)) {
-            return msg.parts
-                .filter(p => typeof p.text === "string")
-                .map(p => p.text)
-                .join("\n");
-        }
-        return "";
+        return extractMessageText(msg);
     }
 
     get ragContextMessages() {

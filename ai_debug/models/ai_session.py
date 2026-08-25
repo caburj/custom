@@ -1,33 +1,129 @@
 import copy
+import json
 import logging
+import math
 import time
 import uuid
 
-from odoo import api, models
+from odoo import SUPERUSER_ID, api, models
 from odoo.exceptions import UserError
-from odoo.addons.ai_debug.models.ai_provider_patch import pop_last_completion_data
+from odoo.modules.registry import Registry
 
 _logger = logging.getLogger(__name__)
+
+_POSTCOMMIT_EVENTS_KEY = "ai_debug.events"
+_MAX_COLLECTION_ITEMS = 100
+_MAX_DEPTH = 12
+_MAX_EVENT_BYTES = 512_000
+_MAX_IMAGE_DATA_BYTES = 256_000
+_MAX_STRING_CHARS = 64_000
+_REDACTED = "[REDACTED]"
+_SENSITIVE_KEYS = {
+    "access_token",
+    "account_token",
+    "api_key",
+    "authorization",
+    "connection",
+    "cookie",
+    "cookies",
+    "csrf_token",
+    "database_uuid",
+    "dbuuid",
+    "headers",
+    "password",
+    "refresh_token",
+    "resume_token",
+    "secret",
+}
 
 
 class AiSession(models.Model):
     _inherit = 'ai.session'
 
-    def _ai_debug_bus_send(self, notification_type, payload):
-        """Send an ai_debug bus event using a separate cursor for real-time delivery.
+    def _ai_debug_bus_send(self, notification_type, payload, *, target_user_id=None):
+        """Publish sanitized facts only after the enclosing transaction commits.
 
-        Uses registry.cursor() so the event is committed and NOTIFY'd immediately,
-        before the next iteration of the agentic loop begins. This is the same
-        pattern used in ai/controllers/thread.py lines 44-46.
-
-        Never raises — instrumentation must never disrupt the main agentic loop.
+        The detached cursor runs from a post-commit hook, so a rollback cannot
+        leave a ghost trace.  The payload is made inert before it reaches the
+        callback: no recordsets, lazy values, or credentials cross the boundary.
+        Debugger failures are deliberately contained in the detached callback.
         """
         try:
-            with self.env.registry.cursor() as cr:
-                env = self.env(cr=cr)
-                env['bus.bus']._sendone('ai_debug', notification_type, payload)
+            with self.env.cr.savepoint(flush=False):
+                target_user_id = target_user_id or self.env.uid
+                target_user = self.env['res.users'].browse(target_user_id).exists()
+                if not target_user or not target_user._is_internal():
+                    return
+                sanitized_payload = self._ai_debug_sanitize(payload)
+                encoded = json.dumps(sanitized_payload, ensure_ascii=False, separators=(",", ":"))
+                if len(encoded.encode()) > _MAX_EVENT_BYTES:
+                    sanitized_payload = {
+                        "type": payload.get("type", notification_type),
+                        "trace_id": payload.get("trace_id"),
+                        "_payload_excluded": True,
+                    }
+
+                postcommit = self.env.cr.postcommit
+                events = postcommit.data.get(_POSTCOMMIT_EVENTS_KEY)
+                if events is None:
+                    events = postcommit.data[_POSTCOMMIT_EVENTS_KEY] = []
+                    dbname = self.env.cr.dbname
+
+                    @postcommit.add
+                    def publish_ai_debug_events():
+                        queued = postcommit.data.pop(_POSTCOMMIT_EVENTS_KEY, [])
+                        try:
+                            with Registry(dbname).cursor() as cr:
+                                env = api.Environment(cr, SUPERUSER_ID, {})
+                                for user_id, event_type, event_payload in queued:
+                                    env['bus.bus']._sendone(
+                                        env['res.users'].browse(user_id), event_type, event_payload,
+                                    )
+                        except Exception:
+                            _logger.exception("ai_debug: failed to publish committed bus events")
+
+                events.append((target_user.id, notification_type, sanitized_payload))
         except Exception:
-            _logger.exception("ai_debug: failed to send bus event '%s'", notification_type)
+            _logger.exception("ai_debug: failed to queue bus event '%s'", notification_type)
+
+    @classmethod
+    def _ai_debug_sanitize(cls, value, *, key=None, depth=0):
+        """Return a bounded JSON value and redact credential-bearing keys."""
+        normalized_key = str(key or "").lower().replace("-", "_")
+        if normalized_key in _SENSITIVE_KEYS or normalized_key.endswith(("_password", "_secret", "_token")):
+            return _REDACTED
+        if depth >= _MAX_DEPTH:
+            return "[MAX_DEPTH]"
+        if value is None or isinstance(value, (bool, int)):
+            return value
+        if isinstance(value, float):
+            return value if math.isfinite(value) else str(value)
+        if isinstance(value, str):
+            return value[:_MAX_STRING_CHARS]
+        if isinstance(value, bytes):
+            return {"_binary_excluded": True, "size": len(value)}
+        if isinstance(value, dict):
+            return {
+                str(item_key): cls._ai_debug_sanitize(
+                    item_value, key=item_key, depth=depth + 1,
+                )
+                for item_key, item_value in list(value.items())[:_MAX_COLLECTION_ITEMS]
+            }
+        if isinstance(value, (list, tuple)):
+            return [
+                cls._ai_debug_sanitize(item, depth=depth + 1)
+                for item in value[:_MAX_COLLECTION_ITEMS]
+            ]
+        return str(value)[:_MAX_STRING_CHARS]
+
+    def _ai_debug_try(self, builder):
+        """Run one instrumentation-only builder inside a recoverable savepoint."""
+        try:
+            with self.env.cr.savepoint(flush=False):
+                return builder()
+        except Exception:
+            _logger.exception("ai_debug: instrumentation builder failed")
+            return None
 
     def _ai_debug_state_snapshot(self, tools_context):
         """Return a JSON-safe snapshot of the current session environment and tool state."""
@@ -46,7 +142,15 @@ class AiSession(models.Model):
 
     @staticmethod
     def _ai_debug_is_image_type(mime):
-        return mime and 'image' in mime
+        return isinstance(mime, str) and mime.lower().startswith('image/')
+
+    @staticmethod
+    def _ai_debug_image_data(mime, data):
+        if not isinstance(data, str) or len(data.encode()) > _MAX_IMAGE_DATA_BYTES:
+            return {'mimeType': mime, '_binary_excluded': True}
+        if data.startswith('data:'):
+            return {'mimeType': mime, 'data': data}
+        return {'mimeType': mime, 'data': f'data:{mime};base64,{data}'}
 
     def _ai_debug_strip_binary(self, messages):
         """Return a copy of messages with non-image binary content replaced by
@@ -60,10 +164,14 @@ class AiSession(models.Model):
         for msg in messages:
             msg_copy = dict(msg)
 
-            # OpenAI image_generation_call: normalize raw base64 result to data URI
+            # Provider image generation result: retain only a bounded preview.
             if msg_copy.get('type') == 'image_generation_call' and 'result' in msg_copy:
                 fmt = msg_copy.get('output_format', 'png')
-                msg_copy['result'] = f'data:image/{fmt};base64,{msg_copy["result"]}'
+                image = self._ai_debug_image_data(f'image/{fmt}', msg_copy['result'])
+                msg_copy['result'] = image.get('data')
+                if image.get('_binary_excluded'):
+                    msg_copy.pop('result', None)
+                    msg_copy['_binary_excluded'] = True
 
             # OpenAI format: content is a list of typed parts
             if isinstance(msg_copy.get('content'), list):
@@ -73,20 +181,15 @@ class AiSession(models.Model):
             if isinstance(msg_copy.get('output'), list):
                 msg_copy['output'] = self._ai_debug_process_openai_parts(msg_copy['output'])
 
-            # Google format: parts list with inline_data dicts
+            # Google and normalized Enterprise format: inline_data parts.
             if isinstance(msg_copy.get('parts'), list):
                 new_parts = []
                 for part in msg_copy['parts']:
-                    if 'inline_data' in part:
+                    if isinstance(part, dict) and 'inline_data' in part:
                         mime = part['inline_data'].get('mimeType', '')
                         if self._ai_debug_is_image_type(mime):
                             data = part['inline_data'].get('data', '')
-                            new_parts.append({
-                                'inline_data': {
-                                    'mimeType': mime,
-                                    'data': f'data:{mime};base64,{data}',
-                                },
-                            })
+                            new_parts.append({'inline_data': self._ai_debug_image_data(mime, data)})
                         else:
                             new_parts.append({
                                 'inline_data': {
@@ -98,37 +201,57 @@ class AiSession(models.Model):
                         new_parts.append(part)
                 msg_copy['parts'] = new_parts
 
+            # Enterprise normalized messages put inline_data in content[].
+            if isinstance(msg_copy.get('content'), list):
+                normalized_parts = []
+                for part in msg_copy['content']:
+                    if not isinstance(part, dict) or part.get('type') != 'inline_data':
+                        normalized_parts.append(part)
+                        continue
+                    content = part.get('content') or {}
+                    mime = content.get('mimeType') or content.get('mime_type') or ''
+                    if self._ai_debug_is_image_type(mime):
+                        normalized_parts.append({
+                            **{key: value for key, value in part.items() if key != 'content'},
+                            'content': self._ai_debug_image_data(mime, content.get('data', '')),
+                        })
+                    else:
+                        normalized_parts.append({
+                            'type': 'inline_data',
+                            'content': {'mimeType': mime, '_binary_excluded': True},
+                        })
+                msg_copy['content'] = normalized_parts
+
             result.append(msg_copy)
         return result
 
-    @staticmethod
-    def _ai_debug_process_openai_parts(parts):
+    def _ai_debug_process_openai_parts(self, parts):
         """Process a list of OpenAI-format parts: keep images, strip other binary."""
         new_parts = []
         for part in parts:
+            if not isinstance(part, dict):
+                new_parts.append(part)
+                continue
             ptype = part.get('type', '')
             if ptype in ('input_image', 'output_image'):
-                # Preserve image — image_url is already a data URI
-                new_parts.append(part)
+                image_url = part.get('image_url') or part.get('url')
+                if isinstance(image_url, str) and len(image_url.encode()) <= _MAX_IMAGE_DATA_BYTES:
+                    new_parts.append(part)
+                else:
+                    new_parts.append({'type': ptype, '_binary_excluded': True})
             elif ptype in ('input_file', 'output_file'):
                 new_parts.append({'type': ptype, '_binary_excluded': True})
             else:
                 new_parts.append(part)
         return new_parts
 
-    def _ai_debug_serialize_tools(self, tools, model):
-        """Return provider-formatted tool definitions (full JSON schemas) for the iteration payload.
-
-        Calls _prepare_tools to get the same formatted list that will be sent to the LLM,
-        including name, description, and full parameter schemas.
-        """
+    def _ai_debug_serialize_tools(self, tools):
+        """Return the normalized tool definitions sent by current Enterprise."""
         if not tools:
             return []
         try:
-            from odoo.addons.ai.services.ai_provider import AIProvider
-            provider = AIProvider.get_by_model(self.env, model)
             tools_by_name = {tool.sudo().ai_tool_name: tool for tool in tools}
-            return self._prepare_tools(tools_by_name, provider)
+            return self._prepare_tools(tools_by_name)
         except Exception:
             _logger.exception("ai_debug: failed to serialize tools for iteration event")
             return []
@@ -149,77 +272,129 @@ class AiSession(models.Model):
             _logger.exception("ai_debug: failed to resolve current tools from tools_context")
             return self.env['ir.actions.server']
 
-    def _ai_debug_resolve_provider_name(self, model):
-        """Return the provider name string ('openai', 'google', etc.) for a given model.
+    @staticmethod
+    def _ai_debug_message_summary(messages):
+        """Describe normalized messages without exporting their content."""
+        summary = []
+        for message in messages or []:
+            if not isinstance(message, dict):
+                continue
+            parts = message.get('content') or message.get('parts') or []
+            summary.append({
+                'role': message.get('role'),
+                'part_types': [
+                    part.get('type') or ('inline_data' if 'inline_data' in part else None)
+                    for part in parts
+                    if isinstance(part, dict)
+                ],
+                'part_count': len(parts) if isinstance(parts, list) else 0,
+            })
+        return summary
 
-        Uses the same AIProvider.get_by_model lookup that _ai_debug_serialize_tools uses.
-        Returns None on any failure — callers include it in bus events only when non-None.
-        """
-        try:
-            from odoo.addons.ai.services.ai_provider import AIProvider
-            provider = AIProvider.get_by_model(self.env, model)
-            return provider.name
-        except Exception:
-            _logger.exception("ai_debug: failed to resolve provider name for model %r", model)
-            return None
+    def _ai_debug_trace_request_prepared(self, request):
+        """Queue the single exchange trace created by a durable first round."""
+        self.ensure_one()
+        request.ensure_one()
+        if request.round_no != 1:
+            return
+        payload = request.payload or {}
+        self._ai_debug_bus_send('new_trace', {
+            'type': 'new_trace',
+            'trace_id': request.exchange_uuid,
+            'exchange_uuid': request.exchange_uuid,
+            'request_uuid': request.request_uuid,
+            'round_no': request.round_no,
+            'session_id': self.id,
+            'agent_name': self.agent_id.name if self.agent_id else None,
+            'state_snapshot': {
+                'request_state': request.state,
+                'round_limit': request.round_limit,
+                'message_summary': self._ai_debug_message_summary(payload.get('messages')),
+            },
+        }, target_user_id=request.user_id.id)
 
-    def _generate_next_response(self, message, ai_session_config={}, pending_tool_response=None):
-        """Override to capture the raw user query before provider formatting.
+    def _ai_debug_trace_request_result(self, request, response, outcome, previous_state):
+        """Queue authoritative request facts accepted by `_apply_iap_response`."""
+        current_state = request.state
+        if current_state != previous_state:
+            self._ai_debug_bus_send('request_state', {
+                'type': 'request_state',
+                'trace_id': request.exchange_uuid,
+                'exchange_uuid': request.exchange_uuid,
+                'request_uuid': request.request_uuid,
+                'round_no': request.round_no,
+                'previous_state': previous_state,
+                'state': current_state,
+            }, target_user_id=request.user_id.id)
 
-        _generate_next_response receives the user message as AIMessageParts
-        ([{type: 'text', content: {data: '...'}}]) before it gets transformed
-        by _format_to_llm into provider-specific structures. We extract the
-        text here and thread it via env context so _run_agentic_loop can
-        include it in the new_trace bus event.
-        """
-        user_query = ""
-        if not pending_tool_response and message:
-            for part in message:
-                if isinstance(part, dict) and part.get('type') == 'text':
-                    content = part.get('content')
-                    user_query = content.get('data', '') if isinstance(content, dict) else content or ''
-                    break
-        self = self.with_context(_ai_debug_user_query=user_query)
-        yield from super()._generate_next_response(message, ai_session_config, pending_tool_response=pending_tool_response)
+        if not outcome.get('applied') or previous_state in ('done', 'failed'):
+            return
+        if current_state not in ('done', 'failed'):
+            return
+
+        result = response.get('result') if isinstance(response, dict) else None
+        result_summary = self._ai_debug_message_summary([result]) if isinstance(result, dict) else []
+        content = result.get('content') or [] if isinstance(result, dict) else []
+        has_tool_calls = any(
+            isinstance(part, dict) and part.get('type') == 'tool_call'
+            for part in content
+        )
+        error = request.error or None
+        self._ai_debug_bus_send('iteration', {
+            'type': 'iteration',
+            'trace_id': request.exchange_uuid,
+            'exchange_uuid': request.exchange_uuid,
+            'request_uuid': request.request_uuid,
+            'round_no': request.round_no,
+            'iteration_id': request.request_uuid,
+            'iteration_index': request.round_no,
+            'message_summary': self._ai_debug_message_summary((request.payload or {}).get('messages')),
+            'response_summary': result_summary,
+            'has_tool_calls': has_tool_calls,
+            'is_final': current_state == 'done',
+            'error': error,
+            'request_state': current_state,
+        }, target_user_id=request.user_id.id)
+        self._ai_debug_bus_send('loop_end', {
+            'type': 'loop_end',
+            'trace_id': request.exchange_uuid,
+            'exchange_uuid': request.exchange_uuid,
+            'request_uuid': request.request_uuid,
+            'round_no': request.round_no,
+            'termination_reason': 'success' if current_state == 'done' else 'error',
+            'error': error,
+            'iteration_count': request.round_no,
+            'tool_call_count': 0,
+        }, target_user_id=request.user_id.id)
+
+    def _apply_iap_response(self, request, response, *, try_lock=False):
+        """Trace only durable results that the Enterprise ledger actually accepts."""
+        previous_state = request.state
+        outcome = super()._apply_iap_response(request, response, try_lock=try_lock)
+        self._ai_debug_try(
+            lambda: self._ai_debug_trace_request_result(
+                request, response, outcome, previous_state,
+            )
+        )
+        return outcome
+
+    def _generate_next_response(self, message, pending_tool_response=None):
+        """Keep the synchronous stateful entry point signature compatible."""
+        yield from super()._generate_next_response(message, pending_tool_response=pending_tool_response)
 
     @api.model
-    def _get_direct_response(self, model, instructions, message, tools=None,
-            record=None, tool_results_collector=None, **completion_options):
-        """Override to capture the raw user query before provider formatting.
-
-        _get_direct_response receives message as AIMessageParts
-        ([{type: 'text', content: {data: '...'}}]) before _format_to_llm.
-        """
-        user_query = ""
-        for part in message or []:
-            if isinstance(part, dict) and part.get('type') == 'text':
-                content = part.get('content')
-                user_query = content.get('data', '') if isinstance(content, dict) else content or ''
-                break
-        self = self.with_context(_ai_debug_user_query=user_query)
+    def _get_direct_response(self, instructions, message, tools=None,
+            record=None, agent_id=None, tool_results_collector=None, **completion_options):
+        """Preserve current one-shot callers while `_run_agentic_loop` traces them."""
         return super()._get_direct_response(
-            model, instructions, message, tools=tools,
-            record=record, tool_results_collector=tool_results_collector,
+            instructions, message, tools=tools, record=record, agent_id=agent_id,
+            tool_results_collector=tool_results_collector,
             **completion_options,
         )
 
     @api.model
-    def _run_agentic_loop(self, model, instructions, messages, tools_context, record=None, **completion_options):
-        """Override to instrument the agentic loop with bus events.
-
-        Emits five event types over the 'ai_debug' bus channel:
-          - new_trace: once at loop start (session_id, parent linkage, agent name, model, instructions)
-          - iteration: once per LLM API call (messages sent, raw response, or error)
-          - tool_call_started: once per tool BEFORE execution (name, args, stable tool_call_id)
-          - tool_call_completed: once per tool AFTER execution (result, success, same tool_call_id)
-          - loop_end: once at loop termination (reason, stats, duration)
-
-        All events use separate cursors (registry.cursor()) so they arrive in the
-        browser one-by-one during loop execution, not batched at HTTP commit.
-
-        All instrumentation is wrapped in try/except — failures are logged but never
-        propagated to the main agentic loop.
-        """
+    def _run_agentic_loop(self, instructions, message, tools_context, record=None, **completion_options):
+        """Preserve coarse tracing for callers that still use the synchronous loop."""
         trace_id = uuid.uuid4().hex
         _debug_ctx = {
             'trace_id': trace_id,
@@ -227,187 +402,87 @@ class AiSession(models.Model):
             'tool_call_count': 0,
         }
 
-        # Propagate _debug_ctx to _handle_tool_calls via env context
         self = self.with_context(_debug_ctx=_debug_ctx)
-
         iteration_count = 0
         started_at = time.monotonic()
-
-        # Resolve provider name once — a single _run_agentic_loop call uses one model.
-        provider_name = self._ai_debug_resolve_provider_name(model)
-
-        # User query is captured from the raw message in _generate_next_response
-        # or _get_direct_response (before provider formatting) and threaded here
-        # via env context — no need to reverse-parse provider-specific formats.
-        user_query = self.env.context.get('_ai_debug_user_query', '')
-
-        # INST-02: Read parent linkage from env context — set by _handle_tool_calls
-        # (via ai_parent_trace_id) and ir.actions.server override (via ai_parent_tool_call_id)
-        # when a subagent session is spawned. None for root sessions.
-        parent_trace_id = self.env.context.get('ai_parent_trace_id')        # None for root
-        parent_tool_call_id = self.env.context.get('ai_parent_tool_call_id')  # None for root
-
         self._ai_debug_bus_send('new_trace', {
             'type': 'new_trace',
             'trace_id': trace_id,
-            'session_id': self.id,                       # INST-01: own ORM ID
-            'parent_trace_id': parent_trace_id,          # INST-02: UUID hex or None
-            'parent_tool_call_id': parent_tool_call_id,  # INST-02: LLM call_id or None
-            'agent_name': self.agent_id.name if self.agent_id else None,
-            'model_name': model,
-            'user_query': user_query,
-            # system prompt only; RAG context is in messages (captured in iteration events)
-            'instructions': instructions,
-            'state_snapshot': self._ai_debug_state_snapshot(tools_context),
+            'session_id': self.id if len(self) == 1 else None,
+            'parent_trace_id': self.env.context.get('ai_parent_trace_id'),
+            'parent_tool_call_id': self.env.context.get('ai_parent_tool_call_id'),
+            'agent_name': self.agent_id.name if len(self) == 1 and self.agent_id else None,
+            'state_snapshot': {
+                'uid': self.env.uid,
+                'company_id': self.env.company.id,
+                'res_model': tools_context.get('res_model'),
+                'res_id': tools_context.get('res_id'),
+            },
         })
-
-        # Track termination state — finally block always emits loop_end.
-        # This handles the common case where _add_user_message returns early
-        # on final_message, abandoning the generator via GeneratorExit.
         termination_reason = 'success'
         termination_error = None
+        completed = False
 
         try:
             for item in super()._run_agentic_loop(
-                model, instructions, messages,
-                tools_context=tools_context, record=record, **completion_options,
+                instructions, message, tools_context, record, **completion_options,
             ):
                 if 'tool_calls' in item or 'final_message' in item:
-                    # LLM responded — emit iteration event before yielding to caller.
-                    # pop_last_completion_data() MUST be called first, immediately after
-                    # the item arrives, to avoid reading data from the next iteration.
-                    try:
-                        completion_data = pop_last_completion_data()
-                        tokens = completion_data.get('tokens')
-                        llm_duration_ms = completion_data.get('llm_duration_ms')
-                        request_body = completion_data.get('request_body')
-                    except Exception:
-                        _logger.warning("ai_debug: failed to pop completion data", exc_info=True)
-                        tokens = None
-                        llm_duration_ms = None
-                        request_body = None
-
                     iteration_count += 1
                     iteration_id = uuid.uuid4().hex
                     _debug_ctx['iteration_id'] = iteration_id
-
-                    # Shallow-copy message list and strip binary content before sending.
-                    # Captured here (after super yields) so it reflects what was actually
-                    # sent to the LLM for this iteration (full accumulated history).
-                    messages_snapshot = self._ai_debug_strip_binary(list(messages))
-
-                    # Resolve tools per-iteration: with on-demand topic loading,
-                    # available tools can change between iterations as the LLM
-                    # calls load_topic to bring new tools into scope.
-                    current_tools = self._ai_debug_current_tools(tools_context)
-                    iteration_tools = self._ai_debug_serialize_tools(current_tools, model)
-
-                    iteration_payload = {
+                    parts = item.get('tool_calls') or item.get('final_message') or []
+                    self._ai_debug_bus_send('iteration', {
                         'type': 'iteration',
                         'trace_id': trace_id,
                         'iteration_id': iteration_id,
                         'iteration_index': iteration_count,
-                        'messages_sent': messages_snapshot,
-                        'raw_response': item.get('metadata'),
+                        'response_summary': self._ai_debug_message_summary([{
+                            'role': 'assistant',
+                            'content': parts,
+                        }]),
                         'has_tool_calls': 'tool_calls' in item,
                         'is_final': 'final_message' in item,
-                        'provider': provider_name,
-                        'tools': iteration_tools,
-                    }
-                    # tokens is conditional — absence signals failed/unavailable extraction
-                    if tokens is not None:
-                        iteration_payload['tokens'] = tokens
-                    if llm_duration_ms is not None:
-                        iteration_payload['duration_ms'] = llm_duration_ms
-
-                    # Strip binary data from request body message arrays before bus transmission.
-                    # OpenAI uses 'input'; Google uses 'contents'.
-                    if request_body is not None:
-                        request_body = copy.copy(request_body)  # shallow copy to avoid mutating original
-                        if isinstance(request_body.get('input'), list):
-                            request_body['input'] = self._ai_debug_strip_binary(request_body['input'])
-                        if isinstance(request_body.get('contents'), list):
-                            request_body['contents'] = self._ai_debug_strip_binary(request_body['contents'])
-                        iteration_payload['request_body'] = request_body
-
-                    self._ai_debug_bus_send('iteration', iteration_payload)
-
+                    })
+                    if 'final_message' in item:
+                        completed = True
                 yield item
 
+            if not completed:
+                termination_reason = 'error'
+                termination_error = 'no_final_response'
+
         except UserError as e:
-            # max_successive_calls UserError: "Number of successive API calls exceeded..."
             termination_reason = 'max_iterations' if 'successive' in str(e).lower() else 'error'
-            termination_error = str(e)
-
-            # Capture any partial timing data — tokens are skipped on errored iterations
-            # per CONTEXT.md locked decision ("absence signals failure").
-            try:
-                err_completion_data = pop_last_completion_data()
-                err_llm_duration_ms = err_completion_data.get('llm_duration_ms')
-            except Exception:
-                err_llm_duration_ms = None
-
-            # Emit a failed iteration event so it appears in the sidebar tree.
-            # Per locked decision: LLM API failures emit an iteration event with error
-            # field instead of raw_response, before loop_end.
-            err_tools = self._ai_debug_serialize_tools(
-                self._ai_debug_current_tools(tools_context), model,
-            )
-            err_iteration_payload = {
+            termination_error = type(e).__name__
+            iteration_count += 1
+            self._ai_debug_bus_send('iteration', {
                 'type': 'iteration',
                 'trace_id': trace_id,
                 'iteration_id': uuid.uuid4().hex,
-                'iteration_index': iteration_count + 1,
-                'messages_sent': self._ai_debug_strip_binary(list(messages)),
-                'raw_response': None,
+                'iteration_index': iteration_count,
                 'error': termination_error,
-                'error_type': type(e).__name__,
                 'has_tool_calls': False,
                 'is_final': False,
-                'provider': provider_name,
-                'tools': err_tools,
-            }
-            if err_llm_duration_ms is not None:
-                err_iteration_payload['duration_ms'] = err_llm_duration_ms
-            self._ai_debug_bus_send('iteration', err_iteration_payload)
+            })
             raise
 
         except Exception as e:
-            # Unexpected error — emit failed iteration before loop_end (via finally)
             termination_reason = 'error'
-            termination_error = str(e)
-
-            try:
-                err_completion_data = pop_last_completion_data()
-                err_llm_duration_ms = err_completion_data.get('llm_duration_ms')
-            except Exception:
-                err_llm_duration_ms = None
-
-            err_tools = self._ai_debug_serialize_tools(
-                self._ai_debug_current_tools(tools_context), model,
-            )
-            err_iteration_payload = {
+            termination_error = type(e).__name__
+            iteration_count += 1
+            self._ai_debug_bus_send('iteration', {
                 'type': 'iteration',
                 'trace_id': trace_id,
                 'iteration_id': uuid.uuid4().hex,
-                'iteration_index': iteration_count + 1,
-                'messages_sent': self._ai_debug_strip_binary(list(messages)),
-                'raw_response': None,
+                'iteration_index': iteration_count,
                 'error': termination_error,
-                'error_type': type(e).__name__,
                 'has_tool_calls': False,
                 'is_final': False,
-                'provider': provider_name,
-                'tools': err_tools,
-            }
-            if err_llm_duration_ms is not None:
-                err_iteration_payload['duration_ms'] = err_llm_duration_ms
-            self._ai_debug_bus_send('iteration', err_iteration_payload)
+            })
             raise
 
         finally:
-            # Always emit loop_end — handles normal completion, GeneratorExit
-            # (consumer abandoned generator), and exceptions (after re-raise).
             self._ai_debug_bus_send('loop_end', {
                 'type': 'loop_end',
                 'trace_id': trace_id,
@@ -418,7 +493,8 @@ class AiSession(models.Model):
                 'duration_ms': int((time.monotonic() - started_at) * 1000),
             })
 
-    def _handle_tool_calls(self, tool_calls, tools_by_name, tools_context, record, confirmed_tool_id=None, refuse_all=False):
+    def _handle_tool_calls(self, tool_calls, tools_by_name, tools_context, record,
+            pending_tool_response=None, refuse_all=False):
         """Override to emit tool_call_started and tool_call_completed bus events per tool.
 
         Each tool call emits two events:
@@ -442,7 +518,7 @@ class AiSession(models.Model):
             # Instrumentation not active — skip all overhead
             yield from super()._handle_tool_calls(
                 tool_calls, tools_by_name, tools_context, record,
-                confirmed_tool_id, refuse_all,
+                pending_tool_response, refuse_all,
             )
             return
 
@@ -487,7 +563,7 @@ class AiSession(models.Model):
 
         for item in super()._handle_tool_calls(
             tool_calls, tools_by_name, tools_context, record,
-            confirmed_tool_id, refuse_all,
+            pending_tool_response, refuse_all,
         ):
             if tool_results := item.get('tool_results'):
                 # state_after_batch = copy.deepcopy(tools_context.get('state') or {})
@@ -496,7 +572,6 @@ class AiSession(models.Model):
                     tool_call_data = result_item.get('tool_call', {})
                     tool_name = tool_call_data.get('name')
                     call_id = tool_call_data.get('call_id')  # LLM's original call ID
-                    args = tool_call_data.get('args', {})
                     result = result_item.get('result')
                     success = result_item.get('success', True)
                     error = str(result) if not success and result is not None else None

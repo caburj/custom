@@ -43,6 +43,10 @@ export function serializeTrace(trace) {
         parent_trace_id: trace.parent_trace_id,
         parent_tool_call_id: trace.parent_tool_call_id,
         session_id: trace.session_id,
+        exchange_uuid: trace.exchange_uuid,
+        request_uuid: trace.request_uuid,
+        round_no: trace.round_no,
+        request_state: trace.request_state,
         // Map → array of [iterationId, iterationRecord] pairs
         iterations: [...trace.iterations.entries()].map(([iterId, iter]) => [
             iterId,
@@ -50,6 +54,10 @@ export function serializeTrace(trace) {
                 iteration_id: iter.iteration_id,
                 trace_id: iter.trace_id,
                 iteration_index: iter.iteration_index,
+                exchange_uuid: iter.exchange_uuid,
+                request_uuid: iter.request_uuid,
+                round_no: iter.round_no,
+                request_state: iter.request_state,
                 has_error: iter.has_error,
                 is_final: iter.is_final,
                 error: iter.error,

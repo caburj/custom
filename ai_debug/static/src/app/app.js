@@ -9,32 +9,7 @@ import { probeIDB, writeTrace, deleteTraces, loadAllTraces, serializeTrace } fro
 import { ImportPreviewDialog } from "./import_dialog";
 import { TextPopupDialog } from "./detail/text_popup";
 import { formatTokens, formatDuration } from "./format_metrics";
-
-/**
- * Translate backend token schema to the store's canonical token shape.
- *
- * Backend emits: { input, output, total, cached?, reasoning? }
- *   - 'cached' is the backend field name (single read-cache metric)
- *   - 'cache_write' has no backend field yet (always 0 for now)
- *
- * Store schema (locked decision): { input, output, cache_read, cache_write, reasoning, total }
- *   - 'cached' -> 'cache_read'   (backend -> store rename)
- *   - 'cache_write' always 0     (no backend field exists yet)
- *
- * All fields default to 0 so errored iterations (null/missing token payload)
- * produce a uniform zero shape — no NaN, no crash downstream.
- */
-function normalizeTokens(t) {
-    if (!t) return { input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: 0, total: 0 };
-    return {
-        input: t.input ?? 0,
-        output: t.output ?? 0,
-        cache_read: t.cached ?? 0,   // backend 'cached' -> store 'cache_read'
-        cache_write: t.cache_write ?? 0,
-        reasoning: t.reasoning ?? 0,
-        total: t.total ?? 0,
-    };
-}
+import { callbackCorrelation, normalizeTokens } from "./event_payload";
 
 /**
  * Reconstruct a reactive trace object from a plain IDB-stored record.
@@ -134,6 +109,7 @@ export class AiDebugApp extends Component {
         // ----------------------------------------------------------------
 
         this._onNewTrace = (payload) => {
+            if (this.traces.has(payload.trace_id)) return;
             const { parent_trace_id, parent_tool_call_id } = payload;
 
             // --- Child trace: check for parent before placing ---
@@ -192,8 +168,8 @@ export class AiDebugApp extends Component {
                     expanded: true,
                     toolCalls,
                     // Phase 7: full payload for detail panel
-                    messages_sent: payload.messages_sent || [],
-                    raw_response: payload.raw_response || null,
+                    messages_sent: payload.messages_sent || payload.message_summary || [],
+                    raw_response: payload.raw_response ?? payload.response_summary ?? null,
                     is_final: payload.is_final || false,
                     error: payload.error || null,
                     request_body: payload.request_body || null,
@@ -202,11 +178,20 @@ export class AiDebugApp extends Component {
                     tokens: normalizeTokens(payload.tokens),
                     duration_ms: payload.duration_ms ?? 0,
                     ai_provider: payload.provider ?? null,
+                    ...callbackCorrelation(payload),
                 });
                 this._lastArrivedId = payload.iteration_id;
                 this._needsScroll = true;
             }
             // NEVER touch this.state.selectedId here — SIDE-05
+        };
+
+        this._onRequestState = (payload) => {
+            const trace = this.traces.get(payload.trace_id);
+            if (!trace) return;
+            trace.request_state = payload.state ?? trace.request_state;
+            trace.request_uuid = payload.request_uuid ?? trace.request_uuid;
+            trace.round_no = payload.round_no ?? trace.round_no;
         };
 
         this._onToolCallStarted = (payload) => {
@@ -282,6 +267,7 @@ export class AiDebugApp extends Component {
         this._onLoopEnd = (payload) => {
             const trace = this.traces.get(payload.trace_id);
             if (!trace) return;
+            if (trace.status !== "running") return;
             trace.status =
                 payload.termination_reason === "success"
                     ? "success"
@@ -356,6 +342,7 @@ export class AiDebugApp extends Component {
         // ----------------------------------------------------------------
         onMounted(async () => {
             this.busService.subscribe("new_trace", this._onNewTrace);
+            this.busService.subscribe("request_state", this._onRequestState);
             this.busService.subscribe("iteration", this._onIteration);
             this.busService.subscribe("tool_call_started", this._onToolCallStarted);
             this.busService.subscribe("tool_call_completed", this._onToolCallCompleted);
@@ -365,6 +352,7 @@ export class AiDebugApp extends Component {
 
         onWillUnmount(() => {
             this.busService.unsubscribe("new_trace", this._onNewTrace);
+            this.busService.unsubscribe("request_state", this._onRequestState);
             this.busService.unsubscribe("iteration", this._onIteration);
             this.busService.unsubscribe("tool_call_started", this._onToolCallStarted);
             this.busService.unsubscribe("tool_call_completed", this._onToolCallCompleted);
@@ -413,6 +401,7 @@ export class AiDebugApp extends Component {
     // ----------------------------------------------------------------
 
     _placeTrace(payload) {
+        if (this.traces.has(payload.trace_id)) return;
         const iterations = proxy(new Map());
         this.traces.set(payload.trace_id, {
             trace_id: payload.trace_id,
@@ -430,6 +419,7 @@ export class AiDebugApp extends Component {
             parent_trace_id: payload.parent_trace_id || null,
             parent_tool_call_id: payload.parent_tool_call_id || null,
             session_id: payload.session_id || null,
+            ...callbackCorrelation(payload),
         });
         this._lastArrivedId = payload.trace_id;
         this._flashId = payload.trace_id;
