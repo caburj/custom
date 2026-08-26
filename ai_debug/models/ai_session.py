@@ -270,7 +270,7 @@ class AiSession(models.Model):
         try:
             for item in super()._run_agentic_loop(
                 model, instructions, messages,
-                tools_context, record, **completion_options,
+                tools_context=tools_context, record=record, **completion_options,
             ):
                 if 'tool_calls' in item or 'final_message' in item:
                     # LLM responded — emit iteration event before yielding to caller.
