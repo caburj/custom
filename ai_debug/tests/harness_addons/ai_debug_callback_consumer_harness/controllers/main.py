@@ -1,4 +1,5 @@
 import json
+import os
 
 from werkzeug.exceptions import NotFound
 from werkzeug.wrappers import Response
@@ -6,7 +7,10 @@ from werkzeug.wrappers import Response
 from odoo import SUPERUSER_ID, api, http
 
 
-IAP_ENDPOINT = 'http://127.0.0.1:18170'
+IAP_ENDPOINT = os.environ.get(
+    'AI_DEBUG_CALLBACK_IAP_ENDPOINT',
+    'http://127.0.0.1:18170',
+)
 
 
 def _require_loopback():
@@ -40,9 +44,13 @@ class AiDebugCallbackConsumerHarness(http.Controller):
         ], limit=1)
         if not account:
             account = env['iap.account'].sudo().create({'service_id': service.id})
-        account.with_context(disable_iap_update=True).write({
-            'account_token': 'ai-debug-callback-harness-fixture',
-        })
+        if body.get('use_linked_account'):
+            if not account.account_token:
+                raise NotFound()
+        else:
+            account.with_context(disable_iap_update=True).write({
+                'account_token': 'ai-debug-callback-harness-fixture',
+            })
         agent = env['ai.agent'].create({
             'name': 'AI Debug Paired Callback Agent',
             'system_prompt': 'Answer the user plainly.',

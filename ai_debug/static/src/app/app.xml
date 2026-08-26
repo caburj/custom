@@ -111,15 +111,17 @@
                                 </t>
                                 <t t-set="totals" t-value="this.getTraceTotals(node.trace)"/>
                                 <span class="ai-tree-meta-line">
-                                    <t t-out="node.trace.agent_name or 'Agent'"/> &#xB7; <t t-out="node.trace.model_name or ''"/>
-                                    <t t-if="totals.total_duration_ms > 0 or totals.total_tokens > 0">
+                                    <t t-out="node.trace.agent_name or 'Agent'"/>
+                                    <t t-if="node.trace.ai_provider"> &#xB7; <t t-out="node.trace.ai_provider"/></t>
+                                    <t t-if="node.trace.model_name"> &#xB7; <t t-out="node.trace.model_name"/></t>
+                                    <t t-if="totals.has_duration_metrics">
                                         &#xB7; <t t-out="this.formatDuration(totals.total_duration_ms)"/>
-                                        <t t-if="totals.total_input > 0 and totals.total_output > 0">
-                                            &#xB7; <t t-out="this.formatTokens(totals.total_input)"/>&#x2191; <t t-out="this.formatTokens(totals.total_output)"/>&#x2193;
-                                        </t>
-                                        <t t-elif="totals.total_tokens > 0">
-                                            &#xB7; <t t-out="this.formatTokens(totals.total_tokens)"/> tok
-                                        </t>
+                                    </t>
+                                    <t t-if="totals.total_input > 0 and totals.total_output > 0">
+                                        &#xB7; <t t-out="this.formatTokens(totals.total_input)"/>&#x2191; <t t-out="this.formatTokens(totals.total_output)"/>&#x2193;
+                                    </t>
+                                    <t t-elif="totals.total_tokens > 0">
+                                        &#xB7; <t t-out="this.formatTokens(totals.total_tokens)"/> tok
                                     </t>
                                 </span>
                             </span>
@@ -151,7 +153,7 @@
                                 <span class="ai-tree-label-dim">
                                     &#xB7; <t t-out="node.iter.toolCalls.size"/> call<t t-if="node.iter.toolCalls.size !== 1">s</t>
                                 </span>
-                                <t t-if="node.iter.duration_ms > 0">
+                                <t t-if="node.iter.duration_ms !== null and node.iter.duration_ms !== undefined">
                                     <span class="ai-tree-label-dim"> &#xB7; <t t-out="this.formatDuration(node.iter.duration_ms)"/></span>
                                 </t>
                                 <t t-elif="node.trace.status === 'running' and node.id === [...node.trace.iterations.keys()].pop()">

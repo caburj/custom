@@ -3,6 +3,7 @@
 
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -28,9 +29,13 @@ IAP_PYTHON = Path('/Users/joseph/.venvs/saas-19.4/bin/python3')
 RUN_SUFFIX = uuid.uuid4().hex[:10]
 CONSUMER_DB = f'ai_debug_callback_e2e_{RUN_SUFFIX}'
 IAP_DB = f'ai_debug_iap_e2e_{RUN_SUFFIX}'
-CONSUMER_URL = 'http://127.0.0.1:18069'
-IAP_URL = 'http://127.0.0.1:18170'
-IAP_EVENTED_URL = 'http://127.0.0.1:18173'
+CONSUMER_PORT = int(os.environ.get('AI_DEBUG_E2E_CONSUMER_PORT', '18069'))
+CONSUMER_GEVENT_PORT = int(os.environ.get('AI_DEBUG_E2E_CONSUMER_GEVENT_PORT', '18072'))
+IAP_PORT = int(os.environ.get('AI_DEBUG_E2E_IAP_PORT', '18170'))
+IAP_GEVENT_PORT = int(os.environ.get('AI_DEBUG_E2E_IAP_GEVENT_PORT', '18173'))
+CONSUMER_URL = f'http://127.0.0.1:{CONSUMER_PORT}'
+IAP_URL = f'http://127.0.0.1:{IAP_PORT}'
+IAP_EVENTED_URL = f'http://127.0.0.1:{IAP_GEVENT_PORT}'
 
 
 def append_jsonl(path, payload):
@@ -42,6 +47,7 @@ class LoopbackState:
     def __init__(self, evidence_dir):
         self.provider_journal = evidence_dir / 'provider-requests.jsonl'
         self.callback_journal = evidence_dir / 'callback-shim.jsonl'
+        self.provider_payloads = []
 
 
 class ProviderHandler(BaseHTTPRequestHandler):
@@ -58,6 +64,7 @@ class ProviderHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         payload = self._read_json()
+        self.state.provider_payloads.append(payload)
         append_jsonl(self.state.provider_journal, {
             'message_count': len(payload.get('messages') or []),
             'tool_count': len(payload.get('tools') or []),
@@ -68,6 +75,11 @@ class ProviderHandler(BaseHTTPRequestHandler):
                 'type': 'text',
                 'content': {'data': 'Hello from the paired fake provider.'},
             }],
+            'provider_metadata': {
+                'provider': 'callback_harness',
+                'model': 'deterministic-fixture',
+                'api': 'loopback',
+            },
         }})
 
     def _read_json(self):
@@ -130,10 +142,10 @@ def wait_json(url, predicate=lambda payload: True, timeout=45):
     raise RuntimeError(f'Timed out waiting for {url}: {last_error}')
 
 
-def start_process(command, cwd, log_path):
+def start_process(command, cwd, log_path, env):
     stream = log_path.open('wb')
     process = subprocess.Popen(
-        command, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT,
+        command, cwd=cwd, env=env, stdout=stream, stderr=subprocess.STDOUT,
     )
     return process, stream
 
@@ -170,7 +182,19 @@ def wait_debug_events(timeout=20):
     raise RuntimeError(f'Debug events did not settle: {[event["type"] for event in events]}')
 
 
-def assert_debug_events(events, request_uuid, exchange_uuid):
+def collect_normalized_keys(value):
+    keys = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            keys.add(''.join(character for character in key.casefold() if character.isalnum()))
+            keys.update(collect_normalized_keys(item))
+    elif isinstance(value, list):
+        for item in value:
+            keys.update(collect_normalized_keys(item))
+    return keys
+
+
+def assert_debug_events(events, request_uuid, exchange_uuid, provider_payload):
     types = [event['type'] for event in events]
     if types.count('new_trace') != 1:
         raise AssertionError(types)
@@ -185,19 +209,72 @@ def assert_debug_events(events, request_uuid, exchange_uuid):
         raise AssertionError(trace)
     if trace['request_uuid'] != request_uuid or trace['round_no'] != 1:
         raise AssertionError(trace)
+    if trace['user_query'] != 'Hi':
+        raise AssertionError(trace)
+    if trace['instructions'] != provider_payload['instructions']:
+        raise AssertionError(trace)
     if iteration['trace_id'] != exchange_uuid or iteration['iteration_id'] != request_uuid:
         raise AssertionError(iteration)
     if iteration['request_uuid'] != request_uuid or iteration['round_no'] != 1:
         raise AssertionError(iteration)
+    request_body = iteration['request_body']
+    if request_body['request_uuid'] != request_uuid:
+        raise AssertionError(request_body)
+    for key in ('messages', 'instructions', 'tools'):
+        if request_body[key] != provider_payload[key]:
+            raise AssertionError((key, request_body[key], provider_payload[key]))
+    for key, value in provider_payload['options'].items():
+        if request_body.get(key) != value:
+            raise AssertionError((key, request_body, provider_payload['options']))
+    if 'messages_sent' in iteration or 'tools' in iteration:
+        raise AssertionError('Callback event must not duplicate request messages/tools')
+    tool_names = {tool['name'] for tool in request_body['tools']}
+    if tool_names != {'ai_tool_ask_user_question', 'ai_tool_load_skills'}:
+        raise AssertionError(tool_names)
+    expected_result = {
+        'request_uuid': request_uuid,
+        'status': 'success',
+        'result': {
+            'role': 'assistant',
+            'content': [{
+                'type': 'text',
+                'content': {'data': 'Hello from the paired fake provider.'},
+            }],
+            'provider_metadata': {
+                'provider': 'callback_harness',
+                'model': 'deterministic-fixture',
+                'api': 'loopback',
+            },
+        },
+    }
+    if iteration['raw_response'] != expected_result:
+        raise AssertionError(iteration['raw_response'])
+    if iteration.get('provider') != 'callback_harness':
+        raise AssertionError(iteration)
+    if iteration.get('model_name') != 'deterministic-fixture':
+        raise AssertionError(iteration)
+    if iteration.get('provider_api') != 'loopback':
+        raise AssertionError(iteration)
+    if iteration.get('duration_kind') != 'request_lifecycle':
+        raise AssertionError(iteration)
+    if not isinstance(iteration.get('duration_ms'), int) or iteration['duration_ms'] < 0:
+        raise AssertionError(iteration)
+    if 'tokens' in iteration:
+        raise AssertionError('Callback contract must not fabricate token metrics')
     if terminal['trace_id'] != exchange_uuid or terminal['request_uuid'] != request_uuid:
         raise AssertionError(terminal)
     if terminal['termination_reason'] != 'success':
         raise AssertionError(terminal)
-    encoded = json.dumps(events).lower()
-    forbidden = ('account_token', 'dbuuid', 'database_uuid', 'connection', 'headers', 'cookie')
-    leaked = [key for key in forbidden if key in encoded]
+    forbidden = {
+        'accounttoken', 'cookie', 'databaseuuid', 'dbuuid', 'headers',
+        'connection',
+    }
+    leaked = sorted(forbidden & collect_normalized_keys(events))
     if leaked:
         raise AssertionError(f'Forbidden debugger fields: {leaked}')
+    encoded = json.dumps(events).lower()
+    if 'ai-debug-callback-harness-fixture' in encoded or 'forged-callback-field' in encoded:
+        raise AssertionError('Debugger events exposed a harness credential fixture')
 
 
 def main():
@@ -229,6 +306,8 @@ def main():
     processes = []
     streams = []
     try:
+        child_env = os.environ.copy()
+        child_env['AI_DEBUG_CALLBACK_IAP_ENDPOINT'] = IAP_URL
         consumer_addons = ','.join(map(str, (
             CUSTOM, ENTERPRISE, CORE / 'addons', CUSTOM_HARNESS_ADDONS, HARNESS_ADDONS,
         )))
@@ -240,38 +319,48 @@ def main():
         consumer_init = [
             str(MASTER_PYTHON), str(CORE / 'odoo-bin'), '-d', CONSUMER_DB,
             '-i', 'ai_app,ai_debug,ai_debug_callback_consumer_harness', '--stop-after-init',
-            '--http-port=18069', '--gevent-port=18072',
+            f'--http-port={CONSUMER_PORT}', f'--gevent-port={CONSUMER_GEVENT_PORT}',
             '--addons-path', consumer_addons, '--without-demo',
         ]
         iap_init = [
             str(IAP_PYTHON), str(IAP_CORE / 'odoo-bin'), '-d', IAP_DB,
-            '-i', 'odoo_ai', '--stop-after-init', '--http-port=18170',
-            '--gevent-port=18173', '--addons-path', iap_addons,
+            '-i', 'odoo_ai', '--stop-after-init', f'--http-port={IAP_PORT}',
+            f'--gevent-port={IAP_GEVENT_PORT}', '--addons-path', iap_addons,
             '--load=base,web,odoo_ai,odoo_ai_callback_harness', '--without-demo',
         ]
         with (runtime_dir / 'consumer-init.log').open('wb') as stream:
-            subprocess.run(consumer_init, cwd=ENTERPRISE, stdout=stream, stderr=subprocess.STDOUT, check=True)
+            subprocess.run(
+                consumer_init, cwd=ENTERPRISE, env=child_env,
+                stdout=stream, stderr=subprocess.STDOUT, check=True,
+            )
         with (runtime_dir / 'iap-init.log').open('wb') as stream:
-            subprocess.run(iap_init, cwd=IAP_APPS, stdout=stream, stderr=subprocess.STDOUT, check=True)
+            subprocess.run(
+                iap_init, cwd=IAP_APPS, env=child_env,
+                stdout=stream, stderr=subprocess.STDOUT, check=True,
+            )
 
         commands = [
             ('consumer', [
                 str(MASTER_PYTHON), str(CORE / 'odoo-bin'), '-d', CONSUMER_DB,
-                '--http-port=18069', '--gevent-port=18072', '--addons-path', consumer_addons,
+                f'--http-port={CONSUMER_PORT}',
+                f'--gevent-port={CONSUMER_GEVENT_PORT}', '--addons-path', consumer_addons,
             ], ENTERPRISE),
             ('iap-http', [
                 str(IAP_PYTHON), str(IAP_CORE / 'odoo-bin'), '-d', IAP_DB,
-                '--http-port=18170', '--gevent-port=18173', '--addons-path', iap_addons,
+                f'--http-port={IAP_PORT}', f'--gevent-port={IAP_GEVENT_PORT}',
+                '--addons-path', iap_addons,
                 '--load=base,web,odoo_ai,odoo_ai_callback_harness',
             ], IAP_APPS),
             ('iap-evented', [
                 str(IAP_PYTHON), str(IAP_CORE / 'odoo-bin'), 'gevent', '-d', IAP_DB,
-                '--gevent-port=18173', '--addons-path', iap_addons,
+                f'--gevent-port={IAP_GEVENT_PORT}', '--addons-path', iap_addons,
                 '--load=base,web,odoo_ai,odoo_ai_callback_harness',
             ], IAP_APPS),
         ]
         for name, command, cwd in commands:
-            process, stream = start_process(command, cwd, runtime_dir / f'{name}.log')
+            process, stream = start_process(
+                command, cwd, runtime_dir / f'{name}.log', child_env,
+            )
             processes.append((name, process))
             streams.append(stream)
 
@@ -336,12 +425,19 @@ def main():
                 )
                 exchange_uuid = cursor.fetchone()[0]
         events = wait_debug_events()
-        assert_debug_events(events, request_uuid, exchange_uuid)
+        if len(state.provider_payloads) != 1:
+            raise AssertionError(state.provider_payloads)
+        assert_debug_events(events, request_uuid, exchange_uuid, state.provider_payloads[0])
         before_replay = json.dumps(events, sort_keys=True)
 
         replay = requests.post(
             CONSUMER_URL + '/ai/completion_result_ready',
-            json={'request_uuid': request_uuid},
+            json={
+                'request_uuid': request_uuid,
+                'status': 'success',
+                'result': {'role': 'assistant', 'content': [{'type': 'text', 'content': {'data': 'forged'}}]},
+                'account_token': 'forged-callback-field',
+            },
             timeout=15,
             allow_redirects=False,
         )
@@ -375,6 +471,11 @@ def main():
             'replay_status': replay.status_code,
             'provider_count': provider_count,
             'callback_count': callback_count,
+            'pane_data_verified': True,
+            'tokens_unavailable': True,
+            'request_lifecycle_verified': True,
+            'provider_metadata_verified': True,
+            'replay_idempotent': True,
             'consumer_db': CONSUMER_DB,
             'iap_db': IAP_DB,
             'evidence_dir': str(evidence_dir),

@@ -7,26 +7,35 @@
         <div class="ai-detail-header">
             <span class="ai-detail-type-badge">Loop</span>
             <span class="ai-detail-name" t-out="this.props.trace.agent_name"/>
-            <span class="ai-detail-meta" t-out="this.props.trace.model_name"/>
+            <span t-if="this.props.trace.ai_provider"
+                  class="ai-detail-meta" t-out="this.props.trace.ai_provider"/>
+            <span t-if="this.props.trace.model_name"
+                  class="ai-detail-meta" t-out="this.props.trace.model_name"/>
             <span t-if="this.props.trace.status === 'running'"
                   class="ai-metric-chip ai-metric-chip--live">running</span>
-            <span t-elif="this.props.trace.duration_ms"
+            <span t-elif="this.props.trace.duration_ms !== null and this.props.trace.duration_ms !== undefined"
                   class="ai-metric-chip">
                 <t t-out="this.formatDuration(this.props.trace.duration_ms)"/>
+                <t t-if="this.props.trace.duration_kind === 'request_lifecycle'"> lifecycle</t>
             </span>
+        </div>
+
+        <div t-if="this.props.trace._payload_excluded"
+             class="alert alert-warning mb-0 rounded-0 border-start-0 border-end-0 py-2 px-3">
+            Trace payload omitted because the sanitized debugger event exceeded its size limit.
         </div>
 
         <!-- Tabbed content -->
         <Notebook>
-            <t t-set-slot="system_prompt" title="'System Prompt'" isVisible="true">
+            <t t-set-slot="system_prompt" title="'Submitted Instructions'" isVisible="true">
                 <div class="ai-detail-section">
                     <div class="ai-detail-section-header">
-                        <span>System Prompt</span>
+                        <span>Submitted Instructions</span>
                         <CopyButton content="() => this.instructionsContent" successText="'Copied!'"/>
                     </div>
                     <!-- Truncated text preview; click opens popup -->
                     <div class="ai-detail-text-preview"
-                         t-on-click="() => this.openTextPopup('System Prompt', this.props.trace.instructions, 'markdown')"
+                         t-on-click="() => this.openTextPopup('Submitted Instructions', this.props.trace.instructions, 'markdown')"
                          t-out="this.props.trace.instructions"/>
                 </div>
             </t>
@@ -36,66 +45,28 @@
                     <div class="ai-detail-section-header">
                         <span>RAG Context</span>
                     </div>
-                    <div t-if="!this.ragContextMessages" class="ai-detail-empty-tab">
+                    <div t-if="!this.ragContexts" class="ai-detail-empty-tab">
                         Waiting for first iteration to capture RAG context...
                     </div>
-                    <div t-elif="this.ragContextMessages.length === 0" class="ai-detail-empty-tab">
+                    <div t-elif="this.ragContexts.length === 0" class="ai-detail-empty-tab">
                         No RAG context detected in this trace.
                     </div>
                     <t t-else="">
-                        <t t-foreach="this.ragContextMessages" t-as="msg" t-key="msg_index">
+                        <t t-foreach="this.ragContexts" t-as="context" t-key="context_index">
                             <div class="ai-detail-section">
                                 <div class="ai-detail-section-header">
-                                    <span t-out="'System Message ' + (msg_index + 1)"/>
-                                    <CopyButton content="() => msg._text" successText="'Copied!'"/>
+                                    <span t-out="'RAG Context ' + (context_index + 1)"/>
+                                    <CopyButton content="() => context" successText="'Copied!'"/>
                                 </div>
                                 <div class="ai-detail-text-preview"
-                                     t-on-click="() => this.openTextPopup('RAG Context', msg._text, 'markdown')"
-                                     t-out="msg._text"/>
+                                     t-on-click="() => this.openTextPopup('RAG Context', context, 'markdown')"
+                                     t-out="context"/>
                             </div>
                         </t>
                     </t>
                 </div>
             </t>
 
-            <t t-set-slot="metrics" title="'Metrics'" isVisible="true">
-                <div class="ai-metrics-table-wrapper">
-                    <table class="ai-metrics-table">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Duration</th>
-                                <th>Input</th>
-                                <th>Output</th>
-                                <th>Cached</th>
-                                <th>Reasoning</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <t t-foreach="this.iterationRows" t-as="row" t-key="row.index">
-                                <tr>
-                                    <td t-out="row.index"/>
-                                    <td t-out="row.duration_ms > 0 ? this.formatDuration(row.duration_ms) : '–'"/>
-                                    <td t-out="row.tokens.input > 0 ? this.formatTokens(row.tokens.input) : '–'"/>
-                                    <td t-out="row.tokens.output > 0 ? this.formatTokens(row.tokens.output) : '–'"/>
-                                    <td t-out="row.tokens.cache_read > 0 ? this.formatTokens(row.tokens.cache_read) : '–'"/>
-                                    <td t-out="row.tokens.reasoning > 0 ? this.formatTokens(row.tokens.reasoning) : '–'"/>
-                                </tr>
-                            </t>
-                        </tbody>
-                        <tfoot>
-                            <tr class="ai-metrics-totals-row">
-                                <td><strong>Total</strong></td>
-                                <td><strong t-out="this.traceTotals.total_duration_ms > 0 ? this.formatDuration(this.traceTotals.total_duration_ms) : '–'"/></td>
-                                <td><strong t-out="this.traceTotals.total_input > 0 ? this.formatTokens(this.traceTotals.total_input) : '–'"/></td>
-                                <td><strong t-out="this.traceTotals.total_output > 0 ? this.formatTokens(this.traceTotals.total_output) : '–'"/></td>
-                                <td><strong t-out="this.traceTotals.total_cached > 0 ? this.formatTokens(this.traceTotals.total_cached) : '–'"/></td>
-                                <td><strong t-out="this.traceTotals.total_reasoning > 0 ? this.formatTokens(this.traceTotals.total_reasoning) : '–'"/></td>
-                            </tr>
-                        </tfoot>
-                    </table>
-                </div>
-            </t>
         </Notebook>
     </div>
 </t>

@@ -8,9 +8,10 @@
             <span class="ai-detail-name">Iteration <t t-out="this.props.iteration.iteration_index"/></span>
             <span t-if="this.props.iteration.is_final" class="ai-detail-meta">Final</span>
             <span t-if="this.props.iteration.has_error" class="ai-detail-meta error">Error</span>
-            <span t-if="this.props.iteration.duration_ms"
+            <span t-if="this.props.iteration.duration_ms !== null and this.props.iteration.duration_ms !== undefined"
                   class="ai-metric-chip">
                 <t t-out="this.formatDuration(this.props.iteration.duration_ms)"/>
+                <t t-if="this.props.iteration.duration_kind === 'request_lifecycle'"> lifecycle</t>
             </span>
             <span t-if="this.props.iteration.tokens and this.props.iteration.tokens.total > 0"
                   class="ai-metric-chip">
@@ -21,6 +22,10 @@
         <!-- Error banner if iteration has error -->
         <div t-if="this.props.iteration.error" class="alert alert-danger mb-0 rounded-0 border-start-0 border-end-0 py-2 px-3">
             <strong>Error:</strong> <t t-out="this.props.iteration.error"/>
+        </div>
+        <div t-if="this.props.iteration._payload_excluded"
+             class="alert alert-warning mb-0 rounded-0 border-start-0 border-end-0 py-2 px-3">
+            Detail payload omitted because the sanitized debugger event exceeded its size limit.
         </div>
 
         <Notebook>
@@ -39,7 +44,7 @@
             <t t-set-slot="request" title="'Request'" isVisible="true">
                 <div class="ai-detail-section">
                     <div class="ai-detail-section-header">
-                        <span>HTTP Request Body</span>
+                        <span t-out="this.props.iteration.request_label || 'Request Body'"/>
                         <CopyButton content="() => this.requestJson" successText="'Copied!'"/>
                     </div>
                     <JsonTree data="this.props.iteration.request_body"
@@ -48,10 +53,10 @@
                 </div>
             </t>
 
-            <t t-set-slot="response" title="'Raw Response'" isVisible="true">
+            <t t-set-slot="response" title="'Response'" isVisible="true">
                 <div class="ai-detail-section">
                     <div class="ai-detail-section-header">
-                        <span>Raw LLM Response</span>
+                        <span t-out="this.props.iteration.response_label || 'LLM Response'"/>
                         <CopyButton content="() => this.responseJson" successText="'Copied!'"/>
                     </div>
                     <JsonTree data="this.props.iteration.raw_response"
@@ -60,10 +65,10 @@
                 </div>
             </t>
 
-            <t t-set-slot="tools" title="'Tools Definition'" isVisible="true">
+            <t t-set-slot="tools" title="'Tools Offered'" isVisible="true">
                 <div class="ai-detail-section">
                     <div class="ai-detail-section-header">
-                        <span>Tools Definition</span>
+                        <span>Tools Offered to Model</span>
                         <CopyButton content="() => this.toolsJson" successText="'Copied!'"/>
                     </div>
                     <JsonTree data="this.props.iteration.tools"

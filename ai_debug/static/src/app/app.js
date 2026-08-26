@@ -9,7 +9,12 @@ import { probeIDB, writeTrace, deleteTraces, loadAllTraces, serializeTrace } fro
 import { ImportPreviewDialog } from "./import_dialog";
 import { TextPopupDialog } from "./detail/text_popup";
 import { formatTokens, formatDuration } from "./format_metrics";
-import { callbackCorrelation, normalizeTokens } from "./event_payload";
+import {
+    callbackCorrelation,
+    iterationMessages,
+    iterationTools,
+    normalizeTokens,
+} from "./event_payload";
 
 /**
  * Reconstruct a reactive trace object from a plain IDB-stored record.
@@ -34,20 +39,26 @@ function hydrateTrace(plain) {
             ...iter,
             expanded: true,
             toolCalls,
-            // Phase 17: zero-default for pre-17 IDB records that lack these fields.
-            // Do NOT use normalizeTokens() here — stored records were already normalized
-            // at ingestion time and have the correct cache_read/cache_write shape.
-            // Using normalizeTokens would incorrectly remap cached->cache_read on records
-            // that already have cache_read. The ?? operator handles missing fields only.
-            tokens: iter.tokens ?? { input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: 0, total: 0 },
-            duration_ms: iter.duration_ms ?? 0,
+            // Stored token objects were normalized at ingestion. Missing values
+            // stay null so "unavailable" is not confused with a measured zero.
+            tokens: iter.tokens ?? null,
+            duration_ms: iter.duration_ms ?? null,
             ai_provider: iter.ai_provider ?? null,
+            model_name: iter.model_name ?? null,
+            provider_api: iter.provider_api ?? null,
+            duration_kind: iter.duration_kind ?? null,
+            request_label: iter.request_label ?? null,
+            response_label: iter.response_label ?? null,
             tools: iter.tools ?? [],
         });
     }
     return {
         ...plain,
         created_ts: plain.created_ts || plain.storedAt || 0,
+        ai_provider: plain.ai_provider ?? null,
+        model_name: plain.model_name ?? "",
+        duration_ms: plain.duration_ms ?? null,
+        duration_kind: plain.duration_kind ?? null,
         expanded: false,
         hydrated: true,
         iterations,
@@ -168,21 +179,29 @@ export class AiDebugApp extends Component {
                     expanded: true,
                     toolCalls,
                     // Phase 7: full payload for detail panel
-                    messages_sent: payload.messages_sent || payload.message_summary || [],
+                    messages_sent: iterationMessages(payload),
                     raw_response: payload.raw_response ?? payload.response_summary ?? null,
                     is_final: payload.is_final || false,
                     error: payload.error || null,
-                    request_body: payload.request_body || null,
-                    tools: payload.tools || [],
+                    request_body: payload.request_body ?? null,
+                    request_label: payload.request_label ?? null,
+                    response_label: payload.response_label ?? null,
+                    tools: iterationTools(payload),
                     // Phase 17: token/timing/provider fields
                     tokens: normalizeTokens(payload.tokens),
-                    duration_ms: payload.duration_ms ?? 0,
+                    duration_ms: payload.duration_ms ?? null,
+                    duration_kind: payload.duration_kind ?? null,
                     ai_provider: payload.provider ?? null,
+                    model_name: payload.model_name ?? null,
+                    provider_api: payload.provider_api ?? null,
+                    _payload_excluded: payload._payload_excluded ?? false,
                     ...callbackCorrelation(payload),
                 });
                 this._lastArrivedId = payload.iteration_id;
                 this._needsScroll = true;
             }
+            trace.ai_provider = payload.provider ?? trace.ai_provider;
+            trace.model_name = payload.model_name ?? trace.model_name;
             // NEVER touch this.state.selectedId here — SIDE-05
         };
 
@@ -274,7 +293,8 @@ export class AiDebugApp extends Component {
                     : payload.termination_reason === "max_iterations"
                     ? "max_iterations"
                     : "error";
-            trace.duration_ms = payload.duration_ms;
+            trace.duration_ms = payload.duration_ms ?? trace.duration_ms;
+            trace.duration_kind = payload.duration_kind ?? trace.duration_kind;
             // NEVER touch this.state.selectedId here — SIDE-05
 
             // Fire-and-forget IDB write — do NOT await
@@ -347,7 +367,7 @@ export class AiDebugApp extends Component {
             this.busService.subscribe("tool_call_started", this._onToolCallStarted);
             this.busService.subscribe("tool_call_completed", this._onToolCallCompleted);
             this.busService.subscribe("loop_end", this._onLoopEnd);
-            await this.busService.addChannel("ai_debug");
+            await this.busService.start();
         });
 
         onWillUnmount(() => {
@@ -357,7 +377,6 @@ export class AiDebugApp extends Component {
             this.busService.unsubscribe("tool_call_started", this._onToolCallStarted);
             this.busService.unsubscribe("tool_call_completed", this._onToolCallCompleted);
             this.busService.unsubscribe("loop_end", this._onLoopEnd);
-            this.busService.deleteChannel("ai_debug");
             // Clear any pending buffer timers to avoid orphan callbacks
             for (const key of Object.keys(this._pendingChildren)) {
                 clearTimeout(this._pendingChildren[key].timer);
@@ -406,11 +425,13 @@ export class AiDebugApp extends Component {
         this.traces.set(payload.trace_id, {
             trace_id: payload.trace_id,
             agent_name: payload.agent_name || "Unknown Agent",
+            ai_provider: payload.provider ?? null,
             model_name: payload.model_name || "",
             user_query: payload.user_query || "",
             status: "running",
             created_ts: Date.now(),
             duration_ms: null,
+            duration_kind: null,
             expanded: true,
             iterations,
             instructions: payload.instructions || "",
@@ -419,6 +440,7 @@ export class AiDebugApp extends Component {
             parent_trace_id: payload.parent_trace_id || null,
             parent_tool_call_id: payload.parent_tool_call_id || null,
             session_id: payload.session_id || null,
+            _payload_excluded: payload._payload_excluded ?? false,
             ...callbackCorrelation(payload),
         });
         this._lastArrivedId = payload.trace_id;
@@ -768,18 +790,33 @@ export class AiDebugApp extends Component {
         let total_tokens = 0, total_duration_ms = 0,
             total_input = 0, total_output = 0,
             total_cached = 0, total_reasoning = 0;
+        let has_token_metrics = false;
+        let has_duration_metrics = false;
         for (const iter of trace.iterations.values()) {
             const t = iter.tokens;
             if (t) {
+                has_token_metrics = true;
                 total_input += t.input || 0;
                 total_output += t.output || 0;
                 total_cached += t.cache_read || 0;
                 total_reasoning += t.reasoning || 0;
                 total_tokens += t.total || 0;
             }
-            total_duration_ms += iter.duration_ms || 0;
+            if (iter.duration_ms !== null && iter.duration_ms !== undefined) {
+                has_duration_metrics = true;
+                total_duration_ms += iter.duration_ms;
+            }
         }
-        return { total_tokens, total_duration_ms, total_input, total_output, total_cached, total_reasoning };
+        return {
+            total_tokens,
+            total_duration_ms,
+            total_input,
+            total_output,
+            total_cached,
+            total_reasoning,
+            has_token_metrics,
+            has_duration_metrics,
+        };
     }
 
     // ----------------------------------------------------------------
