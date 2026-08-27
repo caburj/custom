@@ -100,7 +100,10 @@
                                   t-on-click.stop="() => this.toggleExpand(node.id, 'trace')">&#x203A;</span>
                             <span class="ai-tree-label"
                                   t-on-click="() => this.selectItem(node.id, 'trace')">
-                                <t t-if="node.trace.user_query">
+                                <t t-if="node.trace.trace_label">
+                                    <t t-out="node.trace.trace_label"/>
+                                </t>
+                                <t t-elif="node.trace.user_query">
                                     <span class="ai-tree-query-title"
                                           t-att-title="node.trace.user_query"
                                           t-on-click="(ev) => this.showFullQuery(ev, node.trace.user_query)"
@@ -111,7 +114,7 @@
                                 </t>
                                 <t t-set="totals" t-value="this.getTraceTotals(node.trace)"/>
                                 <span class="ai-tree-meta-line">
-                                    <t t-out="node.trace.agent_name or 'Agent'"/>
+                                    <t t-out="node.trace.agent_name or (node.trace.trace_kind ? 'Direct' : 'Agent')"/>
                                     <t t-if="node.trace.ai_provider"> &#xB7; <t t-out="node.trace.ai_provider"/></t>
                                     <t t-if="node.trace.model_name"> &#xB7; <t t-out="node.trace.model_name"/></t>
                                     <t t-if="totals.has_duration_metrics">

@@ -114,6 +114,8 @@ test("IndexedDB and export serialization retain callback pane facts", () => {
         trace_id: "exchange-1",
         created_ts: 1,
         agent_name: "Odoo AI",
+        trace_kind: "channel_name",
+        trace_label: "Conversation Title",
         ai_provider: "google",
         model_name: "gemini-fixture",
         user_query: "Hi",
@@ -162,6 +164,8 @@ test("IndexedDB and export serialization retain callback pane facts", () => {
     const iteration = serialized.iterations[0][1];
     expect(serialized.ai_provider).toBe("google");
     expect(serialized.model_name).toBe("gemini-fixture");
+    expect(serialized.trace_kind).toBe("channel_name");
+    expect(serialized.trace_label).toBe("Conversation Title");
     expect(serialized.duration_kind).toBe("request_lifecycle");
     expect(serialized._payload_excluded).toBe(true);
     expect(iteration.request_body.request_uuid).toBe("request-1");

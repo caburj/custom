@@ -846,6 +846,37 @@ class TestAiDebugCallback(TransactionCase):
             self.env['ai.session.request'].sudo().search_count([]), request_count,
         )
 
+    def test_channel_name_direct_trace_keeps_session_and_agent_identity(self):
+        events = []
+        request_count = self.env['ai.session.request'].sudo().search_count([])
+        with (
+            patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
+            patch.object(EnterpriseAiSession, '_get_completions', return_value={
+                'status': 'success',
+                'result': assistant_text('Callback observability'),
+            }),
+        ):
+            title = self.session._generate_channel_name([
+                {'type': 'text', 'content': {'data': 'Trace this live chat'}},
+            ])
+
+        self.assertEqual(title, 'Callback observability')
+        trace = next(
+            payload for event, payload, _kwargs in events
+            if event == 'new_trace'
+        )
+        self.assertEqual(trace['session_id'], self.session.id)
+        self.assertEqual(trace['agent_name'], self.agent.name)
+        self.assertEqual(trace['trace_kind'], 'channel_name')
+        self.assertEqual(trace['trace_label'], 'Conversation Title')
+        self.assertEqual(
+            [event for event, _payload, _kwargs in events],
+            ['new_trace', 'iteration', 'loop_end'],
+        )
+        self.assertEqual(
+            self.env['ai.session.request'].sudo().search_count([]), request_count,
+        )
+
     def test_direct_sync_tool_tracing_keeps_its_existing_event_contract(self):
         events = []
         tool = self._create_callback_tool(
@@ -1069,14 +1100,50 @@ class TestAiDebugCallback(TransactionCase):
             bus.search_count([('message', 'ilike', 'denied-fixture')]), before,
         )
 
-    def test_internal_user_subscribes_to_dedicated_and_normal_user_channels(self):
+    def test_guest_callback_trace_uses_shared_internal_debugger_channel(self):
+        guest = self.env['mail.guest'].create({'name': 'AI Debug Livechat Guest'})
+        public_user = self.env.ref('base.public_user')
+        request = self.env['ai.session.request'].sudo().create({
+            'session_id': self.session.id,
+            'request_uuid': 'guest-observer-request-fixture',
+            'round_no': 1,
+            'round_limit': 3,
+            'payload': {
+                'messages': [{
+                    'role': 'user',
+                    'content': [{
+                        'type': 'text',
+                        'content': {'data': 'Livechat observer fixture'},
+                    }],
+                }],
+                'instructions': 'Answer the livechat guest.',
+                'tools': [],
+            },
+            'user_id': public_user.id,
+            'guest_id': guest.id,
+            'context_snapshot': {},
+        })
+
+        exchange_uuid = request.context_snapshot['ai_debug_exchange_uuid']
+        rows = self.env['bus.bus'].sudo().search([
+            ('message', 'ilike', exchange_uuid),
+        ])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(json.loads(rows.channel), [self.env.cr.dbname, 'ai_debug'])
+        message = json.loads(rows.message)
+        self.assertEqual(message['type'], 'new_trace')
+        self.assertEqual(message['payload']['request_uuid'], request.request_uuid)
+        self.assertEqual(message['payload']['agent_name'], self.agent.name)
+
+    def test_internal_user_can_subscribe_to_shared_and_private_debugger_channels(self):
         mock_wsrequest = MagicMock()
         mock_wsrequest.session.uid = self.env.uid
         with patch('odoo.addons.bus.models.ir_websocket.wsrequest', new=mock_wsrequest):
             channels = self.env['ir.websocket']._prepare_subscribe_data(
-                ['other'], 0,
+                ['ai_debug', 'other'], 0,
             )['channels']
 
+        self.assertIn((self.env.cr.dbname, 'ai_debug'), channels)
         self.assertIn(
             (self.env.cr.dbname, 'res.users', self.env.uid, 'ai_debug'),
             channels,
@@ -1184,3 +1251,11 @@ class TestAiDebugHttp(HttpCase):
         portal = self.url_open('/ai-debug', allow_redirects=False)
         self.assertEqual(portal.status_code, 303)
         self.assertIn('/web/login', portal.headers['Location'])
+
+    def test_debugger_page_mounts(self):
+        self.browser_js(
+            url_path='/ai-debug',
+            code="console.log('test successful');",
+            ready="document.querySelector('.ai-debug-header') !== null",
+            login='admin',
+        )

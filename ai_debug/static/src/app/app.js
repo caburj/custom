@@ -16,6 +16,8 @@ import {
     normalizeTokens,
 } from "./event_payload";
 
+const AI_DEBUG_CHANNEL = "ai_debug";
+
 /**
  * Reconstruct a reactive trace object from a plain IDB-stored record.
  *
@@ -367,10 +369,11 @@ export class AiDebugApp extends Component {
             this.busService.subscribe("tool_call_started", this._onToolCallStarted);
             this.busService.subscribe("tool_call_completed", this._onToolCallCompleted);
             this.busService.subscribe("loop_end", this._onLoopEnd);
-            await this.busService.start();
+            await this.busService.addChannel(AI_DEBUG_CHANNEL);
         });
 
         onWillUnmount(() => {
+            this.busService.deleteChannel(AI_DEBUG_CHANNEL);
             this.busService.unsubscribe("new_trace", this._onNewTrace);
             this.busService.unsubscribe("request_state", this._onRequestState);
             this.busService.unsubscribe("iteration", this._onIteration);
@@ -425,6 +428,8 @@ export class AiDebugApp extends Component {
         this.traces.set(payload.trace_id, {
             trace_id: payload.trace_id,
             agent_name: payload.agent_name || "Unknown Agent",
+            trace_kind: payload.trace_kind || null,
+            trace_label: payload.trace_label || null,
             ai_provider: payload.provider ?? null,
             model_name: payload.model_name || "",
             user_query: payload.user_query || "",

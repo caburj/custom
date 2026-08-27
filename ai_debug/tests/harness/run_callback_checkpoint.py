@@ -18,9 +18,10 @@ import requests
 
 
 CUSTOM = Path(__file__).resolve().parents[3]
+CORE_PATH = os.environ.get('AI_DEBUG_E2E_CORE')
+CORE = Path(CORE_PATH) if CORE_PATH else None
 ENTERPRISE_PATH = os.environ.get('AI_DEBUG_E2E_ENTERPRISE')
 ENTERPRISE = Path(ENTERPRISE_PATH) if ENTERPRISE_PATH else None
-CORE = Path('/Users/joseph/clones/odoo/odoo')
 IAP_CORE = Path('/Users/joseph/.wt/worktrees/odoo/odoo/saas-19.4-odoo-ai-iap-service-lba')
 IAP_ENTERPRISE = Path('/Users/joseph/.wt/worktrees/odoo/enterprise/saas-19.4-odoo-ai-iap-service-lba')
 IAP_APPS = Path('/Users/joseph/.wt/worktrees/odoo/iap-apps/saas-19.4-odoo-ai-async-jcb')
@@ -342,9 +343,10 @@ def assert_debug_events(events, request_uuid, exchange_uuid, provider_payload):
 
 
 def main():
-    if ENTERPRISE is None:
+    if CORE is None or ENTERPRISE is None:
         raise RuntimeError(
-            'AI_DEBUG_E2E_ENTERPRISE must name an immutable Enterprise snapshot'
+            'AI_DEBUG_E2E_CORE and AI_DEBUG_E2E_ENTERPRISE must name the '
+            'paired committed source snapshots'
         )
     required = (
         CUSTOM, ENTERPRISE, CORE, IAP_CORE, IAP_ENTERPRISE, IAP_APPS,
@@ -365,6 +367,7 @@ def main():
     print(json.dumps({
         'phase': 'start',
         'runtime_root': str(root),
+        'core_snapshot': str(CORE),
         'enterprise_snapshot': str(ENTERPRISE),
         'consumer_db': CONSUMER_DB,
         'iap_db': IAP_DB,
@@ -549,6 +552,7 @@ def main():
             'request_lifecycle_verified': True,
             'provider_metadata_verified': True,
             'replay_idempotent': True,
+            'core_snapshot': str(CORE),
             'enterprise_snapshot': str(ENTERPRISE),
             'consumer_db': CONSUMER_DB,
             'iap_db': IAP_DB,

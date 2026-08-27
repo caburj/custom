@@ -5,8 +5,13 @@
     <div t-if="this.props.trace" class="ai-detail-view">
         <!-- Header -->
         <div class="ai-detail-header">
-            <span class="ai-detail-type-badge">Loop</span>
-            <span class="ai-detail-name" t-out="this.props.trace.agent_name"/>
+            <span class="ai-detail-type-badge">
+                <t t-out="this.props.trace.trace_kind ? 'Direct' : 'Loop'"/>
+            </span>
+            <span class="ai-detail-name"
+                  t-out="this.props.trace.trace_label or this.props.trace.agent_name"/>
+            <span t-if="this.props.trace.trace_label and this.props.trace.agent_name"
+                  class="ai-detail-meta" t-out="this.props.trace.agent_name"/>
             <span t-if="this.props.trace.ai_provider"
                   class="ai-detail-meta" t-out="this.props.trace.ai_provider"/>
             <span t-if="this.props.trace.model_name"

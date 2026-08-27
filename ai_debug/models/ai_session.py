@@ -29,6 +29,7 @@ _MAX_STRING_CHARS = 64_000
 _REDACTED = "[REDACTED]"
 _AI_DEBUG_EXCHANGE_UUID_CONTEXT_KEY = 'ai_debug_exchange_uuid'
 _AI_DEBUG_CALLBACK_CONTEXT_KEY = '_ai_debug_callback_ctx'
+_AI_DEBUG_DIRECT_TRACE_CONTEXT_KEY = '_ai_debug_direct_trace'
 _SAFE_IAP_ERROR_CODES = frozenset({'insufficient_credit', 'request_failed'})
 _ALLOWED_IMAGE_MIMETYPES = frozenset({
     'image/gif',
@@ -73,20 +74,34 @@ _SENSITIVE_KEY_NAMES = frozenset(key.replace('_', '') for key in _SENSITIVE_KEYS
 class AiSession(models.Model):
     _inherit = 'ai.session'
 
-    def _ai_debug_bus_send(self, notification_type, payload, *, target_user_id=None):
+    def _ai_debug_bus_send(
+        self, notification_type, payload, *, target_user_id=None,
+        shared_fallback=False,
+    ):
         """Publish sanitized facts only after the enclosing transaction commits.
 
         The Bus row is inserted in the current transaction, so both full and
         savepoint rollbacks remove it.  Only the lightweight PostgreSQL wake-up
         remains post-commit; a stale wake-up has no row to deliver.  Payload
         building and Bus writes run in a savepoint so debugger failures cannot
-        poison the business transaction.
+        poison the business transaction. Guest-originated callback events use
+        the shared debugger channel, whose subscriptions are restricted to
+        internal users by ``ir.websocket``.
         """
         try:
             with self.env.cr.savepoint(flush=False):
-                target_user_id = target_user_id or self.env.uid
-                target_user = self.env['res.users'].sudo().browse(target_user_id).exists()
-                if not target_user or not target_user._is_internal():
+                target_user = (
+                    self.env['res.users'].sudo()
+                    .browse(target_user_id or self.env.uid)
+                    .exists()
+                )
+                if target_user and target_user._is_internal():
+                    channel_target = (target_user, 'ai_debug')
+                    revalidate_user_id = target_user.id
+                elif shared_fallback:
+                    channel_target = 'ai_debug'
+                    revalidate_user_id = None
+                else:
                     return False
                 sanitized_payload = self._ai_debug_sanitize(payload)
                 encoded = json.dumps(sanitized_payload, ensure_ascii=False, separators=(",", ":"))
@@ -97,6 +112,7 @@ class AiSession(models.Model):
                         'session_id', 'request_state', 'is_final', 'error', 'duration_ms',
                         'duration_kind', 'termination_reason', 'iteration_count',
                         'tool_call_count', 'provider', 'model_name', 'provider_api',
+                        'trace_kind', 'trace_label',
                     )
                     sanitized_payload = {
                         key: self._ai_debug_sanitize(payload[key], key=key)
@@ -106,17 +122,6 @@ class AiSession(models.Model):
                     sanitized_payload.setdefault('type', notification_type)
                     sanitized_payload['_payload_excluded'] = True
 
-                bus = self.env['bus.bus'].sudo()
-                channel = channel_with_db(
-                    self.env.cr.dbname, (target_user, 'ai_debug'),
-                )
-                bus_row = bus.create({
-                    'channel': json_dump(channel),
-                    'message': json_dump({
-                        'type': notification_type,
-                        'payload': sanitized_payload,
-                    }),
-                })
                 postcommit = self.env.cr.postcommit
                 channels = postcommit.data.get(_POSTCOMMIT_BUS_CHANNELS_KEY)
                 if channels is None:
@@ -138,8 +143,6 @@ class AiSession(models.Model):
                             _logger.exception(
                                 "ai_debug: failed to wake Bus after committed events"
                             )
-
-                channels.add(channel)
 
                 precommit = self.env.cr.precommit
                 rows = precommit.data.get(_PRECOMMIT_BUS_ROWS_KEY)
@@ -167,7 +170,19 @@ class AiSession(models.Model):
                                         "ai_debug: failed to drop Bus event after target check"
                                     )
 
-                rows.append((bus_row.id, target_user.id))
+                bus = self.env['bus.bus'].sudo()
+                message = json_dump({
+                    'type': notification_type,
+                    'payload': sanitized_payload,
+                })
+                channel = channel_with_db(self.env.cr.dbname, channel_target)
+                bus_row = bus.create({
+                    'channel': json_dump(channel),
+                    'message': message,
+                })
+                channels.add(channel)
+                if revalidate_user_id:
+                    rows.append((bus_row.id, revalidate_user_id))
                 return True
         except Exception:
             _logger.exception("ai_debug: failed to queue bus event '%s'", notification_type)
@@ -576,6 +591,7 @@ class AiSession(models.Model):
             'request_uuid': request.request_uuid,
             'round_no': request.round_no,
             'target_user_id': request.user_id.id,
+            'shared_fallback': bool(request.guest_id),
             'events': [],
             'started_tool_call_ids': set(),
             'start_times': {},
@@ -753,6 +769,7 @@ class AiSession(models.Model):
                 event_type,
                 payload,
                 target_user_id=context['target_user_id'],
+                shared_fallback=context['shared_fallback'],
             )
 
     def _ai_debug_normalized_request(self, request):
@@ -822,7 +839,7 @@ class AiSession(models.Model):
                 'round_limit': request.round_limit,
                 'message_summary': self._ai_debug_message_summary(payload.get('messages')),
             },
-        }, target_user_id=request.user_id.id)
+        }, target_user_id=request.user_id.id, shared_fallback=bool(request.guest_id))
 
     def _ai_debug_trace_request_state(self, request, previous_state):
         """Queue one accepted durable state transition, suppressing replays."""
@@ -838,7 +855,7 @@ class AiSession(models.Model):
             'round_no': request.round_no,
             'previous_state': previous_state,
             'state': current_state,
-        }, target_user_id=request.user_id.id)
+        }, target_user_id=request.user_id.id, shared_fallback=bool(request.guest_id))
         return True
 
     def _ai_debug_trace_exchange_end(self, request, outcome, *, error=None):
@@ -864,7 +881,7 @@ class AiSession(models.Model):
             'iteration_count': request.round_no,
             'duration_ms': duration_ms,
             'duration_kind': 'request_lifecycle',
-        }, target_user_id=request.user_id.id)
+        }, target_user_id=request.user_id.id, shared_fallback=bool(request.guest_id))
 
     def _ai_debug_trace_request_result(self, request, response, outcome, previous_state):
         """Queue authoritative request facts accepted by `_apply_iap_result`."""
@@ -915,7 +932,7 @@ class AiSession(models.Model):
             'provider_api': provider_metadata.get('api'),
             'duration_ms': duration_ms,
             'duration_kind': 'request_lifecycle',
-        }, target_user_id=request.user_id.id)
+        }, target_user_id=request.user_id.id, shared_fallback=bool(request.guest_id))
         return bool(iteration_queued)
 
     def _apply_iap_submit_response(self, request, response):
@@ -1032,8 +1049,30 @@ class AiSession(models.Model):
     @api.model
     def _get_direct_response(self, instructions, message, tools=None,
             record=None, agent_id=None, tool_results_collector=None, **completion_options):
-        """Preserve current one-shot callers while `_run_agentic_loop` traces them."""
-        return super()._get_direct_response(
+        """Preserve the originating session metadata across the direct-call seam."""
+        agent = self.env['ai.agent']
+        if len(self) == 1 and self.agent_id:
+            agent = self.agent_id
+        elif isinstance(agent_id, int):
+            agent = agent.browse(agent_id).exists()
+        trace_kind = (
+            'channel_name'
+            if completion_options.get('usage') == 'channel_name'
+            else 'direct'
+        )
+        direct_self = self.with_context({
+            _AI_DEBUG_DIRECT_TRACE_CONTEXT_KEY: {
+                'session_id': self.id if len(self) == 1 else None,
+                'agent_name': agent.name if agent else None,
+                'trace_kind': trace_kind,
+                'trace_label': (
+                    'Conversation Title'
+                    if trace_kind == 'channel_name'
+                    else 'Direct Completion'
+                ),
+            },
+        })
+        return super(AiSession, direct_self)._get_direct_response(
             instructions, message, tools=tools, record=record, agent_id=agent_id,
             tool_results_collector=tool_results_collector,
             **completion_options,
@@ -1052,13 +1091,24 @@ class AiSession(models.Model):
         self = self.with_context(_debug_ctx=_debug_ctx)
         iteration_count = 0
         started_at = time.monotonic()
+        direct_trace = self.env.context.get(_AI_DEBUG_DIRECT_TRACE_CONTEXT_KEY)
+        if not isinstance(direct_trace, dict):
+            direct_trace = {}
         self._ai_debug_bus_send('new_trace', {
             'type': 'new_trace',
             'trace_id': trace_id,
-            'session_id': self.id if len(self) == 1 else None,
+            'session_id': (
+                self.id if len(self) == 1 else direct_trace.get('session_id')
+            ),
             'parent_trace_id': self.env.context.get('ai_parent_trace_id'),
             'parent_tool_call_id': self.env.context.get('ai_parent_tool_call_id'),
-            'agent_name': self.agent_id.name if len(self) == 1 and self.agent_id else None,
+            'agent_name': (
+                self.agent_id.name
+                if len(self) == 1 and self.agent_id
+                else direct_trace.get('agent_name')
+            ),
+            'trace_kind': direct_trace.get('trace_kind'),
+            'trace_label': direct_trace.get('trace_label'),
             'state_snapshot': {
                 'uid': self.env.uid,
                 'company_id': self.env.company.id,
