@@ -13,4 +13,7 @@ class IrWebsocket(models.AbstractModel):
                 ch for ch in channels
                 if not (isinstance(ch, str) and ch == 'ai_debug')
             ]
-        return super()._build_bus_channel_list(channels)
+        channels = super()._build_bus_channel_list(channels)
+        if self.env.user._is_internal():
+            channels.append((self.env.user, 'ai_debug'))
+        return channels

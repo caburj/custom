@@ -5,6 +5,7 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import tempfile
@@ -16,26 +17,39 @@ import psycopg2
 import requests
 
 
-CUSTOM = Path('/Users/joseph/.wt/worktrees/caburj/custom/master-ai-callback-driven-loop-ai-debug')
-ENTERPRISE = Path('/Users/joseph/.wt/worktrees/odoo/enterprise/master-ai-callback-driven-loop-ai-debug')
+CUSTOM = Path(__file__).resolve().parents[3]
+ENTERPRISE_PATH = os.environ.get('AI_DEBUG_E2E_ENTERPRISE')
+ENTERPRISE = Path(ENTERPRISE_PATH) if ENTERPRISE_PATH else None
 CORE = Path('/Users/joseph/clones/odoo/odoo')
 IAP_CORE = Path('/Users/joseph/.wt/worktrees/odoo/odoo/saas-19.4-odoo-ai-iap-service-lba')
 IAP_ENTERPRISE = Path('/Users/joseph/.wt/worktrees/odoo/enterprise/saas-19.4-odoo-ai-iap-service-lba')
 IAP_APPS = Path('/Users/joseph/.wt/worktrees/odoo/iap-apps/saas-19.4-odoo-ai-async-jcb')
-HARNESS_ADDONS = ENTERPRISE / 'ai/tests/harness_addons'
+HARNESS_ADDONS = CUSTOM / 'test_ai_agent_loop/tests/harness_addons'
 CUSTOM_HARNESS_ADDONS = CUSTOM / 'ai_debug/tests/harness_addons'
 MASTER_PYTHON = Path('/Users/joseph/.venvs/master/bin/python3')
 IAP_PYTHON = Path('/Users/joseph/.venvs/saas-19.4/bin/python3')
 RUN_SUFFIX = uuid.uuid4().hex[:10]
 CONSUMER_DB = f'ai_debug_callback_e2e_{RUN_SUFFIX}'
 IAP_DB = f'ai_debug_iap_e2e_{RUN_SUFFIX}'
-CONSUMER_PORT = int(os.environ.get('AI_DEBUG_E2E_CONSUMER_PORT', '18069'))
-CONSUMER_GEVENT_PORT = int(os.environ.get('AI_DEBUG_E2E_CONSUMER_GEVENT_PORT', '18072'))
-IAP_PORT = int(os.environ.get('AI_DEBUG_E2E_IAP_PORT', '18170'))
-IAP_GEVENT_PORT = int(os.environ.get('AI_DEBUG_E2E_IAP_GEVENT_PORT', '18173'))
+CONSUMER_PORT = int(os.environ.get('AI_DEBUG_E2E_CONSUMER_PORT', '18269'))
+CONSUMER_GEVENT_PORT = int(os.environ.get('AI_DEBUG_E2E_CONSUMER_GEVENT_PORT', '18272'))
+IAP_PORT = int(os.environ.get('AI_DEBUG_E2E_IAP_PORT', '18270'))
+IAP_GEVENT_PORT = int(os.environ.get('AI_DEBUG_E2E_IAP_GEVENT_PORT', '18273'))
+PROVIDER_PORT = 18280
+CALLBACK_SHIM_PORT = 18281
 CONSUMER_URL = f'http://127.0.0.1:{CONSUMER_PORT}'
 IAP_URL = f'http://127.0.0.1:{IAP_PORT}'
 IAP_EVENTED_URL = f'http://127.0.0.1:{IAP_GEVENT_PORT}'
+PROVIDER_URL = f'http://127.0.0.1:{PROVIDER_PORT}'
+CALLBACK_SHIM_URL = f'http://127.0.0.1:{CALLBACK_SHIM_PORT}'
+LOOPBACK_PORTS = {
+    'consumer HTTP': CONSUMER_PORT,
+    'consumer gevent': CONSUMER_GEVENT_PORT,
+    'IAP HTTP': IAP_PORT,
+    'IAP evented': IAP_GEVENT_PORT,
+    'fake provider': PROVIDER_PORT,
+    'callback shim': CALLBACK_SHIM_PORT,
+}
 
 
 def append_jsonl(path, payload):
@@ -104,6 +118,7 @@ class CallbackShimHandler(ProviderHandler):
             self.send_error(404)
             return
         payload = self._read_json()
+        params = payload.get('params') or {}
         response = requests.post(
             CONSUMER_URL + '/ai/completion_result_ready',
             json=payload,
@@ -111,12 +126,10 @@ class CallbackShimHandler(ProviderHandler):
             allow_redirects=False,
         )
         append_jsonl(self.state.callback_journal, {
-            'request_uuid': payload.get('request_uuid'),
+            'request_uuid': params.get('request_uuid'),
             'consumer_status': response.status_code,
         })
-        self.send_response(response.status_code)
-        self.send_header('Content-Length', '0')
-        self.end_headers()
+        self._json(response.status_code, response.json())
 
 
 def start_loopback_server(port, handler, state):
@@ -126,10 +139,41 @@ def start_loopback_server(port, handler, state):
     return server
 
 
-def wait_json(url, predicate=lambda payload: True, timeout=45):
+def require_free_loopback_ports():
+    """Refuse to accept readiness from a process outside this checkpoint."""
+    for label, port in LOOPBACK_PORTS.items():
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(('127.0.0.1', port))
+            except OSError as error:
+                raise RuntimeError(
+                    f'{label} port {port} is already in use; refusing to run'
+                ) from error
+
+
+def require_processes_alive(processes):
+    dead = [
+        f'{name} (exit {process.returncode})'
+        for name, process in processes
+        if process.poll() is not None
+    ]
+    if dead:
+        raise RuntimeError(f'Owned harness process exited: {", ".join(dead)}')
+
+
+def wait_json(
+    url, predicate=lambda payload: True, timeout=45, *, process=None,
+    process_name=None,
+):
     deadline = time.monotonic() + timeout
     last_error = None
     while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            raise RuntimeError(
+                f'Owned {process_name} process exited with code '
+                f'{process.returncode} while waiting for {url}'
+            )
         try:
             response = requests.get(url, timeout=2)
             response.raise_for_status()
@@ -156,11 +200,29 @@ def json_post(url, payload, session=None):
     return response.json() if response.content else {}
 
 
+def jsonrpc_post(url, params, session=None):
+    response = (session or requests).post(
+        url,
+        json={
+            'jsonrpc': '2.0',
+            'id': 1,
+            'method': 'call',
+            'params': params,
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+    return response, response.json()
+
+
 def read_debug_events():
     with psycopg2.connect(dbname=CONSUMER_DB) as connection:
         with connection.cursor() as cursor:
             cursor.execute('SELECT message FROM bus_bus ORDER BY id')
-            messages = [json.loads(row[0]) for row in cursor.fetchall()]
+            messages = [
+                json.loads(raw_message) if isinstance(raw_message, str) else raw_message
+                for raw_message, in cursor.fetchall()
+            ]
     return [
         message for message in messages
         if message.get('type') in {
@@ -265,6 +327,8 @@ def assert_debug_events(events, request_uuid, exchange_uuid, provider_payload):
         raise AssertionError(terminal)
     if terminal['termination_reason'] != 'success':
         raise AssertionError(terminal)
+    if 'tool_call_count' in terminal:
+        raise AssertionError('Callback contract must not fabricate a tool-call count')
     forbidden = {
         'accounttoken', 'cookie', 'databaseuuid', 'dbuuid', 'headers',
         'connection',
@@ -278,6 +342,10 @@ def assert_debug_events(events, request_uuid, exchange_uuid, provider_payload):
 
 
 def main():
+    if ENTERPRISE is None:
+        raise RuntimeError(
+            'AI_DEBUG_E2E_ENTERPRISE must name an immutable Enterprise snapshot'
+        )
     required = (
         CUSTOM, ENTERPRISE, CORE, IAP_CORE, IAP_ENTERPRISE, IAP_APPS,
         HARNESS_ADDONS, CUSTOM_HARNESS_ADDONS, MASTER_PYTHON, IAP_PYTHON,
@@ -285,6 +353,7 @@ def main():
     missing = [str(path) for path in required if not path.exists()]
     if missing:
         raise RuntimeError(f'Missing paired harness prerequisites: {missing}')
+    require_free_loopback_ports()
 
     root = Path(tempfile.mkdtemp(prefix='ai-debug-callback-e2e-'))
     evidence_dir = root / 'evidence'
@@ -296,13 +365,14 @@ def main():
     print(json.dumps({
         'phase': 'start',
         'runtime_root': str(root),
+        'enterprise_snapshot': str(ENTERPRISE),
         'consumer_db': CONSUMER_DB,
         'iap_db': IAP_DB,
     }), flush=True)
 
     state = LoopbackState(evidence_dir)
-    provider = start_loopback_server(18080, ProviderHandler, state)
-    shim = start_loopback_server(18081, CallbackShimHandler, state)
+    provider = start_loopback_server(PROVIDER_PORT, ProviderHandler, state)
+    shim = start_loopback_server(CALLBACK_SHIM_PORT, CallbackShimHandler, state)
     processes = []
     streams = []
     try:
@@ -364,13 +434,21 @@ def main():
             processes.append((name, process))
             streams.append(stream)
 
-        wait_json(CONSUMER_URL + '/web/health?db_server_status=1')
-        wait_json(IAP_URL + '/web/health?db_server_status=1')
-        wait_json('http://127.0.0.1:18080/ready')
-        wait_json('http://127.0.0.1:18081/ready')
+        owned_processes = dict(processes)
+        wait_json(
+            CONSUMER_URL + '/web/health?db_server_status=1',
+            process=owned_processes['consumer'], process_name='consumer',
+        )
+        wait_json(
+            IAP_URL + '/web/health?db_server_status=1',
+            process=owned_processes['iap-http'], process_name='IAP HTTP',
+        )
+        wait_json(PROVIDER_URL + '/ready')
+        wait_json(CALLBACK_SHIM_URL + '/ready')
         wait_json(
             IAP_EVENTED_URL + '/odoo_ai_callback_harness/ready',
             lambda payload: payload.get('dispatcher_alive') and payload.get('provider_patched'),
+            process=owned_processes['iap-evented'], process_name='IAP evented',
         )
 
         consumer_setup = json_post(
@@ -379,34 +457,34 @@ def main():
         )
         json_post(IAP_URL + '/odoo_ai_callback_harness/setup', {
             'database_uuid': consumer_setup['database_uuid'],
-            'callback_url': 'http://127.0.0.1:18081',
+            'callback_url': CALLBACK_SHIM_URL,
         })
 
         session = requests.Session()
-        authentication = json_post(CONSUMER_URL + '/web/session/authenticate', {
-            'jsonrpc': '2.0',
-            'id': 1,
-            'method': 'call',
-            'params': {'db': CONSUMER_DB, 'login': 'admin', 'password': 'admin'},
-        }, session=session)
+        _authentication_response, authentication = jsonrpc_post(
+            CONSUMER_URL + '/web/session/authenticate',
+            {'db': CONSUMER_DB, 'login': 'admin', 'password': 'admin'},
+            session=session,
+        )
         if not authentication.get('result', {}).get('uid'):
             raise RuntimeError('Could not authenticate the disposable consumer admin')
-        csrf = session.get(
-            CONSUMER_URL + '/ai_debug_callback_consumer_harness/csrf', timeout=15,
-        ).json()['csrf_token']
-        kickoff = session.post(CONSUMER_URL + '/ai/generate_response', data={
-            'csrf_token': csrf,
-            'channel_id': consumer_setup['channel_id'],
-            'mail_message_id': consumer_setup['message_id'],
-            'callback_driven': 'true',
-        }, timeout=15)
-        kickoff.raise_for_status()
-        acknowledgement = kickoff.json()
+        kickoff, kickoff_payload = jsonrpc_post(
+            CONSUMER_URL + '/ai/start_callback_driven_response',
+            {
+                'channel_id': consumer_setup['channel_id'],
+                'mail_message_id': consumer_setup['message_id'],
+            },
+            session=session,
+        )
+        if kickoff_payload.get('error'):
+            raise RuntimeError(f'Callback kickoff failed: {kickoff_payload["error"]}')
+        acknowledgement = kickoff_payload['result']
         request_uuid = acknowledgement['request_uuid']
 
         deadline = time.monotonic() + 30
         consumer_status = None
         while time.monotonic() < deadline:
+            require_processes_alive(processes)
             consumer_status = json_post(
                 CONSUMER_URL + '/ai_debug_callback_consumer_harness/status',
                 {'session_id': consumer_setup['session_id']},
@@ -416,33 +494,28 @@ def main():
             time.sleep(0.2)
         else:
             raise RuntimeError(f'Consumer did not reach done: {consumer_status}')
+        require_processes_alive(processes)
 
         with psycopg2.connect(dbname=CONSUMER_DB) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    'SELECT exchange_uuid FROM ai_session_request WHERE request_uuid = %s',
+                    'SELECT context_snapshot FROM ai_session_request WHERE request_uuid = %s',
                     (request_uuid,),
                 )
-                exchange_uuid = cursor.fetchone()[0]
+                context_snapshot = cursor.fetchone()[0]
+        exchange_uuid = context_snapshot['ai_debug_exchange_uuid']
         events = wait_debug_events()
         if len(state.provider_payloads) != 1:
             raise AssertionError(state.provider_payloads)
         assert_debug_events(events, request_uuid, exchange_uuid, state.provider_payloads[0])
         before_replay = json.dumps(events, sort_keys=True)
 
-        replay = requests.post(
+        replay, replay_payload = jsonrpc_post(
             CONSUMER_URL + '/ai/completion_result_ready',
-            json={
-                'request_uuid': request_uuid,
-                'status': 'success',
-                'result': {'role': 'assistant', 'content': [{'type': 'text', 'content': {'data': 'forged'}}]},
-                'account_token': 'forged-callback-field',
-            },
-            timeout=15,
-            allow_redirects=False,
+            {'request_uuid': request_uuid},
         )
-        if replay.status_code != 204:
-            raise AssertionError(replay.status_code)
+        if replay.status_code != 200 or replay_payload.get('result') is not None:
+            raise AssertionError(replay_payload)
         time.sleep(0.5)
         after_replay = json.dumps(read_debug_events(), sort_keys=True)
         if after_replay != before_replay:
@@ -476,6 +549,7 @@ def main():
             'request_lifecycle_verified': True,
             'provider_metadata_verified': True,
             'replay_idempotent': True,
+            'enterprise_snapshot': str(ENTERPRISE),
             'consumer_db': CONSUMER_DB,
             'iap_db': IAP_DB,
             'evidence_dir': str(evidence_dir),
@@ -497,6 +571,8 @@ def main():
             stream.close()
         provider.shutdown()
         shim.shutdown()
+        provider.server_close()
+        shim.server_close()
 
 
 if __name__ == '__main__':

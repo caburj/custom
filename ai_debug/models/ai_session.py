@@ -27,6 +27,9 @@ _MAX_EVENT_BYTES = 512_000
 _MAX_IMAGE_DATA_BYTES = 48_000
 _MAX_STRING_CHARS = 64_000
 _REDACTED = "[REDACTED]"
+_AI_DEBUG_EXCHANGE_UUID_CONTEXT_KEY = 'ai_debug_exchange_uuid'
+_AI_DEBUG_CALLBACK_CONTEXT_KEY = '_ai_debug_callback_ctx'
+_SAFE_IAP_ERROR_CODES = frozenset({'insufficient_credit', 'request_failed'})
 _ALLOWED_IMAGE_MIMETYPES = frozenset({
     'image/gif',
     'image/jpeg',
@@ -84,7 +87,7 @@ class AiSession(models.Model):
                 target_user_id = target_user_id or self.env.uid
                 target_user = self.env['res.users'].sudo().browse(target_user_id).exists()
                 if not target_user or not target_user._is_internal():
-                    return
+                    return False
                 sanitized_payload = self._ai_debug_sanitize(payload)
                 encoded = json.dumps(sanitized_payload, ensure_ascii=False, separators=(",", ":"))
                 if len(encoded.encode()) > _MAX_EVENT_BYTES:
@@ -104,7 +107,9 @@ class AiSession(models.Model):
                     sanitized_payload['_payload_excluded'] = True
 
                 bus = self.env['bus.bus'].sudo()
-                channel = channel_with_db(self.env.cr.dbname, target_user)
+                channel = channel_with_db(
+                    self.env.cr.dbname, (target_user, 'ai_debug'),
+                )
                 bus_row = bus.create({
                     'channel': json_dump(channel),
                     'message': json_dump({
@@ -163,8 +168,10 @@ class AiSession(models.Model):
                                     )
 
                 rows.append((bus_row.id, target_user.id))
+                return True
         except Exception:
             _logger.exception("ai_debug: failed to queue bus event '%s'", notification_type)
+            return False
 
     @classmethod
     def _ai_debug_sanitize(cls, value, *, key=None, depth=0):
@@ -523,12 +530,6 @@ class AiSession(models.Model):
 
     def _ai_debug_user_query(self, request):
         """Return the durable exchange prompt without its appended Odoo context."""
-        if request.origin_message_id:
-            query = html2plaintext(
-                request.origin_message_id.body or '', include_references=False,
-            ).strip()
-            if query:
-                return query
         for message in reversed((request.payload or {}).get('messages') or []):
             if not isinstance(message, dict) or message.get('role') != 'user':
                 continue
@@ -538,8 +539,221 @@ class AiSession(models.Model):
                 if text and not text.lstrip().startswith('<odoo_current_context>'):
                     query_parts.append(text)
             if query_parts:
-                return '\n'.join(query_parts).strip()
+                return html2plaintext(
+                    '\n'.join(query_parts), include_references=False,
+                ).strip()
         return ''
+
+    @staticmethod
+    def _ai_debug_exchange_uuid(request):
+        """Return the Custom correlation copied across callback request rounds."""
+        context_snapshot = request.context_snapshot
+        if not isinstance(context_snapshot, dict):
+            return request.request_uuid
+        exchange_uuid = context_snapshot.get(_AI_DEBUG_EXCHANGE_UUID_CONTEXT_KEY)
+        return (
+            exchange_uuid
+            if isinstance(exchange_uuid, str) and exchange_uuid
+            else request.request_uuid
+        )
+
+    @staticmethod
+    def _ai_debug_callback_tool_call_id(request_uuid, call_id):
+        """Return a stable debugger identity for one durable callback tool call."""
+        encoded_call_id = json.dumps(
+            call_id, ensure_ascii=False, sort_keys=True, default=str,
+        )
+        return uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f'odoo-ai-debug:{request_uuid}:{encoded_call_id}',
+        ).hex
+
+    def _ai_debug_callback_context(self, request, *, continuing=False):
+        """Build transaction-local buffering state for one authoritative callback seam."""
+        context = {
+            'trace_id': self._ai_debug_exchange_uuid(request),
+            'iteration_id': request.request_uuid,
+            'request_uuid': request.request_uuid,
+            'round_no': request.round_no,
+            'target_user_id': request.user_id.id,
+            'events': [],
+            'started_tool_call_ids': set(),
+            'start_times': {},
+        }
+        if continuing:
+            pending_tool_call = self.pending_tool_call or {}
+            if 'call_id' in pending_tool_call:
+                try:
+                    context['pending_tool_call'] = (
+                        self._ai_debug_find_tool_call(
+                            self._get_last_tool_calls(),
+                            pending_tool_call['call_id'],
+                        )
+                        or {'call_id': pending_tool_call['call_id']}
+                    )
+                    user_input_request = (
+                        pending_tool_call.get('user_input_request') or {}
+                    )
+                    context['pending_interaction_type'] = (
+                        user_input_request.get('type')
+                        or ('client_tool' if pending_tool_call.get('client_tool') else None)
+                    )
+                    context['pending_interaction_message'] = (
+                        user_input_request.get('body') or ''
+                    )
+                    context['started_tool_call_ids'].add(
+                        self._ai_debug_callback_tool_call_id(
+                            request.request_uuid,
+                            pending_tool_call['call_id'],
+                        )
+                    )
+                except Exception:  # noqa: BLE001
+                    _logger.exception(
+                        "ai_debug: failed to restore callback tool identity"
+                    )
+        return context
+
+    @staticmethod
+    def _ai_debug_find_tool_call(tool_calls, call_id):
+        return next(
+            (
+                tool_call for tool_call in tool_calls
+                if tool_call.get('call_id') == call_id
+            ),
+            None,
+        )
+
+    def _ai_debug_buffer_callback_tool_started(self, context, tool_call):
+        """Buffer one start fact without affecting the parent tool generator."""
+        try:
+            if not isinstance(tool_call, dict) or 'call_id' not in tool_call:
+                return None
+            tool_call_id = self._ai_debug_callback_tool_call_id(
+                context['request_uuid'], tool_call['call_id'],
+            )
+            context['start_times'].setdefault(tool_call_id, time.monotonic())
+            if tool_call_id in context['started_tool_call_ids']:
+                return tool_call_id
+            context['started_tool_call_ids'].add(tool_call_id)
+            context['events'].append(('tool_call_started', {
+                'type': 'tool_call_started',
+                'trace_id': context['trace_id'],
+                'exchange_uuid': context['trace_id'],
+                'request_uuid': context['request_uuid'],
+                'round_no': context['round_no'],
+                'iteration_id': context['iteration_id'],
+                'tool_call_id': tool_call_id,
+                'call_id': tool_call['call_id'],
+                'tool_name': tool_call.get('name', 'unknown'),
+                'args': copy.deepcopy(tool_call.get('args') or {}),
+            }))
+            return tool_call_id
+        except Exception:  # noqa: BLE001
+            _logger.exception("ai_debug: failed to buffer callback tool start")
+            return None
+
+    def _ai_debug_buffer_callback_tool_completed(
+        self, context, tool_call, *, result=None, success=None,
+        triggered_confirmation=False, confirmation_message=None,
+    ):
+        """Buffer one completion fact paired to its stable callback start."""
+        try:
+            tool_call_id = self._ai_debug_buffer_callback_tool_started(
+                context, tool_call,
+            )
+            if not tool_call_id:
+                return
+            error = str(result) if success is False and result is not None else None
+            context['events'].append(('tool_call_completed', {
+                'type': 'tool_call_completed',
+                'trace_id': context['trace_id'],
+                'exchange_uuid': context['trace_id'],
+                'request_uuid': context['request_uuid'],
+                'round_no': context['round_no'],
+                'iteration_id': context['iteration_id'],
+                'tool_call_id': tool_call_id,
+                'call_id': tool_call['call_id'],
+                'tool_name': tool_call.get('name', 'unknown'),
+                'args': copy.deepcopy(tool_call.get('args') or {}),
+                'result': copy.deepcopy(result),
+                'success': success,
+                'error': error,
+                'triggered_confirmation': triggered_confirmation,
+                'confirmation_message': confirmation_message,
+                'duration_ms': int(
+                    (time.monotonic() - context['start_times'][tool_call_id]) * 1000
+                ),
+            }))
+        except Exception:  # noqa: BLE001
+            _logger.exception("ai_debug: failed to buffer callback tool completion")
+
+    def _ai_debug_buffer_callback_tool_items(
+        self, items, tool_calls, tools_context, context,
+    ):
+        """Observe committed-tip tool items while leaving reduction to Enterprise."""
+        for item in items:
+            try:
+                client_tool = item.get('client_tool') or {}
+                if client_tool.get('name') == 'update_thinking':
+                    current_tool_call = self._ai_debug_find_tool_call(
+                        tool_calls, tools_context.get('tool_call_id'),
+                    )
+                    self._ai_debug_buffer_callback_tool_started(
+                        context, current_tool_call,
+                    )
+
+                for result_item in item.get('tool_results') or ():
+                    result_tool_call = result_item.get('tool_call') or {}
+                    tool_call = self._ai_debug_find_tool_call(
+                        tool_calls, result_tool_call.get('call_id'),
+                    ) or result_tool_call
+                    self._ai_debug_buffer_callback_tool_completed(
+                        context,
+                        tool_call,
+                        result=result_item.get('result'),
+                        success=result_item.get('success', True),
+                    )
+
+                pending_tool_call = item.get('pending_tool_call') or {}
+                user_input_request = item.get('user_input_request') or {}
+                for result_item in pending_tool_call.get('pending_results') or ():
+                    result_tool_call = result_item.get('tool_call') or {}
+                    tool_call = self._ai_debug_find_tool_call(
+                        tool_calls, result_tool_call.get('call_id'),
+                    ) or result_tool_call
+                    self._ai_debug_buffer_callback_tool_completed(
+                        context,
+                        tool_call,
+                        result=result_item.get('result'),
+                        success=result_item.get('success', True),
+                    )
+                if (
+                    'call_id' in pending_tool_call
+                    and user_input_request.get('type') == 'confirmation'
+                ):
+                    tool_call = self._ai_debug_find_tool_call(
+                        tool_calls, pending_tool_call['call_id'],
+                    )
+                    self._ai_debug_buffer_callback_tool_completed(
+                        context,
+                        tool_call,
+                        triggered_confirmation=True,
+                        confirmation_message=user_input_request.get('body') or '',
+                    )
+            except Exception:  # noqa: BLE001
+                _logger.exception("ai_debug: failed to observe callback tool item")
+            yield item
+
+    def _ai_debug_flush_callback_tool_events(self, context):
+        """Queue buffered callback tool facts after parent application succeeds."""
+        events = list(context.get('events') or ())
+        context['events'] = []
+        for event_type, payload in events:
+            self._ai_debug_bus_send(
+                event_type,
+                payload,
+                target_user_id=context['target_user_id'],
+            )
 
     def _ai_debug_normalized_request(self, request):
         """Rebuild the credential-free normalized payload submitted to IAP."""
@@ -563,9 +777,16 @@ class AiSession(models.Model):
             return {'_details_excluded': True}
         normalized = {
             key: self._ai_debug_sanitize(response.get(key), key=key)
-            for key in ('request_uuid', 'status', 'error')
+            for key in ('request_uuid', 'status')
             if key in response
         }
+        if 'error' in response:
+            error = response.get('error')
+            normalized['error'] = (
+                error if error in _SAFE_IAP_ERROR_CODES
+                else 'request_failed' if error
+                else None
+            )
         if isinstance(response.get('result'), dict):
             normalized['result'] = self._ai_debug_normalized_message(response['result'])
         return normalized
@@ -584,10 +805,11 @@ class AiSession(models.Model):
         if request.round_no != 1:
             return
         payload = request.payload or {}
+        exchange_uuid = self._ai_debug_exchange_uuid(request)
         self._ai_debug_bus_send('new_trace', {
             'type': 'new_trace',
-            'trace_id': request.exchange_uuid,
-            'exchange_uuid': request.exchange_uuid,
+            'trace_id': exchange_uuid,
+            'exchange_uuid': exchange_uuid,
             'request_uuid': request.request_uuid,
             'round_no': request.round_no,
             'request_state': request.state,
@@ -602,24 +824,55 @@ class AiSession(models.Model):
             },
         }, target_user_id=request.user_id.id)
 
-    def _ai_debug_trace_request_result(self, request, response, outcome, previous_state):
-        """Queue authoritative request facts accepted by `_apply_iap_response`."""
+    def _ai_debug_trace_request_state(self, request, previous_state):
+        """Queue one accepted durable state transition, suppressing replays."""
         current_state = request.state
-        if current_state != previous_state:
-            self._ai_debug_bus_send('request_state', {
-                'type': 'request_state',
-                'trace_id': request.exchange_uuid,
-                'exchange_uuid': request.exchange_uuid,
-                'request_uuid': request.request_uuid,
-                'round_no': request.round_no,
-                'previous_state': previous_state,
-                'state': current_state,
-            }, target_user_id=request.user_id.id)
+        if current_state == previous_state:
+            return False
+        exchange_uuid = self._ai_debug_exchange_uuid(request)
+        self._ai_debug_bus_send('request_state', {
+            'type': 'request_state',
+            'trace_id': exchange_uuid,
+            'exchange_uuid': exchange_uuid,
+            'request_uuid': request.request_uuid,
+            'round_no': request.round_no,
+            'previous_state': previous_state,
+            'state': current_state,
+        }, target_user_id=request.user_id.id)
+        return True
 
-        if not outcome.get('applied') or previous_state in ('done', 'failed'):
+    def _ai_debug_trace_exchange_end(self, request, outcome, *, error=None):
+        """Close the trace only when the committed callback exchange is terminal."""
+        if (
+            request.state not in ('done', 'failed')
+            or outcome.get('next_request_id')
+            or outcome.get('responseState') != 'idle'
+        ):
             return
-        if current_state not in ('done', 'failed'):
-            return
+        if request.state == 'failed' and error is None:
+            error = 'request_failed'
+        exchange_uuid = self._ai_debug_exchange_uuid(request)
+        duration_ms = self._ai_debug_request_duration_ms(request)
+        self._ai_debug_bus_send('loop_end', {
+            'type': 'loop_end',
+            'trace_id': exchange_uuid,
+            'exchange_uuid': exchange_uuid,
+            'request_uuid': request.request_uuid,
+            'round_no': request.round_no,
+            'termination_reason': 'success' if request.state == 'done' else 'error',
+            'error': error,
+            'iteration_count': request.round_no,
+            'duration_ms': duration_ms,
+            'duration_kind': 'request_lifecycle',
+        }, target_user_id=request.user_id.id)
+
+    def _ai_debug_trace_request_result(self, request, response, outcome, previous_state):
+        """Queue authoritative request facts accepted by `_apply_iap_result`."""
+        current_state = request.state
+        if not self._ai_debug_trace_request_state(request, previous_state):
+            return False
+        if current_state not in ('waiting_input', 'done', 'failed'):
+            return False
 
         normalized_request = self._ai_debug_normalized_request(request)
         normalized_response = self._ai_debug_normalized_response(response)
@@ -630,12 +883,21 @@ class AiSession(models.Model):
             isinstance(part, dict) and part.get('type') == 'tool_call'
             for part in content
         )
-        error = request.error or None
+        raw_error = response.get('error') if isinstance(response, dict) else None
+        error = None
+        if current_state == 'failed':
+            error = raw_error if raw_error in _SAFE_IAP_ERROR_CODES else 'request_failed'
+        is_final = (
+            current_state in ('done', 'failed')
+            and not outcome.get('next_request_id')
+            and outcome.get('responseState') == 'idle'
+        )
         duration_ms = self._ai_debug_request_duration_ms(request)
-        self._ai_debug_bus_send('iteration', {
+        exchange_uuid = self._ai_debug_exchange_uuid(request)
+        iteration_queued = self._ai_debug_bus_send('iteration', {
             'type': 'iteration',
-            'trace_id': request.exchange_uuid,
-            'exchange_uuid': request.exchange_uuid,
+            'trace_id': exchange_uuid,
+            'exchange_uuid': exchange_uuid,
             'request_uuid': request.request_uuid,
             'round_no': request.round_no,
             'iteration_id': request.request_uuid,
@@ -645,7 +907,7 @@ class AiSession(models.Model):
             'raw_response': normalized_response,
             'response_label': 'Normalized IAP Result',
             'has_tool_calls': has_tool_calls,
-            'is_final': current_state == 'done',
+            'is_final': is_final,
             'error': error,
             'request_state': current_state,
             'provider': provider_metadata.get('provider'),
@@ -654,29 +916,113 @@ class AiSession(models.Model):
             'duration_ms': duration_ms,
             'duration_kind': 'request_lifecycle',
         }, target_user_id=request.user_id.id)
-        self._ai_debug_bus_send('loop_end', {
-            'type': 'loop_end',
-            'trace_id': request.exchange_uuid,
-            'exchange_uuid': request.exchange_uuid,
-            'request_uuid': request.request_uuid,
-            'round_no': request.round_no,
-            'termination_reason': 'success' if current_state == 'done' else 'error',
-            'error': error,
-            'iteration_count': request.round_no,
-            'tool_call_count': 0,
-            'duration_ms': duration_ms,
-            'duration_kind': 'request_lifecycle',
-        }, target_user_id=request.user_id.id)
+        return bool(iteration_queued)
 
-    def _apply_iap_response(self, request, response, *, try_lock=False):
-        """Trace only durable results that the Enterprise ledger actually accepts."""
+    def _apply_iap_submit_response(self, request, response):
+        """Trace only the acknowledgement transition accepted by Enterprise."""
         previous_state = request.state
-        outcome = super()._apply_iap_response(request, response, try_lock=try_lock)
+        outcome = super()._apply_iap_submit_response(request, response)
         self._ai_debug_try(
-            lambda: self._ai_debug_trace_request_result(
+            lambda: self._ai_debug_trace_request_state(request, previous_state)
+        )
+        return outcome
+
+    def _apply_iap_result(self, request, response):
+        """Trace only authoritative fetched results that Enterprise accepts."""
+        previous_state = request.state
+        try:
+            callback_context = self._ai_debug_callback_context(request)
+            callback_session = self.with_context({
+                _AI_DEBUG_CALLBACK_CONTEXT_KEY: callback_context,
+            })
+        except Exception:  # noqa: BLE001
+            _logger.exception("ai_debug: failed to establish callback result context")
+            return super()._apply_iap_result(request, response)
+
+        outcome = super(AiSession, callback_session)._apply_iap_result(
+            request, response,
+        )
+        iteration_queued = callback_session._ai_debug_try(
+            lambda: callback_session._ai_debug_trace_request_result(
                 request, response, outcome, previous_state,
             )
         )
+        if iteration_queued:
+            callback_session._ai_debug_try(
+                lambda: callback_session._ai_debug_flush_callback_tool_events(
+                    callback_context
+                )
+            )
+            callback_session._ai_debug_try(
+                lambda: callback_session._ai_debug_trace_exchange_end(
+                    request, outcome,
+                    error=(
+                        response.get('error')
+                        if response.get('error') in _SAFE_IAP_ERROR_CODES
+                        else 'request_failed' if request.state == 'failed' else None
+                    ),
+                )
+            )
+        return outcome
+
+    def _resume_callback_tool(self, request, resume_token, response):
+        """Close or advance an already-traced round after a durable interaction."""
+        previous_state = request.state
+        try:
+            callback_context = self._ai_debug_callback_context(
+                request, continuing=True,
+            )
+            callback_session = self.with_context({
+                _AI_DEBUG_CALLBACK_CONTEXT_KEY: callback_context,
+            })
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "ai_debug: failed to establish callback interaction context"
+            )
+            return super()._resume_callback_tool(
+                request, resume_token, response,
+            )
+
+        outcome = super(AiSession, callback_session)._resume_callback_tool(
+            request, resume_token, response,
+        )
+        aborted_reason = None
+        if response == {'skip': True}:
+            aborted_reason = 'Question skipped by user'
+        elif response == {'value': 'decline'}:
+            aborted_reason = 'Tool declined by user'
+        if aborted_reason and callback_context.get('pending_tool_call'):
+            callback_session._ai_debug_try(
+                lambda: callback_session._ai_debug_buffer_callback_tool_completed(
+                    callback_context,
+                    callback_context['pending_tool_call'],
+                    result=aborted_reason,
+                    success=False,
+                    triggered_confirmation=(
+                        callback_context.get('pending_interaction_type')
+                        == 'confirmation'
+                    ),
+                    confirmation_message=(
+                        callback_context.get('pending_interaction_message') or None
+                    ),
+                )
+            )
+        state_changed = callback_session._ai_debug_try(
+            lambda: callback_session._ai_debug_trace_request_state(
+                request, previous_state,
+            )
+        )
+        callback_session._ai_debug_try(
+            lambda: callback_session._ai_debug_flush_callback_tool_events(
+                callback_context
+            )
+        )
+        if state_changed:
+            callback_session._ai_debug_try(
+                lambda: callback_session._ai_debug_trace_exchange_end(
+                    request, outcome,
+                )
+            )
         return outcome
 
     def _generate_next_response(self, message, pending_tool_response=None):
@@ -798,13 +1144,17 @@ class AiSession(models.Model):
 
     def _handle_tool_calls(self, tool_calls, tools_by_name, tools_context, record,
             pending_tool_response=None, refuse_all=False):
-        """Override to emit tool_call_started and tool_call_completed bus events per tool.
+        """Observe tool calls without changing Enterprise execution semantics.
 
-        Each tool call emits two events:
+        The synchronous loop keeps its existing immediate events:
           - tool_call_started: fired BEFORE super() delegation with tool name, args, and a
             stable tool_call_id UUID (pre-generated so started and completed share the same ID)
           - tool_call_completed: fired AFTER super() yields tool_results with the same
             tool_call_id, result, success, and error fields
+
+        The callback path instead buffers committed-tip tool items. Its authoritative
+        apply/resume wrappers flush them only after the parent reducer succeeds and the
+        corresponding iteration has been queued.
 
         Also injects ai_parent_trace_id into env.context so any subagent sessions spawned
         during tool execution can identify their parent trace in their new_trace bus event.
@@ -813,10 +1163,26 @@ class AiSession(models.Model):
         Odoo AI tool modifies tools_context['state'], so the diff is always empty. The
         commented-out lines can be re-enabled if custom tools begin mutating state.
 
-        If _debug_ctx is not in context (instrumentation not active), delegates to super()
-        without any instrumentation overhead.
+        Without either private debugger context, delegate without instrumentation.
         """
         _debug_ctx = self.env.context.get('_debug_ctx')
+        callback_context = (
+            self.env.context.get(_AI_DEBUG_CALLBACK_CONTEXT_KEY)
+            if not _debug_ctx
+            else None
+        )
+        if callback_context:
+            tools_context['_debug_trace_id'] = callback_context['trace_id']
+            yield from self._ai_debug_buffer_callback_tool_items(
+                super()._handle_tool_calls(
+                    tool_calls, tools_by_name, tools_context, record,
+                    pending_tool_response, refuse_all,
+                ),
+                tool_calls,
+                tools_context,
+                callback_context,
+            )
+            return
         if not _debug_ctx:
             # Instrumentation not active — skip all overhead
             yield from super()._handle_tool_calls(
@@ -895,8 +1261,13 @@ class AiSession(models.Model):
                         'duration_ms': int((time.monotonic() - _tc_start) * 1000),
                     })
 
-            elif confirmation := item.get('tool_confirmation_request'):
-                call_id = confirmation.get('call_id')
+            elif (
+                (pending_tool_call := item.get('pending_tool_call'))
+                and (
+                    user_input_request := item.get('user_input_request') or {}
+                ).get('type') == 'confirmation'
+            ):
+                call_id = pending_tool_call.get('call_id')
                 originating_tc = tool_calls_by_id.get(call_id, {})
                 _debug_ctx['tool_call_count'] += 1
 
@@ -913,7 +1284,7 @@ class AiSession(models.Model):
                     'success': None,
                     'error': None,
                     'triggered_confirmation': True,
-                    'confirmation_message': confirmation.get('message', ''),
+                    'confirmation_message': user_input_request.get('body', ''),
                     'duration_ms': int((time.monotonic() - _tc_start) * 1000),
                 })
 
