@@ -982,10 +982,20 @@ class AiSession(models.Model):
             )
         return outcome
 
-    def _resume_callback_tool(self, request, resume_token, response):
+    def _resume_callback_tool(
+        self, request, resume_token, response, *, context_snapshot=None,
+    ):
         """Close or advance an already-traced round after a durable interaction."""
         previous_state = request.state
+        resume_context_snapshot = context_snapshot
         try:
+            if isinstance(context_snapshot, dict):
+                # Enterprise replaces the request snapshot with fresh browser
+                # context on resume; retain this exchange's private correlation.
+                resume_context_snapshot = copy.deepcopy(context_snapshot)
+                resume_context_snapshot[_AI_DEBUG_EXCHANGE_UUID_CONTEXT_KEY] = (
+                    self._ai_debug_exchange_uuid(request)
+                )
             callback_context = self._ai_debug_callback_context(
                 request, continuing=True,
             )
@@ -998,10 +1008,12 @@ class AiSession(models.Model):
             )
             return super()._resume_callback_tool(
                 request, resume_token, response,
+                context_snapshot=context_snapshot,
             )
 
         outcome = super(AiSession, callback_session)._resume_callback_tool(
             request, resume_token, response,
+            context_snapshot=resume_context_snapshot,
         )
         aborted_reason = None
         if response == {'skip': True}:
@@ -1193,7 +1205,7 @@ class AiSession(models.Model):
             })
 
     def _handle_tool_calls(self, tool_calls, tools_by_name, tools_context, record,
-            pending_tool_response=None, refuse_all=False):
+            pending_tool_response=None, refuse_all=False, tool_call_offset=0):
         """Observe tool calls without changing Enterprise execution semantics.
 
         The synchronous loop keeps its existing immediate events:
@@ -1226,7 +1238,9 @@ class AiSession(models.Model):
             yield from self._ai_debug_buffer_callback_tool_items(
                 super()._handle_tool_calls(
                     tool_calls, tools_by_name, tools_context, record,
-                    pending_tool_response, refuse_all,
+                    pending_tool_response=pending_tool_response,
+                    refuse_all=refuse_all,
+                    tool_call_offset=tool_call_offset,
                 ),
                 tool_calls,
                 tools_context,
@@ -1237,7 +1251,9 @@ class AiSession(models.Model):
             # Instrumentation not active — skip all overhead
             yield from super()._handle_tool_calls(
                 tool_calls, tools_by_name, tools_context, record,
-                pending_tool_response, refuse_all,
+                pending_tool_response=pending_tool_response,
+                refuse_all=refuse_all,
+                tool_call_offset=tool_call_offset,
             )
             return
 
@@ -1282,7 +1298,9 @@ class AiSession(models.Model):
 
         for item in super()._handle_tool_calls(
             tool_calls, tools_by_name, tools_context, record,
-            pending_tool_response, refuse_all,
+            pending_tool_response=pending_tool_response,
+            refuse_all=refuse_all,
+            tool_call_offset=tool_call_offset,
         ):
             if tool_results := item.get('tool_results'):
                 # state_after_batch = copy.deepcopy(tools_context.get('state') or {})

@@ -3,7 +3,6 @@ from textwrap import dedent
 from unittest.mock import MagicMock, patch
 
 from odoo import api
-from odoo.exceptions import UserError
 from odoo.modules.registry import Registry
 from odoo.tests import HttpCase, TransactionCase, new_test_user, tagged
 
@@ -409,10 +408,17 @@ class TestAiDebugCallback(TransactionCase):
                 {'value': UserInputResponse.CONFIRM_ONCE},
             )
             second_resume_token = request.resume_token
+            fresh_context_snapshot = {
+                'active_company_ids': self.env.companies.ids,
+                'allowed_company_ids': self.env.companies.ids,
+                'current_view_info': {'view_type': 'list'},
+                'ai_debug_exchange_uuid': 'untrusted-browser-value',
+            }
             outcome = session._resume_callback_tool(
                 request,
                 second_resume_token,
                 {'value': UserInputResponse.CONFIRM_ONCE},
+                context_snapshot=fresh_context_snapshot,
             )
 
         self.assertEqual(waiting['responseState'], 'waiting_user')
@@ -421,11 +427,20 @@ class TestAiDebugCallback(TransactionCase):
         self.assertEqual(outcome['responseState'], 'running')
         self.assertEqual(request.state, 'done')
         self.assertEqual(session.state['confirmed_runs'], 2)
+        next_request = self.env['ai.session.request'].browse(
+            outcome['next_request_id']
+        )
         self.assertEqual(
-            self.env['ai.session.request'].browse(
-                outcome['next_request_id']
-            ).context_snapshot['ai_debug_exchange_uuid'],
+            next_request.context_snapshot['ai_debug_exchange_uuid'],
             request.context_snapshot['ai_debug_exchange_uuid'],
+        )
+        self.assertEqual(
+            next_request.context_snapshot['current_view_info'],
+            {'view_type': 'list'},
+        )
+        self.assertEqual(
+            fresh_context_snapshot['ai_debug_exchange_uuid'],
+            'untrusted-browser-value',
         )
 
         iterations = [
@@ -565,7 +580,7 @@ class TestAiDebugCallback(TransactionCase):
                 {'result': {'client_value': 42}},
             )
 
-        self.assertEqual(waiting['responseState'], 'waiting_user')
+        self.assertEqual(waiting['responseState'], 'waiting_client')
         self.assertEqual(pending_client_tool, {
             'name': 'get_client_data',
             'params': {'key': 'fixture'},
@@ -677,20 +692,32 @@ class TestAiDebugCallback(TransactionCase):
         self.assertEqual(loop_end['error'], 'request_failed')
         self.assertNotIn(provider_error, json.dumps(events))
 
-    def test_malformed_result_does_not_create_debugger_result_events(self):
+    def test_malformed_result_traces_committed_terminal_failure(self):
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare('Malformed result')
-            event_count = len(events)
-            with self.assertRaises(UserError):
-                session._apply_iap_result(request, {
-                    'request_uuid': request.request_uuid,
-                    'status': 'success',
-                    'result': [],
-                })
+            outcome = session._apply_iap_result(request, {
+                'request_uuid': request.request_uuid,
+                'status': 'success',
+                'result': [],
+            })
 
-        self.assertEqual(request.state, 'prepared')
-        self.assertEqual(len(events), event_count)
+        self.assertEqual(outcome['responseState'], 'idle')
+        self.assertEqual(request.state, 'failed')
+        iteration = next(
+            payload for event, payload, _kwargs in events if event == 'iteration'
+        )
+        self.assertEqual(iteration['request_state'], 'failed')
+        self.assertEqual(iteration['error'], 'request_failed')
+        self.assertEqual(iteration['raw_response'], {
+            'request_uuid': request.request_uuid,
+            'status': 'success',
+        })
+        loop_end = next(
+            payload for event, payload, _kwargs in events if event == 'loop_end'
+        )
+        self.assertEqual(loop_end['termination_reason'], 'error')
+        self.assertEqual(loop_end['error'], 'request_failed')
 
     def test_debugger_failure_does_not_change_request_or_reply(self):
         session, request = self._prepare('Failure isolation')
