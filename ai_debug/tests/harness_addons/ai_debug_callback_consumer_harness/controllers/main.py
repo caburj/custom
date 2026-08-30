@@ -90,14 +90,12 @@ class AiDebugCallbackConsumerHarness(http.Controller):
         session = http.request.env['ai.session'].sudo().browse(session_id).exists()
         if not session:
             raise NotFound()
-        request = http.request.env['ai.session.request'].sudo().search([
-            ('session_id', '=', session.id),
-        ], order='id desc', limit=1)
         return _json_response({
             'session_id': session.id,
-            'request_uuid': request.request_uuid or False,
-            'request_state': request.state or False,
-            'response_state': request._response_state() if request else 'idle',
+            'request_uuid': session.request_uuid or False,
+            'loop_state': session.loop_state,
+            'request_phase': session.request_phase or False,
+            'response_state': session._get_response_state(),
             'event_roles': [
                 event.metadata.get('role')
                 for event in session.event_ids.sorted('id')

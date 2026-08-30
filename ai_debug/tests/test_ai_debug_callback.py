@@ -21,6 +21,24 @@ def assistant_text(text, provider_metadata=None):
     return message
 
 
+class RequestSnapshot:
+    """Test-only attribute view of one pre-reducer session request snapshot."""
+
+    def __init__(self, session, values):
+        self.session = session
+        self.request_uuid = values['request_uuid']
+        self.round_no = values['round_no']
+        self.round_limit = values['round_limit']
+        self.payload = values['payload']
+        self.context_snapshot = values['context_snapshot']
+        self.user_id = session.env['res.users'].browse(values['user_id'])
+        self.guest_id = session.env['mail.guest'].browse(values['guest_id'])
+
+    @property
+    def resume_token(self):
+        return self.session.resume_token
+
+
 @tagged('post_install', '-at_install')
 class TestAiDebugCallback(TransactionCase):
     @classmethod
@@ -38,15 +56,21 @@ class TestAiDebugCallback(TransactionCase):
 
     def _prepare(self, body='Hi'):
         message = self.channel.message_post(body=body, message_type='comment')
-        session = self.session.with_context(
-            active_company_ids=self.env.companies.ids,
-            allowed_company_ids=self.env.companies.ids,
-            ai_context_snapshot={
-                'active_company_ids': self.env.companies.ids,
-                'allowed_company_ids': self.env.companies.ids,
-            },
+        context_snapshot = {
+            'active_company_ids': self.env.companies.ids,
+            'allowed_company_ids': self.env.companies.ids,
+        }
+        session = self.session.with_context(**context_snapshot)
+        session._prepare_model_request(
+            message._convert_to_parts(), context_snapshot=context_snapshot,
         )
-        return session, session._prepare_callback_request(message._convert_to_parts())
+        return session, RequestSnapshot(
+            session, session._ai_debug_request_snapshot(),
+        )
+
+    @staticmethod
+    def _mark_submitted(session):
+        session.request_phase = 'submitted'
 
     @staticmethod
     def _capture(events):
@@ -84,10 +108,7 @@ class TestAiDebugCallback(TransactionCase):
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare()
-            session._apply_iap_submit_response(request, {
-                'request_uuid': request.request_uuid,
-                'status': 'queued',
-            })
+            self._mark_submitted(session)
             result = {
                 'request_uuid': request.request_uuid,
                 'status': 'success',
@@ -98,9 +119,9 @@ class TestAiDebugCallback(TransactionCase):
                 }),
             }
             message_count = len(session.channel_id.message_ids)
-            applied = session._apply_iap_result(request, result)
+            applied = session._apply_iap_result(request.request_uuid, result)
             event_count = len(events)
-            replay = session._apply_iap_result(request, result)
+            replay = session._apply_iap_result(request.request_uuid, result)
 
         self.assertEqual(applied['responseState'], 'idle')
         self.assertEqual(replay['responseState'], 'idle')
@@ -116,21 +137,13 @@ class TestAiDebugCallback(TransactionCase):
         self.assertEqual(trace['exchange_uuid'], exchange_uuid)
         self.assertEqual(trace['request_uuid'], request.request_uuid)
         self.assertEqual(trace['round_no'], 1)
-        self.assertEqual(trace['request_state'], 'prepared')
+        self.assertEqual(trace['request_state'], 'waiting_model')
+        self.assertEqual(trace['request_phase'], 'prepared')
         self.assertEqual(trace['user_query'], 'Hi')
         self.assertEqual(trace['instructions'], request.payload['instructions'])
         trace_target = next(kwargs for event, _payload, kwargs in events if event == 'new_trace')
         self.assertEqual(trace_target['target_user_id'], request.user_id.id)
 
-        transitions = [
-            (payload['previous_state'], payload['state'])
-            for event, payload, _kwargs in events
-            if event == 'request_state'
-        ]
-        self.assertEqual(transitions, [
-            ('prepared', 'waiting_iap'),
-            ('waiting_iap', 'done'),
-        ])
         terminal = next(payload for event, payload, _kwargs in events if event == 'iteration')
         self.assertEqual(terminal['trace_id'], exchange_uuid)
         self.assertEqual(terminal['exchange_uuid'], exchange_uuid)
@@ -149,18 +162,19 @@ class TestAiDebugCallback(TransactionCase):
         self.assertEqual(terminal['provider'], 'callback_harness')
         self.assertEqual(terminal['model_name'], 'deterministic-fixture')
         self.assertEqual(terminal['provider_api'], 'loopback')
-        self.assertGreaterEqual(terminal['duration_ms'], 0)
-        self.assertEqual(terminal['duration_kind'], 'request_lifecycle')
+        self.assertIsNone(terminal['duration_ms'])
+        self.assertIsNone(terminal['duration_kind'])
         self.assertNotIn('tokens', terminal)
         terminal_target = next(kwargs for event, _payload, kwargs in events if event == 'iteration')
         self.assertEqual(terminal_target['target_user_id'], request.user_id.id)
 
         loop_end = next(payload for event, payload, _kwargs in events if event == 'loop_end')
         self.assertEqual(loop_end['termination_reason'], 'success')
+        self.assertEqual(loop_end['termination_source'], 'debugger_normalized_outcome')
         self.assertEqual(loop_end['iteration_count'], 1)
         self.assertNotIn('tool_call_count', loop_end)
         self.assertEqual(loop_end['duration_ms'], terminal['duration_ms'])
-        self.assertEqual(loop_end['duration_kind'], 'request_lifecycle')
+        self.assertIsNone(loop_end['duration_kind'])
 
         encoded = str(events).casefold()
         for forbidden in (
@@ -173,7 +187,8 @@ class TestAiDebugCallback(TransactionCase):
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare('No metadata')
-            session._apply_iap_result(request, {
+            self._mark_submitted(session)
+            session._apply_iap_result(request.request_uuid, {
                 'request_uuid': request.request_uuid,
                 'status': 'success',
                 'result': assistant_text('No metadata result'),
@@ -196,24 +211,21 @@ class TestAiDebugCallback(TransactionCase):
             'result': assistant_text('Final round'),
         }
 
-        def apply_intermediate(enterprise_session, request, _response):
-            request._transition('done')
-            next_request = enterprise_session._prepare_callback_request(
-                previous_request=request,
+        def apply_intermediate(enterprise_session, request_uuid, _response):
+            next_request = enterprise_session._prepare_model_request(
+                continuation=True,
                 tools_context=enterprise_session._build_tools_context(),
             )
             return {
-                'request_uuid': request.request_uuid,
+                'request_uuid': request_uuid,
                 'responseState': 'running',
-                'next_request_id': next_request.id,
+                'prepared_session_id': next_request.id,
+                'prepared_request_uuid': next_request.request_uuid,
             }
 
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, first_request = self._prepare('Use two rounds')
-            session._apply_iap_submit_response(first_request, {
-                'request_uuid': first_request.request_uuid,
-                'status': 'queued',
-            })
+            self._mark_submitted(session)
             intermediate_result['request_uuid'] = first_request.request_uuid
             with patch.object(
                 EnterpriseAiSession,
@@ -221,18 +233,16 @@ class TestAiDebugCallback(TransactionCase):
                 new=apply_intermediate,
             ):
                 first_outcome = session._apply_iap_result(
-                    first_request, intermediate_result,
+                    first_request.request_uuid, intermediate_result,
                 )
 
-            second_request = self.env['ai.session.request'].browse(
-                first_outcome['next_request_id']
+            second_request = RequestSnapshot(
+                session, session._ai_debug_request_snapshot(),
             )
-            session._apply_iap_submit_response(second_request, {
-                'request_uuid': second_request.request_uuid,
-                'status': 'queued',
-            })
+            self.assertEqual(first_outcome['prepared_session_id'], session.id)
+            self._mark_submitted(session)
             final_result['request_uuid'] = second_request.request_uuid
-            session._apply_iap_result(second_request, final_result)
+            session._apply_iap_result(second_request.request_uuid, final_result)
 
         exchange_uuid = first_request.context_snapshot['ai_debug_exchange_uuid']
         self.assertEqual(
@@ -279,24 +289,22 @@ class TestAiDebugCallback(TransactionCase):
 
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare('Run the callback tool')
-            session._apply_iap_submit_response(request, {
-                'request_uuid': request.request_uuid,
-                'status': 'queued',
-            })
-            outcome = session._apply_iap_result(request, {
+            self._mark_submitted(session)
+            outcome = session._apply_iap_result(request.request_uuid, {
                 'request_uuid': request.request_uuid,
                 'status': 'success',
                 'result': self._tool_result(tool, 'real-tool-call'),
             })
             event_count = len(events)
-            session._apply_iap_result(request, {
+            session._apply_iap_result(request.request_uuid, {
                 'request_uuid': request.request_uuid,
                 'status': 'success',
                 'result': self._tool_result(tool, 'real-tool-call'),
             })
 
         self.assertEqual(outcome['responseState'], 'running')
-        self.assertTrue(outcome['next_request_id'])
+        self.assertEqual(outcome['prepared_session_id'], session.id)
+        self.assertTrue(outcome['prepared_request_uuid'])
         self.assertEqual(len(events), event_count)
         relevant_events = [
             event for event, _payload, _kwargs in events
@@ -335,30 +343,28 @@ class TestAiDebugCallback(TransactionCase):
 
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare('Roll back the callback tool')
-            session._apply_iap_submit_response(request, {
-                'request_uuid': request.request_uuid,
-                'status': 'queued',
-            })
+            self._mark_submitted(session)
             event_count = len(events)
             with (
                 patch.object(
                     EnterpriseAiSession,
-                    '_prepare_callback_request',
+                    '_prepare_model_request',
                     side_effect=RuntimeError('parent application fixture failure'),
                 ),
                 self.assertRaises(RuntimeError),
                 self.env.cr.savepoint(),
             ):
-                session._apply_iap_result(request, {
+                session._apply_iap_result(request.request_uuid, {
                     'request_uuid': request.request_uuid,
                     'status': 'success',
                     'result': self._tool_result(tool, 'rolled-back-tool-call'),
                 })
 
         self.env.invalidate_all()
-        request = self.env['ai.session.request'].browse(request.id)
+        session = self.env['ai.session'].browse(session.id)
         self.assertEqual(len(events), event_count)
-        self.assertEqual(request.state, 'waiting_iap')
+        self.assertEqual(session.loop_state, 'waiting_model')
+        self.assertEqual(session.request_phase, 'submitted')
 
     def test_real_sequential_confirmations_reuse_tool_identity_without_new_iteration(self):
         events = []
@@ -386,11 +392,8 @@ class TestAiDebugCallback(TransactionCase):
 
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare('Confirm both callback tools')
-            session._apply_iap_submit_response(request, {
-                'request_uuid': request.request_uuid,
-                'status': 'queued',
-            })
-            waiting = session._apply_iap_result(request, {
+            self._mark_submitted(session)
+            waiting = session._apply_iap_result(request.request_uuid, {
                 'request_uuid': request.request_uuid,
                 'status': 'success',
                 'result': {
@@ -402,8 +405,8 @@ class TestAiDebugCallback(TransactionCase):
                 },
             })
             first_resume_token = request.resume_token
-            waiting_again = session._resume_callback_tool(
-                request,
+            waiting_again = session._resume_pending_interaction(
+                request.request_uuid,
                 first_resume_token,
                 {'value': UserInputResponse.CONFIRM_ONCE},
             )
@@ -414,8 +417,8 @@ class TestAiDebugCallback(TransactionCase):
                 'current_view_info': {'view_type': 'list'},
                 'ai_debug_exchange_uuid': 'untrusted-browser-value',
             }
-            outcome = session._resume_callback_tool(
-                request,
+            outcome = session._resume_pending_interaction(
+                request.request_uuid,
                 second_resume_token,
                 {'value': UserInputResponse.CONFIRM_ONCE},
                 context_snapshot=fresh_context_snapshot,
@@ -425,17 +428,15 @@ class TestAiDebugCallback(TransactionCase):
         self.assertEqual(waiting_again['responseState'], 'waiting_user')
         self.assertNotEqual(first_resume_token, second_resume_token)
         self.assertEqual(outcome['responseState'], 'running')
-        self.assertEqual(request.state, 'done')
         self.assertEqual(session.state['confirmed_runs'], 2)
-        next_request = self.env['ai.session.request'].browse(
-            outcome['next_request_id']
-        )
+        self.assertEqual(outcome['prepared_session_id'], session.id)
+        self.assertEqual(outcome['prepared_request_uuid'], session.request_uuid)
         self.assertEqual(
-            next_request.context_snapshot['ai_debug_exchange_uuid'],
+            session.request_context['ai_debug_exchange_uuid'],
             request.context_snapshot['ai_debug_exchange_uuid'],
         )
         self.assertEqual(
-            next_request.context_snapshot['current_view_info'],
+            session.request_context['current_view_info'],
             {'view_type': 'list'},
         )
         self.assertEqual(
@@ -507,25 +508,23 @@ class TestAiDebugCallback(TransactionCase):
 
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare('Ask a structured question')
-            session._apply_iap_submit_response(request, {
-                'request_uuid': request.request_uuid,
-                'status': 'queued',
-            })
-            waiting = session._apply_iap_result(request, {
+            self._mark_submitted(session)
+            waiting = session._apply_iap_result(request.request_uuid, {
                 'request_uuid': request.request_uuid,
                 'status': 'success',
                 'result': self._tool_result(tool, 'question-tool-call'),
             })
-            outcome = session._resume_callback_tool(
-                request,
+            outcome = session._resume_pending_interaction(
+                request.request_uuid,
                 request.resume_token,
                 {'values': ['draft']},
             )
 
         self.assertEqual(waiting['responseState'], 'waiting_user')
         self.assertEqual(outcome['responseState'], 'running')
-        self.assertTrue(outcome['next_request_id'])
-        self.assertEqual(request.state, 'done')
+        self.assertEqual(outcome['prepared_session_id'], session.id)
+        self.assertTrue(outcome['prepared_request_uuid'])
+        self.assertEqual(session.loop_state, 'waiting_model')
         self.assertFalse(session.pending_tool_call)
         self.assertEqual(
             [event for event, _payload, _kwargs in events].count('iteration'), 1,
@@ -564,18 +563,15 @@ class TestAiDebugCallback(TransactionCase):
 
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare('Run a result-bearing client tool')
-            session._apply_iap_submit_response(request, {
-                'request_uuid': request.request_uuid,
-                'status': 'queued',
-            })
-            waiting = session._apply_iap_result(request, {
+            self._mark_submitted(session)
+            waiting = session._apply_iap_result(request.request_uuid, {
                 'request_uuid': request.request_uuid,
                 'status': 'success',
                 'result': self._tool_result(tool, 'client-tool-call'),
             })
             pending_client_tool = session.pending_tool_call['client_tool']
-            outcome = session._resume_callback_tool(
-                request,
+            outcome = session._resume_pending_interaction(
+                request.request_uuid,
                 request.resume_token,
                 {'result': {'client_value': 42}},
             )
@@ -586,8 +582,9 @@ class TestAiDebugCallback(TransactionCase):
             'params': {'key': 'fixture'},
         })
         self.assertEqual(outcome['responseState'], 'running')
-        self.assertTrue(outcome['next_request_id'])
-        self.assertEqual(request.state, 'done')
+        self.assertEqual(outcome['prepared_session_id'], session.id)
+        self.assertTrue(outcome['prepared_request_uuid'])
+        self.assertEqual(session.loop_state, 'waiting_model')
         self.assertFalse(session.pending_tool_call)
         self.assertEqual(
             [event for event, _payload, _kwargs in events].count('iteration'), 1,
@@ -630,24 +627,21 @@ class TestAiDebugCallback(TransactionCase):
 
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare('Skip a structured question')
-            session._apply_iap_submit_response(request, {
-                'request_uuid': request.request_uuid,
-                'status': 'queued',
-            })
-            waiting = session._apply_iap_result(request, {
+            self._mark_submitted(session)
+            waiting = session._apply_iap_result(request.request_uuid, {
                 'request_uuid': request.request_uuid,
                 'status': 'success',
                 'result': self._tool_result(tool, 'skipped-question-tool-call'),
             })
-            outcome = session._resume_callback_tool(
-                request,
+            outcome = session._resume_pending_interaction(
+                request.request_uuid,
                 request.resume_token,
                 {'skip': True},
             )
 
         self.assertEqual(waiting['responseState'], 'waiting_user')
         self.assertEqual(outcome['responseState'], 'idle')
-        self.assertEqual(request.state, 'done')
+        self.assertEqual(session.loop_state, 'ready')
         self.assertFalse(session.pending_tool_call)
         started = [
             payload for event, payload, _kwargs in events
@@ -673,14 +667,15 @@ class TestAiDebugCallback(TransactionCase):
         provider_error = 'provider body carried authorization=secret-fixture'
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare('Fail safely')
-            outcome = session._apply_iap_result(request, {
+            self._mark_submitted(session)
+            outcome = session._apply_iap_result(request.request_uuid, {
                 'request_uuid': request.request_uuid,
                 'status': 'error',
                 'error': provider_error,
             })
 
         self.assertEqual(outcome['responseState'], 'idle')
-        self.assertEqual(request.state, 'failed')
+        self.assertEqual(session.loop_state, 'ready')
         iteration = next(
             payload for event, payload, _kwargs in events if event == 'iteration'
         )
@@ -696,18 +691,19 @@ class TestAiDebugCallback(TransactionCase):
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare('Malformed result')
-            outcome = session._apply_iap_result(request, {
+            self._mark_submitted(session)
+            outcome = session._apply_iap_result(request.request_uuid, {
                 'request_uuid': request.request_uuid,
                 'status': 'success',
                 'result': [],
             })
 
         self.assertEqual(outcome['responseState'], 'idle')
-        self.assertEqual(request.state, 'failed')
+        self.assertEqual(session.loop_state, 'ready')
         iteration = next(
             payload for event, payload, _kwargs in events if event == 'iteration'
         )
-        self.assertEqual(iteration['request_state'], 'failed')
+        self.assertEqual(iteration['request_state'], 'waiting_model')
         self.assertEqual(iteration['error'], 'request_failed')
         self.assertEqual(iteration['raw_response'], {
             'request_uuid': request.request_uuid,
@@ -721,6 +717,7 @@ class TestAiDebugCallback(TransactionCase):
 
     def test_debugger_failure_does_not_change_request_or_reply(self):
         session, request = self._prepare('Failure isolation')
+        self._mark_submitted(session)
         message_count = len(session.channel_id.message_ids)
 
         def fail_with_database_error(debug_session, *_args, **_kwargs):
@@ -731,14 +728,14 @@ class TestAiDebugCallback(TransactionCase):
             '_ai_debug_trace_request_result',
             new=fail_with_database_error,
         ):
-            applied = session._apply_iap_result(request, {
+            applied = session._apply_iap_result(request.request_uuid, {
                 'request_uuid': request.request_uuid,
                 'status': 'success',
                 'result': assistant_text('Still visible'),
             })
 
         self.assertEqual(applied['responseState'], 'idle')
-        self.assertEqual(request.state, 'done')
+        self.assertEqual(session.loop_state, 'ready')
         self.assertEqual(len(session.channel_id.message_ids), message_count + 1)
         self.assertIn('Still visible', session.channel_id.message_ids[0].body)
         self.env.cr.execute('SELECT 1')
@@ -751,107 +748,77 @@ class TestAiDebugCallback(TransactionCase):
             side_effect=RuntimeError('debugger fixture failure'),
         ):
             _session, request = self._prepare('Prepare isolation')
-        self.assertEqual(request.state, 'prepared')
+        self.assertEqual(_session.loop_state, 'waiting_model')
+        self.assertEqual(_session.request_phase, 'prepared')
         self.assertTrue(request.request_uuid)
 
-    def test_request_create_preserves_copied_exchange_uuid_without_lookup(self):
-        copied_snapshot = {
-            'ai_debug_exchange_uuid': 'copied-exchange-fixture',
+    def test_continuation_preserves_server_exchange_uuid(self):
+        session, request = self._prepare('Correlate a continuation')
+        browser_snapshot = {
             'active_company_ids': self.env.companies.ids,
+            'ai_debug_exchange_uuid': 'untrusted-browser-value',
         }
-        with patch(
-            'odoo.addons.ai_debug.models.ai_session_request.uuid.uuid4'
-        ) as generate_uuid:
-            request = self.env['ai.session.request'].sudo().create({
-                'session_id': self.session.id,
-                'request_uuid': 'copied-request-fixture',
-                'round_no': 2,
-                'round_limit': 3,
-                'payload': {'messages': [], 'instructions': [], 'tools': []},
-                'user_id': self.env.user.id,
-                'context_snapshot': copied_snapshot,
-            })
 
-        generate_uuid.assert_not_called()
+        prepared_snapshot = session._ai_debug_prepare_request_context(
+            browser_snapshot,
+            continuation=True,
+        )
+
         self.assertEqual(
+            prepared_snapshot['ai_debug_exchange_uuid'],
             request.context_snapshot['ai_debug_exchange_uuid'],
-            'copied-exchange-fixture',
         )
         self.assertEqual(
-            copied_snapshot['ai_debug_exchange_uuid'],
-            'copied-exchange-fixture',
+            browser_snapshot['ai_debug_exchange_uuid'],
+            'untrusted-browser-value',
         )
+        self.assertIsNot(prepared_snapshot, browser_snapshot)
 
-    def test_non_dict_and_omitted_snapshots_bypass_exchange_injection(self):
-        Request = self.env['ai.session.request'].sudo()
-        common_vals = {
-            'session_id': self.session.id,
-            'round_no': 2,
-            'round_limit': 3,
-            'payload': {'messages': [], 'instructions': [], 'tools': []},
-            'user_id': self.env.user.id,
-        }
+    def test_non_dict_and_omitted_snapshots_have_safe_correlation(self):
         non_dict_snapshot = [{'marker': 'preserved'}]
-        non_dict_vals = {
-            **common_vals,
-            'request_uuid': 'non-dict-snapshot-request-fixture',
-            'context_snapshot': non_dict_snapshot,
-        }
-        omitted_vals = {
-            **common_vals,
-            'request_uuid': 'omitted-snapshot-request-fixture',
-        }
-        with patch(
-            'odoo.addons.ai_debug.models.ai_session_request.uuid.uuid4'
-        ) as generate_uuid:
-            self.assertIs(
-                Request._ai_debug_prepare_create_vals(non_dict_vals),
-                non_dict_vals,
-            )
-            self.assertIs(
-                Request._ai_debug_prepare_create_vals(omitted_vals),
-                omitted_vals,
-            )
-            non_dict_request = Request.create(non_dict_vals)
-
-        generate_uuid.assert_not_called()
-        self.assertEqual(non_dict_request.context_snapshot, non_dict_snapshot)
-        self.assertEqual(
-            self.session._ai_debug_exchange_uuid(non_dict_request),
-            non_dict_request.request_uuid,
+        self.assertIs(
+            self.session._ai_debug_prepare_request_context(
+                non_dict_snapshot,
+                continuation=False,
+            ),
+            non_dict_snapshot,
         )
-        omitted_request = MagicMock(
-            context_snapshot=None,
-            request_uuid='omitted-snapshot-request-fixture',
+        prepared_snapshot = self.session._ai_debug_prepare_request_context(
+            None,
+            continuation=False,
+        )
+        self.assertIsInstance(prepared_snapshot['ai_debug_exchange_uuid'], str)
+        self.assertTrue(prepared_snapshot['ai_debug_exchange_uuid'])
+        self.assertEqual(
+            self.session._ai_debug_exchange_uuid({
+                'request_uuid': 'non-dict-snapshot-request-fixture',
+                'context_snapshot': non_dict_snapshot,
+            }),
+            'non-dict-snapshot-request-fixture',
         )
         self.assertEqual(
-            self.session._ai_debug_exchange_uuid(omitted_request),
-            omitted_request.request_uuid,
+            self.session._ai_debug_exchange_uuid({
+                'request_uuid': 'omitted-snapshot-request-fixture',
+                'context_snapshot': None,
+            }),
+            'omitted-snapshot-request-fixture',
         )
 
-    def test_exchange_uuid_injection_failure_does_not_block_request_create(self):
-        original_snapshot = {'active_company_ids': self.env.companies.ids}
-        with patch(
-            'odoo.addons.ai_debug.models.ai_session_request.uuid.uuid4',
+    def test_exchange_uuid_injection_failure_does_not_block_request_prepare(self):
+        with patch.object(
+            DebugAiSession,
+            '_ai_debug_prepare_request_context',
             side_effect=RuntimeError('uuid fixture failure'),
         ):
-            request = self.env['ai.session.request'].sudo().create({
-                'session_id': self.session.id,
-                'request_uuid': 'uninstrumented-request-fixture',
-                'round_no': 2,
-                'round_limit': 3,
-                'payload': {'messages': [], 'instructions': [], 'tools': []},
-                'user_id': self.env.user.id,
-                'context_snapshot': original_snapshot,
-            })
+            session, request = self._prepare('Prepare without debugger correlation')
 
-        self.assertEqual(request.state, 'prepared')
-        self.assertEqual(request.context_snapshot, original_snapshot)
+        self.assertEqual(session.loop_state, 'waiting_model')
+        self.assertEqual(session.request_phase, 'prepared')
+        self.assertTrue(request.request_uuid)
         self.assertNotIn('ai_debug_exchange_uuid', request.context_snapshot)
 
-    def test_direct_sync_tracing_and_no_ledger_row(self):
+    def test_direct_sync_tracing_keeps_existing_event_contract(self):
         events = []
-        request_count = self.env['ai.session.request'].sudo().search_count([])
         with (
             patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
             patch.object(EnterpriseAiSession, '_get_completions', return_value={
@@ -869,13 +836,23 @@ class TestAiDebugCallback(TransactionCase):
             [event for event, _payload, _kwargs in events],
             ['new_trace', 'iteration', 'loop_end'],
         )
+        iteration = next(
+            payload for event, payload, _kwargs in events
+            if event == 'iteration'
+        )
         self.assertEqual(
-            self.env['ai.session.request'].sudo().search_count([]), request_count,
+            iteration['raw_response'],
+            [{
+                'role': 'assistant',
+                'content': [{
+                    'type': 'text',
+                    'content': {'data': 'Direct result'},
+                }],
+            }],
         )
 
     def test_channel_name_direct_trace_keeps_session_and_agent_identity(self):
         events = []
-        request_count = self.env['ai.session.request'].sudo().search_count([])
         with (
             patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
             patch.object(EnterpriseAiSession, '_get_completions', return_value={
@@ -896,12 +873,23 @@ class TestAiDebugCallback(TransactionCase):
         self.assertEqual(trace['agent_name'], self.agent.name)
         self.assertEqual(trace['trace_kind'], 'channel_name')
         self.assertEqual(trace['trace_label'], 'Conversation Title')
+        iteration = next(
+            payload for event, payload, _kwargs in events
+            if event == 'iteration'
+        )
+        self.assertEqual(
+            iteration['raw_response'],
+            [{
+                'role': 'assistant',
+                'content': [{
+                    'type': 'text',
+                    'content': {'data': 'Callback observability'},
+                }],
+            }],
+        )
         self.assertEqual(
             [event for event, _payload, _kwargs in events],
             ['new_trace', 'iteration', 'loop_end'],
-        )
-        self.assertEqual(
-            self.env['ai.session.request'].sudo().search_count([]), request_count,
         )
 
     def test_direct_sync_tool_tracing_keeps_its_existing_event_contract(self):
@@ -910,7 +898,6 @@ class TestAiDebugCallback(TransactionCase):
             'ai_debug_direct_tool',
             "ai['result'] = 'direct tool executed'",
         )
-        request_count = self.env['ai.session.request'].sudo().search_count([])
         with (
             patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
             patch.object(EnterpriseAiSession, '_get_completions', side_effect=[
@@ -940,9 +927,6 @@ class TestAiDebugCallback(TransactionCase):
         )
         loop_end = events[-1][1]
         self.assertEqual(loop_end['tool_call_count'], 1)
-        self.assertEqual(
-            self.env['ai.session.request'].sudo().search_count([]), request_count,
-        )
 
     def test_direct_sync_forwards_loop_context_by_keyword(self):
         forwarded = {}
@@ -1028,6 +1012,9 @@ class TestAiDebugCallback(TransactionCase):
                 {
                     'type': 'text',
                     'content': {'data': 'Visible text'},
+                    'sources': [{
+                        'url': 'https://provider.invalid/file?signature=secret',
+                    }],
                     'provider_data': {'thought_signature': 'opaque-signature'},
                 },
                 {
@@ -1048,7 +1035,9 @@ class TestAiDebugCallback(TransactionCase):
             'api': 'generateContent',
         })
         self.assertTrue(normalized[0]['content'][0]['_provider_data_excluded'])
+        self.assertTrue(normalized[0]['content'][0]['_sources_excluded'])
         self.assertNotIn('provider_data', normalized[0]['content'][0])
+        self.assertNotIn('sources', normalized[0]['content'][0])
         self.assertEqual(
             normalized[0]['content'][1]['content']['data'],
             'data:image/png;base64,iVBORw0KGg',
@@ -1127,11 +1116,9 @@ class TestAiDebugCallback(TransactionCase):
             bus.search_count([('message', 'ilike', 'denied-fixture')]), before,
         )
 
-    def test_guest_callback_trace_uses_shared_internal_debugger_channel(self):
-        guest = self.env['mail.guest'].create({'name': 'AI Debug Livechat Guest'})
+    def test_guest_callback_trace_is_not_published_to_internal_users(self):
         public_user = self.env.ref('base.public_user')
-        request = self.env['ai.session.request'].sudo().create({
-            'session_id': self.session.id,
+        request = {
             'request_uuid': 'guest-observer-request-fixture',
             'round_no': 1,
             'round_limit': 3,
@@ -1147,22 +1134,26 @@ class TestAiDebugCallback(TransactionCase):
                 'tools': [],
             },
             'user_id': public_user.id,
-            'guest_id': guest.id,
-            'context_snapshot': {},
-        })
-
-        exchange_uuid = request.context_snapshot['ai_debug_exchange_uuid']
-        rows = self.env['bus.bus'].sudo().search([
-            ('message', 'ilike', exchange_uuid),
+            'guest_id': False,
+            'context_snapshot': {
+                'ai_debug_exchange_uuid': 'guest-observer-exchange-fixture',
+            },
+            'loop_state': 'waiting_model',
+            'request_phase': 'prepared',
+        }
+        bus = self.env['bus.bus'].sudo()
+        before = bus.search_count([
+            ('message', 'ilike', 'guest-observer-exchange-fixture'),
         ])
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(json.loads(rows.channel), [self.env.cr.dbname, 'ai_debug'])
-        message = json.loads(rows.message)
-        self.assertEqual(message['type'], 'new_trace')
-        self.assertEqual(message['payload']['request_uuid'], request.request_uuid)
-        self.assertEqual(message['payload']['agent_name'], self.agent.name)
 
-    def test_internal_user_can_subscribe_to_shared_and_private_debugger_channels(self):
+        queued = self.session._ai_debug_trace_request_prepared(request)
+
+        self.assertFalse(queued)
+        self.assertEqual(bus.search_count([
+            ('message', 'ilike', 'guest-observer-exchange-fixture'),
+        ]), before)
+
+    def test_internal_user_subscribes_only_to_private_debugger_channel(self):
         mock_wsrequest = MagicMock()
         mock_wsrequest.session.uid = self.env.uid
         with patch('odoo.addons.bus.models.ir_websocket.wsrequest', new=mock_wsrequest):
@@ -1170,7 +1161,7 @@ class TestAiDebugCallback(TransactionCase):
                 ['ai_debug', 'other'], 0,
             )['channels']
 
-        self.assertIn((self.env.cr.dbname, 'ai_debug'), channels)
+        self.assertNotIn((self.env.cr.dbname, 'ai_debug'), channels)
         self.assertIn(
             (self.env.cr.dbname, 'res.users', self.env.uid, 'ai_debug'),
             channels,

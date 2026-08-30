@@ -2,17 +2,15 @@ from odoo import models
 
 
 class IrWebsocket(models.AbstractModel):
-    """Gate the ai_debug bus channel to internal users only."""
+    """Expose only the current internal user's private debugger channel."""
 
     _inherit = 'ir.websocket'
 
     def _build_bus_channel_list(self, channels):
-        channels = list(channels)
-        if not self.env.user._is_internal():
-            channels = [
-                ch for ch in channels
-                if not (isinstance(ch, str) and ch == 'ai_debug')
-            ]
+        channels = [
+            channel for channel in channels
+            if not (isinstance(channel, str) and channel == 'ai_debug')
+        ]
         channels = super()._build_bus_channel_list(channels)
         if self.env.user._is_internal():
             channels.append((self.env.user, 'ai_debug'))

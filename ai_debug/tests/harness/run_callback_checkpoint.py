@@ -318,9 +318,9 @@ def assert_debug_events(events, request_uuid, exchange_uuid, provider_payload):
         raise AssertionError(iteration)
     if iteration.get('provider_api') != 'loopback':
         raise AssertionError(iteration)
-    if iteration.get('duration_kind') != 'request_lifecycle':
+    if iteration.get('duration_kind') is not None:
         raise AssertionError(iteration)
-    if not isinstance(iteration.get('duration_ms'), int) or iteration['duration_ms'] < 0:
+    if iteration.get('duration_ms') is not None:
         raise AssertionError(iteration)
     if 'tokens' in iteration:
         raise AssertionError('Callback contract must not fabricate token metrics')
@@ -472,7 +472,7 @@ def main():
         if not authentication.get('result', {}).get('uid'):
             raise RuntimeError('Could not authenticate the disposable consumer admin')
         kickoff, kickoff_payload = jsonrpc_post(
-            CONSUMER_URL + '/ai/start_callback_driven_response',
+            CONSUMER_URL + '/ai/start_session_advance',
             {
                 'channel_id': consumer_setup['channel_id'],
                 'mail_message_id': consumer_setup['message_id'],
@@ -492,22 +492,19 @@ def main():
                 CONSUMER_URL + '/ai_debug_callback_consumer_harness/status',
                 {'session_id': consumer_setup['session_id']},
             )
-            if consumer_status.get('request_state') == 'done':
+            if consumer_status.get('loop_state') == 'ready':
                 break
             time.sleep(0.2)
         else:
             raise RuntimeError(f'Consumer did not reach done: {consumer_status}')
         require_processes_alive(processes)
 
-        with psycopg2.connect(dbname=CONSUMER_DB) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    'SELECT context_snapshot FROM ai_session_request WHERE request_uuid = %s',
-                    (request_uuid,),
-                )
-                context_snapshot = cursor.fetchone()[0]
-        exchange_uuid = context_snapshot['ai_debug_exchange_uuid']
         events = wait_debug_events()
+        exchange_uuid = next(
+            event['payload']['exchange_uuid']
+            for event in events
+            if event['type'] == 'new_trace'
+        )
         if len(state.provider_payloads) != 1:
             raise AssertionError(state.provider_payloads)
         assert_debug_events(events, request_uuid, exchange_uuid, state.provider_payloads[0])
