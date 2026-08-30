@@ -125,22 +125,17 @@ class AICallbackConsumerHarness(http.Controller):
         session = http.request.env['ai.session'].sudo().browse(session_id).exists()
         if not session:
             raise NotFound()
-        requests = http.request.env['ai.session.request'].sudo().search([
-            ('session_id', '=', session.id),
-        ], order='id')
-        request = requests[-1:]
         pending_tool_call = session.pending_tool_call or {}
         partners = http.request.env['res.partner'].sudo()
         return _json_response({
             'session_id': session.id,
-            'request_uuid': request.request_uuid or False,
-            'request_state': request.state or False,
-            'request_uuids': requests.mapped('request_uuid'),
-            'request_states': requests.mapped('state'),
-            'round_nos': requests.mapped('round_no'),
-            'response_state': request._get_response_state() if request else 'idle',
+            'loop_state': session.loop_state,
+            'request_uuid': session.request_uuid or False,
+            'request_phase': session.request_phase or False,
+            'request_round': session.request_round,
+            'response_state': session._get_response_state(),
             'pending_call_id': pending_tool_call.get('call_id') or False,
-            'resume_token': request.resume_token or False,
+            'resume_token': session.resume_token or False,
             'created_contact_count': partners.search_count([
                 ('name', '=', 'Callback Harness Created'),
             ]),

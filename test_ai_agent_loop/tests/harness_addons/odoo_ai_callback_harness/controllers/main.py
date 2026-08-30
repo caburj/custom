@@ -67,6 +67,19 @@ class OdooAICallbackHarness(http.Controller):
     def status(self):
         _require_loopback()
         body = http.request.httprequest.get_json(silent=True) or {}
+        if body.get('all') is True:
+            requests = http.request.env['odoo_ai.completion.request'].sudo().search(
+                [], order='id',
+            )
+            return _json_response({
+                'requests': [{
+                    'request_uuid': request.request_uuid,
+                    'state': request.state,
+                    'callback_state': request.callback_state,
+                    'callback_attempts': request.callback_attempts,
+                    'error': request.error or False,
+                } for request in requests],
+            })
         request_uuid = body.get('request_uuid')
         request = http.request.env['odoo_ai.completion.request'].sudo().search([
             ('request_uuid', '=', request_uuid),

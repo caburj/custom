@@ -18,14 +18,15 @@ class TestAIWebsiteCallback(TransactionCase):
 
     def test_website_builder_session_advance_stops_before_iap_when_page_is_unavailable(self):
         session = self._create_session()
-        request_count = self.env['ai.session.request'].sudo().search_count([])
 
-        request = session.with_context(current_view_info={})._prepare_session_request()
+        prepared_session = session.with_context(
+            current_view_info={},
+        )._prepare_model_request()
 
-        self.assertFalse(request)
-        self.assertEqual(
-            self.env['ai.session.request'].sudo().search_count([]), request_count,
-        )
+        self.assertFalse(prepared_session)
+        self.assertEqual(session.loop_state, 'ready')
+        self.assertFalse(session.request_uuid)
+        self.assertFalse(session.request_payload)
         self.assertIn(
             'Please open the website builder',
             session.channel_id.message_ids[0].body,
@@ -43,13 +44,14 @@ class TestAIWebsiteCallback(TransactionCase):
         }
         session = session.with_context(**snapshot)
 
-        request = session._prepare_session_request(context_snapshot=snapshot)
+        prepared_session = session._prepare_model_request(context_snapshot=snapshot)
         tools_context = session._build_tools_context()
 
-        self.assertEqual(request.payload['timeout'], WEBSITE_BUILDER_TIMEOUT)
+        self.assertEqual(prepared_session, session)
+        self.assertEqual(session.request_payload['timeout'], WEBSITE_BUILDER_TIMEOUT)
         self.assertEqual(tools_context['ai_session_id'], session.id)
-        self.assertIn('## AI JavaScript', str(request.payload['messages']))
-        self.assertEqual(request.context_snapshot, snapshot)
+        self.assertIn('## AI JavaScript', str(session.request_payload['messages']))
+        self.assertEqual(session.request_context, snapshot)
 
     def test_website_builder_resume_waits_until_the_editor_is_available(self):
         session = self._create_session()
@@ -88,9 +90,10 @@ else:
         }
         session.state = {'available_tools': tool.ids}
         session = session.with_context(**snapshot)
-        request = session._prepare_session_request(context_snapshot=snapshot)
-        waiting = session._apply_iap_result(request, {
-            'request_uuid': request.request_uuid,
+        session._prepare_model_request(context_snapshot=snapshot)
+        request_uuid = session.request_uuid
+        waiting = session._apply_iap_result(request_uuid, {
+            'request_uuid': request_uuid,
             'status': 'success',
             'result': {
                 'role': 'assistant',
@@ -102,11 +105,11 @@ else:
                 }],
             },
         })
-        resume_token = request.resume_token
+        resume_token = session.resume_token
         message_count = len(session.channel_id.message_ids)
 
         unavailable = session.with_context(current_view_info={})._resume_pending_interaction(
-            request,
+            request_uuid,
             resume_token,
             {'value': UserInputResponse.CONFIRM_ONCE},
             context_snapshot={'current_view_info': {}},
@@ -115,8 +118,8 @@ else:
         self.assertEqual(waiting['responseState'], 'waiting_user')
         self.assertEqual(unavailable['responseState'], 'waiting_user')
         self.assertFalse(unavailable['interactionConsumed'])
-        self.assertEqual(request.state, 'waiting_input')
-        self.assertEqual(request.resume_token, resume_token)
+        self.assertEqual(session.loop_state, 'waiting_confirmation')
+        self.assertEqual(session.resume_token, resume_token)
         self.assertNotIn('website_runs', session.state)
         self.assertEqual(len(session.channel_id.message_ids), message_count + 1)
         self.assertIn(
@@ -125,7 +128,7 @@ else:
         )
 
         resumed = session._resume_pending_interaction(
-            request,
+            request_uuid,
             resume_token,
             {'value': UserInputResponse.CONFIRM_ONCE},
             context_snapshot=snapshot,

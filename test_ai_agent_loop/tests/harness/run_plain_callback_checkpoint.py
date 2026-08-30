@@ -98,7 +98,7 @@ class ProviderHandler(BaseHTTPRequestHandler):
             return
         if self.state.scenario == TOOL_FAILURE_SCENARIO:
             has_tool_result = any(
-                part.get('type') == 'tool_results'
+                part.get('type') == 'tool_result'
                 for message in payload.get('messages') or ()
                 for part in message.get('content') or ()
             )
@@ -107,9 +107,7 @@ class ProviderHandler(BaseHTTPRequestHandler):
                     'role': 'assistant',
                     'content': [{
                         'type': 'text',
-                        'content': {
-                            'data': 'I could not run the requested tool.',
-                        },
+                        'text': 'I could not run the requested tool.',
                     }],
                 }
             else:
@@ -127,10 +125,10 @@ class ProviderHandler(BaseHTTPRequestHandler):
                 tool.get('name') for tool in payload.get('tools') or ()
             }
             completed_tool_names = {
-                part['tool_results']['tool_call']['name']
+                part['tool_name']
                 for message in payload.get('messages') or ()
                 for part in message.get('content') or ()
-                if part.get('type') == 'tool_results'
+                if part.get('type') == 'tool_result'
             }
             if not {CREATE_TOOL_NAME, UPDATE_TOOL_NAME}.issubset(
                 available_tool_names,
@@ -151,9 +149,7 @@ class ProviderHandler(BaseHTTPRequestHandler):
                     'role': 'assistant',
                     'content': [{
                         'type': 'text',
-                        'content': {
-                            'data': 'The callback confirmation tools completed.',
-                        },
+                        'text': 'The callback confirmation tools completed.',
                     }],
                 }
             else:
@@ -200,18 +196,18 @@ class ProviderHandler(BaseHTTPRequestHandler):
                 }
         elif self.state.scenario == QUESTION_SCENARIO:
             question_results = [
-                part['tool_results']
+                part
                 for message in payload.get('messages') or ()
                 for part in message.get('content') or ()
-                if part.get('type') == 'tool_results'
-                and part['tool_results']['tool_call']['name'] == QUESTION_TOOL_NAME
+                if part.get('type') == 'tool_result'
+                and part['tool_name'] == QUESTION_TOOL_NAME
             ]
             if question_results:
                 result = {
                     'role': 'assistant',
                     'content': [{
                         'type': 'text',
-                        'content': {'data': 'You selected Draft.'},
+                        'text': 'You selected Draft.',
                     }],
                 }
             else:
@@ -231,7 +227,7 @@ class ProviderHandler(BaseHTTPRequestHandler):
                 }
         elif self.state.scenario == SERVER_TOOL_SCENARIO:
             has_tool_result = any(
-                part.get('type') == 'tool_results'
+                part.get('type') == 'tool_result'
                 for message in payload.get('messages') or ()
                 for part in message.get('content') or ()
             )
@@ -240,9 +236,7 @@ class ProviderHandler(BaseHTTPRequestHandler):
                     'role': 'assistant',
                     'content': [{
                         'type': 'text',
-                        'content': {
-                            'data': 'You have one callback harness contact.',
-                        },
+                        'text': 'You have one callback harness contact.',
                     }],
                 }
             else:
@@ -260,7 +254,7 @@ class ProviderHandler(BaseHTTPRequestHandler):
                 'role': 'assistant',
                 'content': [{
                     'type': 'text',
-                    'content': {'data': 'Hello from the paired fake provider.'},
+                    'text': 'Hello from the paired fake provider.',
                 }],
             }
         self._json(200, {'result': result})
@@ -618,7 +612,8 @@ def main():
                         {'session_id': consumer_setup['session_id']},
                     )
                     if (
-                        confirmation_status.get('request_state') == 'waiting_input'
+                        confirmation_status.get('loop_state')
+                        == 'waiting_confirmation'
                         and confirmation_status.get('pending_call_id') == expected_call_id
                         and confirmation_status.get('resume_token')
                     ):
@@ -689,7 +684,7 @@ def main():
                     {'session_id': consumer_setup['session_id']},
                 )
                 if (
-                    question_status.get('request_state') == 'waiting_input'
+                    question_status.get('loop_state') == 'waiting_answer'
                     and question_status.get('pending_call_id')
                     == 'callback-harness-question'
                     and question_status.get('resume_token')
@@ -722,9 +717,6 @@ def main():
             )
             else 1
         )
-        expected_request_state = (
-            'failed' if scenario == TERMINAL_ERROR_SCENARIO else 'done'
-        )
         deadline = time.monotonic() + 45
         consumer_status = None
         iap_statuses = []
@@ -734,18 +726,15 @@ def main():
                 CONSUMER_URL + '/ai_callback_consumer_harness/status',
                 {'session_id': consumer_setup['session_id']},
             )
-            request_uuids = consumer_status.get('request_uuids') or []
-            iap_statuses = [
-                json_post(
-                    IAP_URL + '/odoo_ai_callback_harness/status',
-                    {'request_uuid': current_request_uuid},
-                )
-                for current_request_uuid in request_uuids
-            ]
+            iap_statuses = json_post(
+                IAP_URL + '/odoo_ai_callback_harness/status',
+                {'all': True},
+            )['requests']
             if (
-                len(request_uuids) == expected_round_count
-                and consumer_status.get('request_states')
-                == [expected_request_state] * expected_round_count
+                consumer_status.get('loop_state') == 'ready'
+                and not consumer_status.get('request_uuid')
+                and not consumer_status.get('request_phase')
+                and len(iap_statuses) == expected_round_count
                 and all(
                     status.get('callback_state') == 'delivered'
                     for status in iap_statuses
@@ -769,8 +758,9 @@ def main():
                 {'session_id': consumer_setup['session_id']},
             )
             if (
-                status_after_replay['request_states']
-                != ['done'] * expected_round_count
+                status_after_replay['loop_state'] != 'ready'
+                or status_after_replay['request_uuid']
+                or status_after_replay['request_phase']
                 or status_after_replay['created_contact_count'] != 1
                 or status_after_replay['before_update_count'] != 0
                 or status_after_replay['after_update_count'] != 1
@@ -820,8 +810,9 @@ def main():
             for status in iap_statuses
         ):
             raise AssertionError(iap_statuses)
-        if consumer_status['round_nos'] != list(range(1, expected_round_count + 1)):
-            raise AssertionError(consumer_status['round_nos'])
+        request_uuids = [status['request_uuid'] for status in iap_statuses]
+        if len(set(request_uuids)) != expected_round_count:
+            raise AssertionError(request_uuids)
         provider_requests = [
             json.loads(line)
             for line in evidence['provider-requests.jsonl'].read_text().splitlines()
@@ -842,15 +833,15 @@ def main():
             if SERVER_TOOL_NAME not in {tool.get('name') for tool in tools}:
                 raise AssertionError(tools)
             tool_results = [
-                part['tool_results']
+                part
                 for message in provider_requests[1]['messages']
                 for part in message.get('content') or ()
-                if part.get('type') == 'tool_results'
+                if part.get('type') == 'tool_result'
             ]
             if (
                 len(tool_results) != 1
                 or not tool_results[0].get('success')
-                or tool_results[0]['result'][0]['content']['data'] != '1'
+                or tool_results[0]['result'][0]['text'] != '1'
             ):
                 raise AssertionError(tool_results)
         elif scenario == QUESTION_SCENARIO:
@@ -858,11 +849,11 @@ def main():
             if QUESTION_TOOL_NAME not in {tool.get('name') for tool in tools}:
                 raise AssertionError(tools)
             question_results = [
-                part['tool_results']
+                part
                 for message in provider_requests[1]['messages']
                 for part in message.get('content') or ()
-                if part.get('type') == 'tool_results'
-                and part['tool_results']['tool_call']['name'] == QUESTION_TOOL_NAME
+                if part.get('type') == 'tool_result'
+                and part['tool_name'] == QUESTION_TOOL_NAME
             ]
             if (
                 len(question_results) != 1
@@ -872,15 +863,15 @@ def main():
                 raise AssertionError(question_results)
         elif scenario == TOOL_FAILURE_SCENARIO:
             tool_results = [
-                part['tool_results']
+                part
                 for message in provider_requests[1]['messages']
                 for part in message.get('content') or ()
-                if part.get('type') == 'tool_results'
+                if part.get('type') == 'tool_result'
             ]
             if (
                 len(tool_results) != 1
                 or tool_results[0].get('success')
-                or tool_results[0]['tool_call']['call_id']
+                or tool_results[0]['tool_call_id']
                 != 'missing-callback-harness-tool'
             ):
                 raise AssertionError(tool_results)
@@ -895,25 +886,24 @@ def main():
             if not {CREATE_TOOL_NAME, UPDATE_TOOL_NAME}.issubset(tool_names):
                 raise AssertionError(tools)
             skill_results = [
-                part['tool_results']
+                part
                 for message in provider_requests[1]['messages']
                 for part in message.get('content') or ()
-                if part.get('type') == 'tool_results'
-                and part['tool_results']['tool_call']['name']
-                == LOAD_SKILLS_TOOL_NAME
+                if part.get('type') == 'tool_result'
+                and part['tool_name'] == LOAD_SKILLS_TOOL_NAME
             ]
             if len(skill_results) != 1 or not skill_results[0].get('success'):
                 raise AssertionError(skill_results)
             tool_results = [
-                part['tool_results']
+                part
                 for message in provider_requests[2]['messages']
                 for part in message.get('content') or ()
-                if part.get('type') == 'tool_results'
-                and part['tool_results']['tool_call']['name']
+                if part.get('type') == 'tool_result'
+                and part['tool_name']
                 in (CREATE_TOOL_NAME, UPDATE_TOOL_NAME)
             ]
             if (
-                [result['tool_call']['call_id'] for result in tool_results]
+                [result['tool_call_id'] for result in tool_results]
                 != [
                     'create-callback-harness-contact',
                     'update-callback-harness-contact',
