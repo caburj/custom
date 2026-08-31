@@ -10,7 +10,26 @@
     ],
     'assets': {
         'ai_debug.assets': [
-            ('include', 'web.assets_backend'),
+            ('include', 'web._assets_helpers'),
+            ('include', 'web._assets_backend_helpers'),
+            'web/static/src/scss/pre_variables.scss',
+            'web/static/lib/bootstrap/scss/_variables.scss',
+            'web/static/lib/bootstrap/scss/_variables-dark.scss',
+            'web/static/lib/bootstrap/scss/_maps.scss',
+            ('include', 'web._assets_bootstrap_backend'),
+            ('include', 'web._assets_core'),
+            ('include', 'web.icons_fonts'),
+            ('remove', 'web/static/src/**/*.dark.scss'),
+
+            # Minimal page-side dependency closure for bus_service. The worker
+            # code is served independently by bus.websocket_worker_assets.
+            'bus/static/src/bus_parameters_service.js',
+            'bus/static/src/multi_tab_fallback_service.js',
+            'bus/static/src/multi_tab_shared_worker_service.js',
+            'bus/static/src/multi_tab_service.js',
+            'bus/static/src/services/worker_service.js',
+            'bus/static/src/services/bus_service.js',
+
             'ai_debug/static/src/app/**/*.scss',
             ('remove', 'ai_debug/static/src/app/**/*.dark.scss'),
             'ai_debug/static/src/app/**/*.xml',
@@ -19,6 +38,7 @@
         'ai_debug.assets_dark': [
             ('include', 'ai_debug.assets'),
             ('include', 'web.dark_mode_variables'),
+            'web/static/src/core/**/*.dark.scss',
             'ai_debug/static/src/app/**/*.dark.scss',
         ],
         'web.assets_backend': [

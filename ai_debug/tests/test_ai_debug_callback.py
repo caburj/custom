@@ -14,7 +14,7 @@ from odoo.addons.ai_debug.models.ai_session import AiSession as DebugAiSession
 def assistant_text(text, provider_metadata=None):
     message = {
         'role': 'assistant',
-        'content': [{'type': 'text', 'content': {'data': text}}],
+        'content': [{'type': 'text', 'text': text}],
     }
     if provider_metadata:
         message['provider_metadata'] = provider_metadata
@@ -156,7 +156,22 @@ class TestAiDebugCallback(TransactionCase):
         self.assertEqual(terminal['request_body']['usage'], request.payload['usage'])
         self.assertNotIn('messages_sent', terminal)
         self.assertNotIn('tools', terminal)
-        self.assertEqual(terminal['raw_response'], result)
+        self.assertEqual(terminal['raw_response'], {
+            'request_uuid': request.request_uuid,
+            'status': 'success',
+            'result': {
+                'role': 'assistant',
+                'content': [{
+                    'type': 'text',
+                    'content': {'data': 'Visible callback reply'},
+                }],
+                'provider_metadata': {
+                    'provider': 'callback_harness',
+                    'model': 'deterministic-fixture',
+                    'api': 'loopback',
+                },
+            },
+        })
         self.assertEqual(terminal['request_label'], 'Normalized IAP Submission')
         self.assertEqual(terminal['response_label'], 'Normalized IAP Result')
         self.assertEqual(terminal['provider'], 'callback_harness')
@@ -819,6 +834,7 @@ class TestAiDebugCallback(TransactionCase):
 
     def test_direct_sync_tracing_keeps_existing_event_contract(self):
         events = []
+        callback_items = []
         with (
             patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
             patch.object(EnterpriseAiSession, '_get_completions', return_value={
@@ -828,10 +844,15 @@ class TestAiDebugCallback(TransactionCase):
         ):
             result = self.env['ai.session']._get_direct_response(
                 instructions='Answer.',
-                message=[{'type': 'text', 'content': {'data': 'Hi'}}],
+                message=[{'type': 'text', 'text': 'Hi'}],
+                on_item_callback=lambda item, _tools_context: callback_items.append(item),
             )
 
         self.assertEqual(result, assistant_text('Direct result')['content'])
+        self.assertEqual(callback_items, [{
+            'final_message': assistant_text('Direct result')['content'],
+            'message_body_suffix': False,
+        }])
         self.assertEqual(
             [event for event, _payload, _kwargs in events],
             ['new_trace', 'iteration', 'loop_end'],
@@ -861,7 +882,7 @@ class TestAiDebugCallback(TransactionCase):
             }),
         ):
             title = self.session._generate_channel_name([
-                {'type': 'text', 'content': {'data': 'Trace this live chat'}},
+                {'type': 'text', 'text': 'Trace this live chat'},
             ])
 
         self.assertEqual(title, 'Callback observability')
@@ -913,7 +934,7 @@ class TestAiDebugCallback(TransactionCase):
         ):
             result = self.env['ai.session']._get_direct_response(
                 instructions='Use the tool.',
-                message=[{'type': 'text', 'content': {'data': 'Run it'}}],
+                message=[{'type': 'text', 'text': 'Run it'}],
                 tools=tool,
             )
 
@@ -925,6 +946,20 @@ class TestAiDebugCallback(TransactionCase):
                 'tool_call_completed', 'iteration', 'loop_end',
             ],
         )
+        started = next(
+            payload for event, payload, _kwargs in events
+            if event == 'tool_call_started'
+        )
+        completed = next(
+            payload for event, payload, _kwargs in events
+            if event == 'tool_call_completed'
+        )
+        self.assertEqual(started['call_id'], 'direct-tool-call')
+        self.assertEqual(completed['call_id'], 'direct-tool-call')
+        self.assertEqual(completed['tool_name'], tool.ai_tool_name)
+        self.assertEqual(completed['tool_call_id'], started['tool_call_id'])
+        self.assertTrue(completed['success'])
+        self.assertIn('direct tool executed', str(completed['result']))
         loop_end = events[-1][1]
         self.assertEqual(loop_end['tool_call_count'], 1)
 
@@ -950,7 +985,7 @@ class TestAiDebugCallback(TransactionCase):
             kwargs.setdefault('tools_context', {})['extension_marker'] = True
             yield from enterprise_loop(enterprise_session, *args, **kwargs)
 
-        message = [{'type': 'text', 'content': {'data': 'Hi'}}]
+        message = [{'type': 'text', 'text': 'Hi'}]
         with (
             patch.object(DebugAiSession, '_ai_debug_bus_send'),
             patch.object(EnterpriseAiSession, '_run_agentic_loop', new=extension_loop),
@@ -1011,7 +1046,7 @@ class TestAiDebugCallback(TransactionCase):
             'content': [
                 {
                     'type': 'text',
-                    'content': {'data': 'Visible text'},
+                    'text': 'Visible text',
                     'sources': [{
                         'url': 'https://provider.invalid/file?signature=secret',
                     }],
@@ -1019,11 +1054,20 @@ class TestAiDebugCallback(TransactionCase):
                 },
                 {
                     'type': 'inline_data',
-                    'content': {'mimetype': 'image/png', 'data': 'iVBORw0KGg'},
+                    'mimetype': 'image/png',
+                    'data': 'iVBORw0KGg',
                 },
                 {
                     'type': 'inline_data',
-                    'content': {'mimetype': 'application/pdf', 'data': 'pdf-bytes'},
+                    'mimetype': 'application/pdf',
+                    'data': 'pdf-bytes',
+                },
+                {
+                    'type': 'tool_result',
+                    'tool_name': 'fixture_tool',
+                    'tool_call_id': 'fixture-call',
+                    'result': [{'type': 'text', 'text': 'Tool result'}],
+                    'success': True,
                 },
             ],
         }]
@@ -1044,13 +1088,24 @@ class TestAiDebugCallback(TransactionCase):
         )
         self.assertTrue(normalized[0]['content'][2]['content']['_binary_excluded'])
         self.assertNotIn('data', normalized[0]['content'][2]['content'])
+        self.assertEqual(normalized[0]['content'][3], {
+            'type': 'tool_result',
+            'tool_name': 'fixture_tool',
+            'tool_call_id': 'fixture-call',
+            'result': [{
+                'type': 'text',
+                'content': {'data': 'Tool result'},
+            }],
+            'success': True,
+        })
 
         preview_data = 'A' * 47_000
         preview = self.session._ai_debug_normalized_messages([{
             'role': 'assistant',
             'content': [{
                 'type': 'inline_data',
-                'content': {'mimetype': 'image/png', 'data': preview_data},
+                'mimetype': 'image/png',
+                'data': preview_data,
             }],
         }])
         sanitized_preview = self.session._ai_debug_sanitize(preview)
@@ -1062,7 +1117,8 @@ class TestAiDebugCallback(TransactionCase):
             'role': 'assistant',
             'content': [{
                 'type': 'inline_data',
-                'content': {'mimetype': 'image/png', 'data': 'A' * 48_001},
+                'mimetype': 'image/png',
+                'data': 'A' * 48_001,
             }],
         }])
         self.assertTrue(oversized[0]['content'][0]['content']['_binary_excluded'])
@@ -1127,7 +1183,7 @@ class TestAiDebugCallback(TransactionCase):
                     'role': 'user',
                     'content': [{
                         'type': 'text',
-                        'content': {'data': 'Livechat observer fixture'},
+                        'text': 'Livechat observer fixture',
                     }],
                 }],
                 'instructions': 'Answer the livechat guest.',

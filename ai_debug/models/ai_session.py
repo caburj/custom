@@ -263,6 +263,36 @@ class AiSession(models.Model):
             return {'mimeType': mime, 'data': data}
         return {'mimeType': mime, 'data': f'data:{mime};base64,{data}'}
 
+    @staticmethod
+    def _ai_debug_part_text(part):
+        """Read current flat parts while tolerating the previous nested shape."""
+        if not isinstance(part, dict):
+            return None
+        if 'text' in part:
+            return part.get('text')
+        content = part.get('content')
+        return content.get('data') if isinstance(content, dict) else None
+
+    @staticmethod
+    def _ai_debug_part_inline_data(part):
+        """Return one inline part's mimetype and data across both contracts."""
+        if not isinstance(part, dict):
+            return '', None
+        content = part.get('content')
+        if not isinstance(content, dict):
+            content = {}
+        mime = (
+            part.get('mimetype')
+            or part.get('mimeType')
+            or part.get('mime_type')
+            or content.get('mimetype')
+            or content.get('mimeType')
+            or content.get('mime_type')
+            or ''
+        )
+        data = part.get('data') if 'data' in part else content.get('data')
+        return mime, data
+
     def _ai_debug_strip_binary(self, messages):
         """Return a copy of messages with non-image binary content replaced by
         metadata stubs and image data normalized to data URIs.
@@ -319,17 +349,11 @@ class AiSession(models.Model):
                     if not isinstance(part, dict) or part.get('type') != 'inline_data':
                         normalized_parts.append(part)
                         continue
-                    content = part.get('content') or {}
-                    mime = (
-                        content.get('mimetype')
-                        or content.get('mimeType')
-                        or content.get('mime_type')
-                        or ''
-                    )
+                    mime, data = self._ai_debug_part_inline_data(part)
                     if self._ai_debug_is_image_type(mime):
                         normalized_parts.append({
-                            **{key: value for key, value in part.items() if key != 'content'},
-                            'content': self._ai_debug_image_data(mime, content.get('data', '')),
+                            'type': 'inline_data',
+                            'content': self._ai_debug_image_data(mime, data),
                         })
                     else:
                         normalized_parts.append({
@@ -367,12 +391,11 @@ class AiSession(models.Model):
             return {'_details_excluded': True}
         part_type = part.get('type')
         if part_type == 'text':
-            content = part.get('content') or {}
             normalized = {
                 'type': 'text',
                 'content': {
                     'data': self._ai_debug_sanitize(
-                        content.get('data') if isinstance(content, dict) else None,
+                        self._ai_debug_part_text(part),
                         key='data',
                     ),
                 },
@@ -383,17 +406,7 @@ class AiSession(models.Model):
                 normalized['_provider_data_excluded'] = True
             return normalized
         if part_type == 'inline_data':
-            content = part.get('content') or {}
-            mime = ''
-            data = None
-            if isinstance(content, dict):
-                mime = (
-                    content.get('mimetype')
-                    or content.get('mimeType')
-                    or content.get('mime_type')
-                    or ''
-                )
-                data = content.get('data')
+            mime, data = self._ai_debug_part_inline_data(part)
             image = self._ai_debug_image_data(mime, data)
             normalized_content = {'mimetype': mime}
             if image.get('data'):
@@ -431,6 +444,24 @@ class AiSession(models.Model):
                     ] if isinstance(result_parts, list) else [],
                     'success': bool(tool_result.get('success')),
                 },
+            }
+        if part_type == 'tool_result':
+            result_parts = part.get('result') or []
+            return {
+                'type': 'tool_result',
+                'tool_name': self._ai_debug_sanitize(
+                    part.get('tool_name'), key='tool_name',
+                ),
+                'tool_call_id': self._ai_debug_sanitize(
+                    part.get('tool_call_id'), key='tool_call_id',
+                ),
+                'result': [
+                    self._ai_debug_normalized_part(
+                        result_part, depth=depth + 1,
+                    )
+                    for result_part in result_parts[:_MAX_COLLECTION_ITEMS]
+                ] if isinstance(result_parts, list) else [],
+                'success': bool(part.get('success')),
             }
         return {
             'type': self._ai_debug_sanitize(part_type, key='type'),
@@ -532,8 +563,7 @@ class AiSession(models.Model):
         for part in parts or []:
             if not isinstance(part, dict) or part.get('type') != 'text':
                 continue
-            content = part.get('content') or {}
-            text = content.get('data') if isinstance(content, dict) else None
+            text = AiSession._ai_debug_part_text(part)
             if isinstance(text, str):
                 text_parts.append(text)
         return '\n'.join(text_parts)
@@ -674,6 +704,25 @@ class AiSession(models.Model):
             None,
         )
 
+    def _ai_debug_tool_call_from_result(self, tool_calls, result_item):
+        """Correlate current flat tool results with their original model call."""
+        if not isinstance(result_item, dict):
+            return {}
+        legacy_tool_call = result_item.get('tool_call') or {}
+        call_id = (
+            legacy_tool_call.get('call_id')
+            if isinstance(legacy_tool_call, dict)
+            else None
+        ) or result_item.get('tool_call_id')
+        return (
+            self._ai_debug_find_tool_call(tool_calls, call_id)
+            or legacy_tool_call
+            or {
+                'call_id': call_id,
+                'name': result_item.get('tool_name'),
+            }
+        )
+
     def _ai_debug_buffer_callback_tool_started(self, context, tool_call):
         """Buffer one start fact without affecting the parent tool generator."""
         try:
@@ -754,10 +803,9 @@ class AiSession(models.Model):
                     )
 
                 for result_item in item.get('tool_results') or ():
-                    result_tool_call = result_item.get('tool_call') or {}
-                    tool_call = self._ai_debug_find_tool_call(
-                        tool_calls, result_tool_call.get('call_id'),
-                    ) or result_tool_call
+                    tool_call = self._ai_debug_tool_call_from_result(
+                        tool_calls, result_item,
+                    )
                     self._ai_debug_buffer_callback_tool_completed(
                         context,
                         tool_call,
@@ -768,10 +816,9 @@ class AiSession(models.Model):
                 pending_tool_call = item.get('pending_tool_call') or {}
                 user_input_request = item.get('user_input_request') or {}
                 for result_item in pending_tool_call.get('pending_results') or ():
-                    result_tool_call = result_item.get('tool_call') or {}
-                    tool_call = self._ai_debug_find_tool_call(
-                        tool_calls, result_tool_call.get('call_id'),
-                    ) or result_tool_call
+                    tool_call = self._ai_debug_tool_call_from_result(
+                        tool_calls, result_item,
+                    )
                     self._ai_debug_buffer_callback_tool_completed(
                         context,
                         tool_call,
@@ -1159,7 +1206,7 @@ class AiSession(models.Model):
 
     @api.model
     def _get_direct_response(self, instructions, message, tools=None,
-            record=None, agent_id=None, tool_results_collector=None, **completion_options):
+            record=None, agent_id=None, on_item_callback=None, **completion_options):
         """Preserve the originating session metadata across the direct-call seam."""
         agent = self.env['ai.agent']
         if len(self) == 1 and self.agent_id:
@@ -1185,7 +1232,7 @@ class AiSession(models.Model):
         })
         return super(AiSession, direct_self)._get_direct_response(
             instructions, message, tools=tools, record=record, agent_id=agent_id,
-            tool_results_collector=tool_results_collector,
+            on_item_callback=on_item_callback,
             **completion_options,
         )
 
@@ -1363,8 +1410,8 @@ class AiSession(models.Model):
 
         # Thread parent trace ID via tools_context (mutable dict passed to tool functions)
         # rather than env.context, because tool records (ir.actions.server) are fetched
-        # in _generate_next_response BEFORE _run_agentic_loop sets _debug_ctx, so they
-        # never carry _debug_ctx in their env. tools_context reaches the agent via the
+        # before _run_agentic_loop sets _debug_ctx, so they never carry _debug_ctx in
+        # their env. tools_context reaches the agent via the
         # tool_context parameter in _ai_tool_request_sub_agent.
         tools_context['_debug_trace_id'] = _debug_ctx['trace_id']
 
@@ -1410,7 +1457,9 @@ class AiSession(models.Model):
                 # state_after_batch = copy.deepcopy(tools_context.get('state') or {})
 
                 for result_item in tool_results:
-                    tool_call_data = result_item.get('tool_call', {})
+                    tool_call_data = self._ai_debug_tool_call_from_result(
+                        tool_calls, result_item,
+                    )
                     tool_name = tool_call_data.get('name')
                     call_id = tool_call_data.get('call_id')  # LLM's original call ID
                     result = result_item.get('result')

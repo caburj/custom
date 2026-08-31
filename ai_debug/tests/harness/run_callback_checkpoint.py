@@ -88,7 +88,7 @@ class ProviderHandler(BaseHTTPRequestHandler):
             'role': 'assistant',
             'content': [{
                 'type': 'text',
-                'content': {'data': 'Hello from the paired fake provider.'},
+                'text': 'Hello from the paired fake provider.',
             }],
             'provider_metadata': {
                 'provider': 'callback_harness',
@@ -119,15 +119,20 @@ class CallbackShimHandler(ProviderHandler):
             self.send_error(404)
             return
         payload = self._read_json()
-        params = payload.get('params') or {}
+        request_uuid = payload.get('request_uuid')
         response = requests.post(
             CONSUMER_URL + '/ai/completion_result_ready',
-            json=payload,
+            json={
+                'jsonrpc': '2.0',
+                'id': 1,
+                'method': 'call',
+                'params': {'request_uuid': request_uuid},
+            },
             timeout=15,
             allow_redirects=False,
         )
         append_jsonl(self.state.callback_journal, {
-            'request_uuid': params.get('request_uuid'),
+            'request_uuid': request_uuid,
             'consumer_status': response.status_code,
         })
         self._json(response.status_code, response.json())
@@ -283,7 +288,18 @@ def assert_debug_events(events, request_uuid, exchange_uuid, provider_payload):
     request_body = iteration['request_body']
     if request_body['request_uuid'] != request_uuid:
         raise AssertionError(request_body)
-    for key in ('messages', 'instructions', 'tools'):
+    expected_messages = [{
+        'role': message['role'],
+        'content': [{
+            'type': 'text',
+            'content': {'data': part['text']},
+        } for part in message['content']],
+    } for message in provider_payload['messages']]
+    if request_body['messages'] != expected_messages:
+        raise AssertionError(
+            ('messages', request_body['messages'], expected_messages),
+        )
+    for key in ('instructions', 'tools'):
         if request_body[key] != provider_payload[key]:
             raise AssertionError((key, request_body[key], provider_payload[key]))
     for key, value in provider_payload['options'].items():
