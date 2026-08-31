@@ -119,12 +119,13 @@ class CallbackShimHandler(ProviderHandler):
             self.send_error(404)
             return
         payload = self._read_json()
-        request_uuid = payload.get('request_uuid')
+        params = payload.get('params') or {}
+        request_uuid = params.get('request_uuid')
         response = requests.post(
             CONSUMER_URL + '/ai/completion_result_ready',
             json={
                 'jsonrpc': '2.0',
-                'id': 1,
+                'id': payload.get('id'),
                 'method': 'call',
                 'params': {'request_uuid': request_uuid},
             },

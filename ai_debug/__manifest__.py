@@ -23,12 +23,12 @@
 
             # Minimal page-side dependency closure for bus_service. The worker
             # code is served independently by bus.websocket_worker_assets.
-            'bus/static/src/bus_parameters_service.js',
-            'bus/static/src/multi_tab_fallback_service.js',
-            'bus/static/src/multi_tab_shared_worker_service.js',
-            'bus/static/src/multi_tab_service.js',
-            'bus/static/src/services/worker_service.js',
-            'bus/static/src/services/bus_service.js',
+            'bus/static/src/bus_parameters_plugin.js',
+            'bus/static/src/multi_tab_fallback_plugin.js',
+            'bus/static/src/multi_tab_shared_worker_plugin.js',
+            'bus/static/src/multi_tab_plugin.js',
+            'bus/static/src/services/worker_plugin.js',
+            'bus/static/src/services/bus_plugin.js',
 
             'ai_debug/static/src/app/**/*.scss',
             ('remove', 'ai_debug/static/src/app/**/*.dark.scss'),

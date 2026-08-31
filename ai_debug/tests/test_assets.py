@@ -3,12 +3,12 @@ from odoo.tests import HttpCase, TransactionCase, tagged
 
 
 BUS_ASSETS = {
-    "bus/static/src/bus_parameters_service.js",
-    "bus/static/src/multi_tab_fallback_service.js",
-    "bus/static/src/multi_tab_shared_worker_service.js",
-    "bus/static/src/multi_tab_service.js",
-    "bus/static/src/services/worker_service.js",
-    "bus/static/src/services/bus_service.js",
+    "bus/static/src/bus_parameters_plugin.js",
+    "bus/static/src/multi_tab_fallback_plugin.js",
+    "bus/static/src/multi_tab_shared_worker_plugin.js",
+    "bus/static/src/multi_tab_plugin.js",
+    "bus/static/src/services/worker_plugin.js",
+    "bus/static/src/services/bus_plugin.js",
 }
 
 
@@ -32,7 +32,7 @@ class TestAiDebugAssets(TransactionCase):
         self.assertEqual(bus_paths, BUS_ASSETS)
         self.assertIn("web/static/src/env.js", paths)
         self.assertIn("web/static/src/core/main_components_container.js", paths)
-        self.assertIn("web/static/src/core/dialog/dialog_service.js", paths)
+        self.assertIn("web/static/src/core/dialog/dialog_plugin.js", paths)
         self.assertIn("web/static/src/core/overlay/overlay_container.js", paths)
         self.assertFalse(any(path.startswith("mail/") for path in runtime_paths))
         self.assertFalse(any(path.startswith(("ai/", "ai_app/")) for path in runtime_paths))
