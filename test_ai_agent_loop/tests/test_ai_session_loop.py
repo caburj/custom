@@ -160,34 +160,6 @@ class TestAISessionLoop(TransactionCase):
             ):
                 self.env.cr.execute(query, [session.id])
 
-    def test_exchange_data_bootstrap_supports_session_id_and_uuid(self):
-        session = self._prepare_model_request()
-        controller = AIThreadController()
-        expected = {
-            'id': session.id,
-            'user_id': session.request_user_id.id,
-            'guest_id': False,
-            'context': copy.deepcopy(session.request_context),
-        }
-
-        exchange_data_by_id = controller._get_session_exchange_data(
-            self.env.cr, session_id=session.id,
-        )
-        exchange_data_by_uuid = controller._get_session_exchange_data(
-            self.env.cr, request_uuid=session.request_uuid,
-        )
-
-        self.assertEqual(exchange_data_by_id, expected)
-        self.assertEqual(exchange_data_by_uuid, expected)
-        self.assertEqual(set(exchange_data_by_id), {
-            'id', 'user_id', 'guest_id', 'context',
-        })
-        exchange_data_by_id['context']['allowed_company_ids'].append(-1)
-        self.assertNotIn(-1, session.request_context['allowed_company_ids'])
-        self.assertIsNone(controller._get_session_exchange_data(
-            self.env.cr, session_id=0,
-        ))
-
     def test_plain_result_applies_once_after_submission(self):
         session = self._prepare_model_request()
         request_uuid = session.request_uuid

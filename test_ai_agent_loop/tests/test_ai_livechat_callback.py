@@ -111,9 +111,8 @@ ai['result'] = {
                 "available_tools": [client_tool.id],
             }
 
-        result = {
+        self.make_jsonrpc_request("/ai/completion_result_ready", {
             "request_uuid": request_uuid,
-            "status": "success",
             "result": {
                 "role": "assistant",
                 "content": [{
@@ -123,14 +122,7 @@ ai['result'] = {
                     "args": {},
                 }],
             },
-        }
-        with patch(
-            "odoo.addons.ai.controllers.thread.call_odoo_ai_transport",
-            return_value=result,
-        ):
-            self.make_jsonrpc_request("/ai/completion_result_ready", {
-                "request_uuid": request_uuid,
-            })
+        })
 
         self.env.invalidate_all()
         self.assertEqual(session.loop_state, "waiting_client_result")

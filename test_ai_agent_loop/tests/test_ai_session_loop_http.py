@@ -8,8 +8,12 @@ from odoo import api, Command
 from odoo.exceptions import LockError, MissingError
 from odoo.tests import HttpCase, new_test_user, tagged
 
-from odoo.addons.ai.controllers.thread import AIThreadController, IAP_TRANSPORT_TIMEOUT
-from odoo.addons.ai.utils.ai_utils import UserInputResponse
+from odoo.addons.ai.utils.ai_utils import IAP_TRANSPORT_TIMEOUT, UserInputResponse
+from odoo.addons.ai.utils.session_env import (
+    actor_env,
+    caller_env,
+    submit_prepared_request,
+)
 
 
 def assistant_text(text):
@@ -186,6 +190,31 @@ class TestAISessionLoopHttp(HttpCase):
             json=self.build_rpc_payload(values),
         )
 
+    def test_session_environments_own_fresh_transactions(self):
+        prepared = self._create_committed_prepared_session(
+            'Fresh session environments',
+        )
+        dbname = self.env.cr.dbname
+        with caller_env(dbname, self.env.uid, {'fresh_transaction': True}) as env:
+            self.assertIsNot(env.cr, self.env.cr)
+            self.assertEqual(env.uid, self.env.uid)
+            self.assertTrue(env.context['fresh_transaction'])
+
+        for selector in (
+            {'session_id': prepared['session_id']},
+            {'request_uuid': prepared['request_uuid']},
+        ):
+            with actor_env(dbname, **selector) as env:
+                self.assertIsNotNone(env)
+                session = env['ai.session'].sudo().browse(
+                    prepared['session_id'],
+                )
+                self.assertEqual(env.uid, session.request_user_id.id)
+                self.assertEqual(
+                    env.context['allowed_company_ids'],
+                    session.request_context['allowed_company_ids'],
+                )
+
     def test_website_sale_context_reaches_callback_pricing_consumer(self):
         self.authenticate('admin', 'admin')
         message = self.env['mail.message'].browse(self._post_committed_prompt(
@@ -208,32 +237,6 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(product_model.env.website.id, context['website_id'])
         self.assertEqual(pricelist.id, context['pricelist_id'])
         self.assertEqual(fiscal_position.id, context['fiscal_position_id'])
-
-    def test_callback_fetch_failure_is_a_jsonrpc_error(self):
-        self.authenticate('admin', 'admin')
-        message = self.env['mail.message'].browse(self._post_committed_prompt('Hi'))
-        with patch(
-            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
-            side_effect=queue_submitted_request,
-        ):
-            acknowledgement = self._start_session_advance(message).json()['result']
-
-        with patch(
-            'odoo.addons.ai.controllers.thread.call_odoo_ai_transport',
-            side_effect=RuntimeError('IAP result fetch failed'),
-        ):
-            response = self._post_completion_callback({
-                'request_uuid': acknowledgement['request_uuid'],
-            })
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn('error', response.json())
-        self.env.invalidate_all()
-        session = self.env['ai.session'].sudo().search([
-            ('request_uuid', '=', acknowledgement['request_uuid']),
-        ])
-        self.assertEqual(session.loop_state, 'waiting_model')
-        self.assertEqual(session.request_phase, 'submitted')
 
     def test_session_advance_accepts_numeric_prompt_button_id(self):
         self.authenticate('admin', 'admin')
@@ -263,7 +266,7 @@ class TestAISessionLoopHttp(HttpCase):
         )
         self.assertIn('Get a list of contacts in New Jersey', submitted_text)
 
-    def test_real_session_advance_and_callback_use_the_iap_result(self):
+    def test_real_session_advance_and_callback_apply_the_iap_result(self):
         self.authenticate('admin', 'admin')
         message = self.env['mail.message'].browse(self._post_committed_prompt('Hi'))
 
@@ -292,120 +295,39 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(session.request_phase, 'submitted')
         self.assertEqual(session.loop_state, 'waiting_model')
 
-        with patch(
-            'odoo.addons.ai.controllers.thread.call_odoo_ai_transport',
-        ) as transport:
-            unknown = self._post_completion_callback({
-                'request_uuid': '00000000-0000-4000-8000-ffffffffffff',
-            })
+        unknown = self._post_completion_callback({
+            'request_uuid': '00000000-0000-4000-8000-ffffffffffff',
+            'result': assistant_text('Unknown request result'),
+        })
         self.assertEqual(unknown.status_code, 200)
         self.assertIsNone(unknown.json()['result'])
         self.assertNotIn('Set-Cookie', unknown.headers)
-        transport.assert_not_called()
 
         event_count = len(self.ai_session.event_ids)
         message_count = len(self.channel.message_ids)
-        iap_result = {
+        callback_payload = {
             'request_uuid': request_uuid,
-            'status': 'success',
-            'result': assistant_text('Result fetched from IAP'),
+            'result': assistant_text('Result received from IAP'),
         }
-        with patch(
-            'odoo.addons.ai.controllers.thread.call_odoo_ai_transport',
-            return_value=iap_result,
-        ) as transport:
-            callback = self._post_completion_callback({
-                'request_uuid': request_uuid,
-            })
+        callback = self._post_completion_callback(callback_payload)
         self.assertEqual(callback.status_code, 200)
         self.assertIsNone(callback.json()['result'])
         self.assertNotIn('Set-Cookie', callback.headers)
-        transport.assert_called_once()
-        self.assertEqual(transport.call_args.args[1], '1/get_completion_result')
-        self.assertEqual(transport.call_args.kwargs['timeout'], IAP_TRANSPORT_TIMEOUT)
         self.env.invalidate_all()
         self.assertEqual(session.loop_state, 'ready')
         self.assertFalse(session.request_phase)
         self.assertFalse(session.request_uuid)
         self.assertEqual(len(self.ai_session.event_ids), event_count + 1)
         self.assertEqual(len(self.channel.message_ids), message_count + 1)
-        self.assertIn('Result fetched from IAP', self.channel.message_ids[0].body)
+        self.assertIn('Result received from IAP', self.channel.message_ids[0].body)
 
-        with patch(
-            'odoo.addons.ai.controllers.thread.call_odoo_ai_transport',
-        ) as transport:
-            replay = self._post_completion_callback({'request_uuid': request_uuid})
+        replay = self._post_completion_callback(callback_payload)
         self.assertEqual(replay.status_code, 200)
         self.assertIsNone(replay.json()['result'])
         self.assertNotIn('Set-Cookie', replay.headers)
-        transport.assert_not_called()
         self.env.invalidate_all()
         self.assertEqual(len(self.ai_session.event_ids), event_count + 1)
         self.assertEqual(len(self.channel.message_ids), message_count + 1)
-
-    def test_callback_fetch_uses_originating_company_iap_account(self):
-        self.authenticate('admin', 'admin')
-        with self.registry.cursor() as cr:
-            env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
-            origin_company = env['res.company'].create({
-                'name': 'Callback Origin Company',
-            })
-            env.user.write({
-                'company_ids': [Command.link(origin_company.id)],
-            })
-            service = env['iap.service'].search([
-                ('technical_name', '=', 'odoo_ai'),
-            ], limit=1)
-            default_token = 'callback-default-company-token'
-            origin_token = 'callback-origin-company-token'
-            env['iap.account'].sudo().create({
-                'service_id': service.id,
-                'account_token': default_token,
-                'company_ids': [Command.set(env.company.ids)],
-            })
-            env['iap.account'].sudo().create({
-                'service_id': service.id,
-                'account_token': origin_token,
-                'company_ids': [Command.set(origin_company.ids)],
-            })
-
-            context = {
-                'allowed_company_ids': origin_company.ids,
-                'active_company_ids': origin_company.ids,
-            }
-            env = api.Environment(cr, env.uid, context)
-            channel = env['ai.agent'].browse(self.agent_id)._create_ai_chat_channel(
-                'Callback Origin Company Test',
-            )
-            session = env['ai.session'].sudo().create({
-                'agent_id': self.agent_id,
-                'channel_id': channel.id,
-            })
-            message = channel.message_post(body='Hi', message_type='comment')
-            session._prepare_model_request(
-                message._convert_to_parts(),
-                context_snapshot=context,
-            )
-            session.request_phase = 'submitted'
-            request_uuid = session.request_uuid
-
-        result = {
-            'request_uuid': request_uuid,
-            'status': 'success',
-            'result': assistant_text('Origin company callback result'),
-        }
-        with patch(
-            'odoo.addons.ai.controllers.thread.call_odoo_ai_transport',
-            return_value=result,
-        ) as transport:
-            response = self._post_completion_callback({'request_uuid': request_uuid})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIsNone(response.json()['result'])
-        transport.assert_called_once()
-        connection = transport.call_args.args[0]
-        self.assertEqual(connection['account_token'], origin_token)
-        self.assertNotEqual(connection['account_token'], default_token)
 
     def test_confirmation_resume_executes_once_then_submits_followup(self):
         self.authenticate('admin', 'admin')
@@ -601,7 +523,7 @@ class TestAISessionLoopHttp(HttpCase):
             ) as transport,
             self.assertRaises(MissingError),
         ):
-            AIThreadController()._submit_prepared_request(
+            submit_prepared_request(
                 self.env.cr.dbname,
                 prepared['session_id'],
                 '00000000-0000-4000-8000-ffffffffffff',
@@ -619,9 +541,12 @@ class TestAISessionLoopHttp(HttpCase):
         )
         with patch(
             'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
-            return_value=None,
+            return_value={
+                'request_uuid': prepared['request_uuid'],
+                'status': 'queued',
+            },
         ):
-            acknowledgement = AIThreadController()._submit_prepared_request(
+            acknowledgement = submit_prepared_request(
                 self.env.cr.dbname,
                 prepared['session_id'],
                 prepared['request_uuid'],
@@ -635,6 +560,12 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(session.loop_state, 'waiting_model')
         self.assertEqual(session.request_phase, 'submitted')
         self.assertEqual(session.request_uuid, prepared['request_uuid'])
+
+        self.assertIsNone(submit_prepared_request(
+            self.env.cr.dbname,
+            0,
+            prepared['request_uuid'],
+        ))
 
     def test_submission_locks_session_before_iap_call(self):
         self.authenticate('admin', 'admin')

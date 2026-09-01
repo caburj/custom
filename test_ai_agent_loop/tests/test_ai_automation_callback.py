@@ -24,7 +24,10 @@ class TestAIAutomationCallback(HttpCase):
 
         with patch(
             'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
-            return_value={'status': 'queued'},
+            side_effect=lambda _connection, _route, payload, **_kwargs: {
+                'request_uuid': payload['request_uuid'],
+                'status': 'queued',
+            },
         ) as transport:
             action._ai_action_run_agent(partner, agent)
             session = self.env['ai.session'].sudo().search([
