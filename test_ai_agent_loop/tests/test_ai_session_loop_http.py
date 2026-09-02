@@ -14,9 +14,9 @@ from odoo.addons.iap import InsufficientCreditError
 from odoo.addons.ai.controllers.thread import AIThreadController
 from odoo.addons.ai.utils.ai_utils import IAP_TRANSPORT_TIMEOUT, UserInputResponse
 from odoo.addons.ai.utils.session_env import (
-    actor_env,
+    commit_on_success,
+    rebind_session,
     submit_prepared_request,
-    user_env,
 )
 
 
@@ -99,6 +99,11 @@ class TestAISessionLoopHttp(HttpCase):
     def _get_session(self, session_id):
         self.env.invalidate_all()
         return self.env['ai.session'].sudo().browse(session_id)
+
+    def _submit_prepared(self, prepared):
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
+            return submit_prepared_request(env, prepared)
 
     def _create_committed_prepared_session(self, label):
         with self.registry.cursor() as cr:
@@ -196,30 +201,31 @@ class TestAISessionLoopHttp(HttpCase):
             json=self.build_rpc_payload(values),
         )
 
-    def test_session_environment_factories_rebind_actor_context(self):
+    def test_rebind_session_reuses_cursor_and_restores_request_env(self):
         prepared = self._create_committed_prepared_session(
-            'Fresh session environments',
+            'Request actor environment',
         )
-        dbname = self.env.cr.dbname
-        with user_env(dbname, self.env.uid, {'environment_marker': True}) as env:
-            self.assertIsNot(env, self.env)
-            self.assertEqual(env.uid, self.env.uid)
-            self.assertTrue(env.context['environment_marker'])
+        session_sudo = self._get_session(prepared['session_id'])
+        session_sudo = rebind_session(session_sudo)
 
-        for selector in (
-            {'session_id': prepared['session_id']},
-            {'request_uuid': prepared['request_uuid']},
+        self.assertIs(session_sudo.env.cr, self.env.cr)
+        self.assertEqual(session_sudo.env.uid, session_sudo.request_user_id.id)
+        self.assertEqual(
+            session_sudo.env.context['allowed_company_ids'],
+            session_sudo.request_context['allowed_company_ids'],
+        )
+
+    def test_commit_on_success_rolls_back_a_failed_commit(self):
+        cr = self.env.cr
+        with (
+            patch.object(cr, 'commit', side_effect=RuntimeError('commit failed')),
+            patch.object(cr, 'rollback') as rollback,
+            self.assertRaisesRegex(RuntimeError, 'commit failed'),
+            commit_on_success(cr),
         ):
-            with actor_env(dbname, **selector) as env:
-                self.assertIsNotNone(env)
-                session = env['ai.session'].sudo().browse(
-                    prepared['session_id'],
-                )
-                self.assertEqual(env.uid, session.request_user_id.id)
-                self.assertEqual(
-                    env.context['allowed_company_ids'],
-                    session.request_context['allowed_company_ids'],
-                )
+            pass
+
+        rollback.assert_called_once_with()
 
     def test_start_rebinds_the_channel_and_exact_message_in_caller_environment(self):
         self.authenticate('admin', 'admin')
@@ -231,6 +237,7 @@ class TestAISessionLoopHttp(HttpCase):
 
         def observe_caller_environment(controller, env, channel_id):
             observed['caller_environment'] = env is not http.request.env
+            observed['request_cursor'] = env.cr is http.request.env.cr
             return original_get_channel(controller, env, channel_id)
 
         with (
@@ -249,6 +256,7 @@ class TestAISessionLoopHttp(HttpCase):
 
         self.assertNotIn('error', response.json())
         self.assertTrue(observed['caller_environment'])
+        self.assertTrue(observed['request_cursor'])
 
         with self.registry.cursor() as cr:
             env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
@@ -816,13 +824,10 @@ class TestAISessionLoopHttp(HttpCase):
             ) as transport,
             self.assertRaises(MissingError),
         ):
-            submit_prepared_request(
-                self.env.cr.dbname,
-                {
-                    'session_id': prepared['session_id'],
-                    'request_uuid': '00000000-0000-4000-8000-ffffffffffff',
-                },
-            )
+            self._submit_prepared({
+                'session_id': prepared['session_id'],
+                'request_uuid': '00000000-0000-4000-8000-ffffffffffff',
+            })
 
         transport.assert_not_called()
         session = self._get_session(prepared['session_id'])
@@ -838,13 +843,10 @@ class TestAISessionLoopHttp(HttpCase):
             'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
             return_value=None,
         ) as transport:
-            acknowledgement = submit_prepared_request(
-                self.env.cr.dbname,
-                {
-                    'session_id': prepared['session_id'],
-                    'request_uuid': prepared['request_uuid'],
-                },
-            )
+            acknowledgement = self._submit_prepared({
+                'session_id': prepared['session_id'],
+                'request_uuid': prepared['request_uuid'],
+            })
 
         self.assertEqual(acknowledgement, {
             'request_uuid': prepared['request_uuid'],
@@ -861,8 +863,7 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertIs(payload['llm_retry'], False)
         self.assertNotIn('callback_url', payload)
 
-        self.assertIsNone(submit_prepared_request(
-            self.env.cr.dbname,
+        self.assertIsNone(self._submit_prepared(
             {'session_id': 0, 'request_uuid': prepared['request_uuid']},
         ))
 
@@ -881,7 +882,7 @@ class TestAISessionLoopHttp(HttpCase):
                 autospec=True,
             ) as notify,
         ):
-            acknowledgement = submit_prepared_request(self.env.cr.dbname, {
+            acknowledgement = self._submit_prepared({
                 'session_id': prepared['session_id'],
                 'request_uuid': prepared['request_uuid'],
             })
@@ -932,16 +933,14 @@ class TestAISessionLoopHttp(HttpCase):
             return None
 
         with (
-            patch.object(
-                self.registry, 'cursor',
-                side_effect=lambda readonly=False: raw_cursor(),
-            ),
+            raw_cursor() as cr,
             patch(
                 'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
                 side_effect=observe_submit,
             ),
         ):
-            acknowledgement = submit_prepared_request(self.env.cr.dbname, prepared)
+            env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
+            acknowledgement = submit_prepared_request(env, prepared)
 
         self.assertEqual(acknowledgement['request_uuid'], prepared['request_uuid'])
         with raw_cursor() as cr:
