@@ -76,7 +76,7 @@ test("server-hydrated durable confirmation submits only its token and choice onc
         expect(body.channel_id).toBeOfType("number");
         expect(body.request_uuid).toBe(REQUEST_UUID);
         expect(body.resume_token).toBe(RESUME_TOKEN);
-        expect(body.response).toEqual({ value: "confirm_once" });
+        expect(body.response).toEqual({ kind: "confirmation", value: "confirm_once" });
         expect("response_value" in body).toBe(false);
         expect("tool_name" in body).toBe(false);
         expect("tool_args" in body).toBe(false);
@@ -105,7 +105,7 @@ test("declining a durable confirmation uses the tokenized resume route", async (
         const { params: body } = await request.json();
         expect(body.request_uuid).toBe(REQUEST_UUID);
         expect(body.resume_token).toBe(RESUME_TOKEN);
-        expect(body.response).toEqual({ value: "decline" });
+        expect(body.response).toEqual({ kind: "confirmation", value: "decline" });
         expect.step("decline resumed");
         return {
             request_uuid: REQUEST_UUID,

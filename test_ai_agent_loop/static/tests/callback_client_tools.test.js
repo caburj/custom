@@ -96,7 +96,7 @@ test("Persisted blocking client command resumes a falsy result once", async () =
     });
     onRpc("/ai/resume_pending_interaction", async (request) => {
         const { params } = await request.json();
-        expect(params.response).toEqual({ result: false });
+        expect(params.response).toEqual({ kind: "client_result", value: false });
         expect(params.resume_token).toBe("blocking-client-token");
         expect("current_view_info" in params).toBe(true);
         expect.step("result resumed");
@@ -164,7 +164,10 @@ test("Persisted blocking client command resumes an execution error", async () =>
     });
     onRpc("/ai/resume_pending_interaction", async (request) => {
         const { params } = await request.json();
-        expect(params.response).toEqual({ error: "Browser command failed" });
+        expect(params.response).toEqual({
+            kind: "client_error",
+            value: "Browser command failed",
+        });
         expect.step("error resumed");
         return { responseState: "running" };
     });
@@ -186,7 +189,8 @@ test("Unavailable blocking client command resumes an error instead of waiting fo
     onRpc("/ai/resume_pending_interaction", async (request) => {
         const { params } = await request.json();
         expect(params.response).toEqual({
-            error: "Unknown AI client tool: unavailable_livechat_tool",
+            kind: "client_error",
+            value: "Unknown AI client tool: unavailable_livechat_tool",
         });
         expect.step("unavailable tool resumed");
         return { responseState: "running" };

@@ -79,7 +79,10 @@ function expectPendingInteractionResume(expectedResponse, step) {
 }
 
 test("server-hydrated single choice resumes through the pending-interaction route", async () => {
-    expectPendingInteractionResume({ values: ["Draft"] }, "single answer resumed");
+    expectPendingInteractionResume(
+        { kind: "question", value: ["Draft"] },
+        "single answer resumed"
+    );
     await startPendingQuestion();
 
     await click(`${INPUT_REQUEST_SELECTOR} button:contains('Draft')`);
@@ -89,7 +92,10 @@ test("server-hydrated single choice resumes through the pending-interaction rout
 });
 
 test("free text resumes with one structured value", async () => {
-    expectPendingInteractionResume({ values: ["Antwerp"] }, "free text resumed");
+    expectPendingInteractionResume(
+        { kind: "question", value: ["Antwerp"] },
+        "free text resumed"
+    );
     await startPendingQuestion({ allowFreeText: true });
 
     await insertText(
@@ -102,7 +108,10 @@ test("free text resumes with one structured value", async () => {
 });
 
 test("multi-select resumes in displayed choice order", async () => {
-    expectPendingInteractionResume({ values: ["Red", "Blue"] }, "multi answer resumed");
+    expectPendingInteractionResume(
+        { kind: "question", value: ["Red", "Blue"] },
+        "multi answer resumed"
+    );
     await startPendingQuestion({
         choices: [
             { label: "Red", value: "Red" },
@@ -120,7 +129,7 @@ test("multi-select resumes in displayed choice order", async () => {
 });
 
 test("skip settles through the token-fenced pending-interaction route", async () => {
-    expectPendingInteractionResume({ skip: true }, "skip resumed");
+    expectPendingInteractionResume({ kind: "skip" }, "skip resumed");
     await startPendingQuestion();
 
     await click(`${INPUT_REQUEST_SELECTOR} button:contains('Skip')`);

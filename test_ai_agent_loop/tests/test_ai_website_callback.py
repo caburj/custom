@@ -44,10 +44,13 @@ class TestAIWebsiteCallback(TransactionCase):
         }
         session = session.with_context(**snapshot)
 
-        prepared_session = session._prepare_model_request(context_snapshot=snapshot)
+        prepared = session._prepare_model_request(context_snapshot=snapshot)
         tools_context = session._build_tools_context()
 
-        self.assertEqual(prepared_session, session)
+        self.assertEqual(prepared, {
+            'session_id': session.id,
+            'request_uuid': session.request_uuid,
+        })
         self.assertEqual(session.request_payload['timeout'], WEBSITE_BUILDER_TIMEOUT)
         self.assertEqual(tools_context['ai_session_id'], session.id)
         self.assertIn('## AI JavaScript', str(session.request_payload['messages']))
@@ -93,10 +96,10 @@ else:
         session._prepare_model_request(context_snapshot=snapshot)
         request_uuid = session.request_uuid
         waiting = session._apply_iap_result(request_uuid, {
-            'request_uuid': request_uuid,
-            'status': 'success',
-            'result': {
+            'kind': 'success',
+            'message': {
                 'role': 'assistant',
+                'provider_metadata': {},
                 'content': [{
                     'type': 'tool_call',
                     'call_id': 'website-confirmation',
@@ -111,13 +114,13 @@ else:
         unavailable = session.with_context(current_view_info={})._resume_pending_interaction(
             request_uuid,
             resume_token,
-            {'value': UserInputResponse.CONFIRM_ONCE},
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
             context_snapshot={'current_view_info': {}},
         )
 
-        self.assertEqual(waiting['responseState'], 'waiting_user')
-        self.assertEqual(unavailable['responseState'], 'waiting_user')
-        self.assertFalse(unavailable['interactionConsumed'])
+        self.assertEqual(waiting['response']['responseState'], 'waiting_user')
+        self.assertEqual(unavailable['response']['responseState'], 'waiting_user')
+        self.assertFalse(unavailable['response']['interactionConsumed'])
         self.assertEqual(session.loop_state, 'waiting_confirmation')
         self.assertEqual(session.resume_token, resume_token)
         self.assertNotIn('website_runs', session.state)
@@ -130,8 +133,8 @@ else:
         resumed = session._resume_pending_interaction(
             request_uuid,
             resume_token,
-            {'value': UserInputResponse.CONFIRM_ONCE},
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
             context_snapshot=snapshot,
         )
-        self.assertEqual(resumed['responseState'], 'running')
+        self.assertEqual(resumed['response']['responseState'], 'running')
         self.assertEqual(session.state['website_runs'], 1)

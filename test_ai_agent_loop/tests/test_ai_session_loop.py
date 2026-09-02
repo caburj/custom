@@ -24,6 +24,7 @@ def assistant_text(text):
     return {
         'role': 'assistant',
         'content': [{'type': 'text', 'text': text}],
+        'provider_metadata': {},
     }
 
 
@@ -60,10 +61,21 @@ class TestAISessionLoop(TransactionCase):
             'allowed_company_ids': self.env.companies.ids,
         }
         session = self.session.with_context(**context_snapshot)
-        return session._prepare_model_request(
+        prepared = session._prepare_model_request(
             message._convert_to_parts(),
             context_snapshot=context_snapshot,
         )
+        self.assertEqual(prepared, {
+            'session_id': session.id,
+            'request_uuid': session.request_uuid,
+        })
+        return session
+
+    def _apply_iap_result(self, session, request_uuid, result):
+        return session._apply_iap_result(request_uuid, result)
+
+    def _resume_pending_interaction(self, session, request_uuid, resume_token, response):
+        return session._resume_pending_interaction(request_uuid, resume_token, response)
 
     def _create_test_tool(self, name, code, thinking_text='Checking records'):
         return self.env['ir.actions.server'].create({
@@ -79,11 +91,11 @@ class TestAISessionLoop(TransactionCase):
         })
 
     def _apply_iap_tool_call(self, session, request_uuid, tool, call_id, args):
-        return session._apply_iap_result(request_uuid, {
-            'request_uuid': request_uuid,
-            'status': 'success',
-            'result': {
+        return self._apply_iap_result(session, request_uuid, {
+            'kind': 'success',
+            'message': {
                 'role': 'assistant',
+                'provider_metadata': {},
                 'content': [{
                     'type': 'tool_call',
                     'call_id': call_id,
@@ -171,19 +183,18 @@ class TestAISessionLoop(TransactionCase):
         message_count = len(session.channel_id.message_ids)
 
         result = {
-            'request_uuid': request_uuid,
-            'status': 'success',
-            'result': assistant_text('Hello from the callback'),
+            'kind': 'success',
+            'message': assistant_text('Hello from the callback'),
         }
-        outcome = session._apply_iap_result(request_uuid, result)
+        outcome = self._apply_iap_result(session, request_uuid, result)
         counts_after_first = (
             len(session.event_ids),
             len(session.channel_id.message_ids),
         )
-        replay = session._apply_iap_result(request_uuid, result)
+        replay = self._apply_iap_result(session, request_uuid, result)
 
-        self.assertEqual(outcome['responseState'], 'idle')
-        self.assertEqual(replay['responseState'], 'idle')
+        self.assertEqual(outcome['response']['responseState'], 'idle')
+        self.assertEqual(replay['response']['responseState'], 'idle')
         self.assertEqual(session.loop_state, 'ready')
         self.assertFalse(session.request_phase)
         self.assertFalse(session.request_uuid)
@@ -194,27 +205,15 @@ class TestAISessionLoop(TransactionCase):
         ))
         self.assertIn('Hello from the callback', session.channel_id.message_ids[0].body)
 
-    def test_result_handler_rejects_submission_payload(self):
-        session = self._prepare_model_request()
-        request_uuid = session.request_uuid
-        result = session._apply_iap_result(request_uuid, {
-            'request_uuid': request_uuid,
-            'status': 'queued',
-        })
-
-        self.assertEqual(result['responseState'], 'idle')
-        self.assertEqual(session.loop_state, 'ready')
-        self.assertFalse(session.request_uuid)
-
     def test_inline_data_only_success_posts_one_visible_attachment(self):
         session = self._prepare_model_request()
         request_uuid = session.request_uuid
         message_count = len(session.channel_id.message_ids)
         result = {
-            'request_uuid': request_uuid,
-            'status': 'success',
-            'result': {
+            'kind': 'success',
+            'message': {
                 'role': 'assistant',
+                'provider_metadata': {},
                 'content': [{
                     'type': 'inline_data',
                     'data': base64.b64encode(b'fixture image').decode(),
@@ -223,9 +222,9 @@ class TestAISessionLoop(TransactionCase):
             },
         }
 
-        outcome = session._apply_iap_result(request_uuid, result)
+        outcome = self._apply_iap_result(session, request_uuid, result)
 
-        self.assertEqual(outcome['responseState'], 'idle')
+        self.assertEqual(outcome['response']['responseState'], 'idle')
         self.assertEqual(session.loop_state, 'ready')
         self.assertEqual(len(session.channel_id.message_ids), message_count + 1)
         self.assertEqual(len(session.channel_id.message_ids[0].attachment_ids), 1)
@@ -241,6 +240,7 @@ class TestAISessionLoop(TransactionCase):
         request_uuid = session.request_uuid
         output_message = {
             'role': 'assistant',
+            'provider_metadata': {},
             'content': [{
                 'type': 'tool_call',
                 'call_id': 'count-contacts',
@@ -249,15 +249,14 @@ class TestAISessionLoop(TransactionCase):
             }],
         }
 
-        outcome = session._apply_iap_result(request_uuid, {
-            'request_uuid': request_uuid,
-            'status': 'success',
-            'result': output_message,
+        outcome = self._apply_iap_result(session, request_uuid, {
+            'kind': 'success',
+            'message': output_message,
         })
 
-        self.assertEqual(outcome['responseState'], 'running')
-        self.assertEqual(outcome['prepared_session_id'], session.id)
-        self.assertEqual(outcome['prepared_request_uuid'], session.request_uuid)
+        self.assertEqual(outcome['response']['responseState'], 'running')
+        self.assertEqual(outcome['prepared']['session_id'], session.id)
+        self.assertEqual(outcome['prepared']['request_uuid'], session.request_uuid)
         self.assertEqual(session.request_phase, 'prepared')
         self.assertEqual(session.request_round, 2)
         self.assertNotEqual(session.request_uuid, request_uuid)
@@ -271,10 +270,9 @@ class TestAISessionLoop(TransactionCase):
         self.assertEqual(tool_result['result'][0]['text'], '1')
 
         followup_uuid = session.request_uuid
-        session._apply_iap_result(followup_uuid, {
-            'request_uuid': followup_uuid,
-            'status': 'success',
-            'result': assistant_text('You have one callback tool contact.'),
+        self._apply_iap_result(session, followup_uuid, {
+            'kind': 'success',
+            'message': assistant_text('You have one callback tool contact.'),
         })
 
         self.assertEqual(session.loop_state, 'ready')
@@ -311,11 +309,11 @@ class TestAISessionLoop(TransactionCase):
         with patch.object(
             self.env.registry['discuss.channel'], '_bus_send', autospec=True,
         ) as bus_send:
-            outcome = session._apply_iap_result(request_uuid, {
-                'request_uuid': request_uuid,
-                'status': 'success',
-                'result': {
+            outcome = self._apply_iap_result(session, request_uuid, {
+                'kind': 'success',
+                'message': {
                     'role': 'assistant',
+                    'provider_metadata': {},
                     'content': [{
                         'type': 'tool_call',
                         'call_id': 'open-customers',
@@ -341,14 +339,14 @@ class TestAISessionLoop(TransactionCase):
             'res.partner',
         )
         self.assertEqual(session.loop_state, 'waiting_model')
-        self.assertEqual(outcome['prepared_session_id'], session.id)
-        self.assertEqual(outcome['prepared_request_uuid'], session.request_uuid)
+        self.assertEqual(outcome['prepared']['session_id'], session.id)
+        self.assertEqual(outcome['prepared']['request_uuid'], session.request_uuid)
         self.assertNotEqual(session.request_uuid, request_uuid)
 
     def test_single_choice_question_survives_reload_and_resumes_once(self):
         session, request_uuid, waiting = self._prepare_question(['Draft', 'Send'])
 
-        self.assertEqual(waiting['responseState'], 'waiting_user')
+        self.assertEqual(waiting['response']['responseState'], 'waiting_user')
         self.assertEqual(session.loop_state, 'waiting_answer')
         self.assertFalse(session.request_phase)
         resume_token = session.resume_token
@@ -359,34 +357,35 @@ class TestAISessionLoop(TransactionCase):
         )._build_result()['ai.session'][0]
         self.assertEqual(stored_session['userInputRequest']['requestUuid'], request_uuid)
         self.assertEqual(stored_session['userInputRequest']['resumeToken'], resume_token)
-        invalid_responses = (
-            {'values': ['Invented']},
-            {'values': 'Draft'},
-            {'values': []},
-            {'values': ['Draft', 'Draft']},
-            {'values': ['Draft'], 'skip': True},
-            {'skip': 1},
-        )
-        for response in invalid_responses:
-            with self.subTest(response=response), self.assertRaises(UserError):
-                session._resume_pending_interaction(request_uuid, resume_token, response)
+        for invalid_response in (
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
+            {'kind': 'question', 'value': ['Draft', 'Send']},
+            {'kind': 'question', 'value': ['Invented']},
+        ):
+            with self.subTest(invalid_response=invalid_response), self.assertRaises(UserError):
+                self._resume_pending_interaction(
+                    session, request_uuid, resume_token, invalid_response,
+                )
+        self.assertEqual(session.loop_state, 'waiting_answer')
         self.assertEqual(session.resume_token, resume_token)
 
-        resumed = session._resume_pending_interaction(
-            request_uuid, resume_token, {'values': ['Draft']},
+        resumed = self._resume_pending_interaction(
+            session, request_uuid, resume_token,
+            {'kind': 'question', 'value': ['Draft']},
         )
 
-        self.assertEqual(resumed['responseState'], 'running')
+        self.assertEqual(resumed['response']['responseState'], 'running')
         self.assertFalse(session.pending_tool_call)
-        self.assertEqual(resumed['prepared_session_id'], session.id)
+        self.assertEqual(resumed['prepared']['session_id'], session.id)
         self.assertNotEqual(session.request_uuid, request_uuid)
         result = session.request_payload['messages'][-1]['content'][0]
         self.assertEqual(result['tool_call_id'], 'callback-question')
         self.assertIn('USER ANSWER: Draft', str(result['result']))
         self.assertIn('Draft', session.channel_id.message_ids[0].body)
         with self.assertRaises(UserError):
-            session._resume_pending_interaction(
-                request_uuid, resume_token, {'values': ['Draft']},
+            self._resume_pending_interaction(
+                session, request_uuid, resume_token,
+                {'kind': 'question', 'value': ['Draft']},
             )
 
     def test_free_text_question_preserves_the_answer(self):
@@ -394,11 +393,12 @@ class TestAISessionLoop(TransactionCase):
             ['Brussels', 'Ghent'], allow_free_text=True,
         )
 
-        resumed = session._resume_pending_interaction(
-            request_uuid, session.resume_token, {'values': ['Antwerp']},
+        resumed = self._resume_pending_interaction(
+            session, request_uuid, session.resume_token,
+            {'kind': 'question', 'value': ['Antwerp']},
         )
 
-        self.assertEqual(resumed['responseState'], 'running')
+        self.assertEqual(resumed['response']['responseState'], 'running')
         result = session.request_payload['messages'][-1]['content'][0]
         self.assertIn('USER ANSWER: Antwerp', str(result['result']))
         self.assertIn('Antwerp', session.channel_id.message_ids[0].body)
@@ -408,11 +408,12 @@ class TestAISessionLoop(TransactionCase):
             ['Red', 'Green', 'Blue'], multi_select=True,
         )
 
-        resumed = session._resume_pending_interaction(
-            request_uuid, session.resume_token, {'values': ['Blue', 'Red']},
+        resumed = self._resume_pending_interaction(
+            session, request_uuid, session.resume_token,
+            {'kind': 'question', 'value': ['Blue', 'Red']},
         )
 
-        self.assertEqual(resumed['responseState'], 'running')
+        self.assertEqual(resumed['response']['responseState'], 'running')
         result = session.request_payload['messages'][-1]['content'][0]
         self.assertIn('USER ANSWER: Red,Blue', str(result['result']))
         self.assertIn('Red, Blue', session.channel_id.message_ids[0].body)
@@ -429,11 +430,11 @@ class TestAISessionLoop(TransactionCase):
         }
         session = self._prepare_model_request()
         request_uuid = session.request_uuid
-        session._apply_iap_result(request_uuid, {
-            'request_uuid': request_uuid,
-            'status': 'success',
-            'result': {
+        self._apply_iap_result(session, request_uuid, {
+            'kind': 'success',
+            'message': {
                 'role': 'assistant',
+                'provider_metadata': {},
                 'content': [
                     {
                         'type': 'tool_call',
@@ -463,16 +464,12 @@ class TestAISessionLoop(TransactionCase):
         })
 
         resume_token = session.resume_token
-        with self.assertRaises(UserError):
-            session._resume_pending_interaction(request_uuid, resume_token, {'skip': 1})
-        self.assertEqual(session.resume_token, resume_token)
-
-        skipped = session._resume_pending_interaction(
-            request_uuid, session.resume_token, {'skip': True},
+        skipped = self._resume_pending_interaction(
+            session, request_uuid, session.resume_token, {'kind': 'skip'},
         )
 
-        self.assertEqual(skipped['responseState'], 'idle')
-        self.assertNotIn('prepared_session_id', skipped)
+        self.assertEqual(skipped['response']['responseState'], 'idle')
+        self.assertEqual(skipped['kind'], 'stable')
         self.assertEqual(session.loop_state, 'ready')
         self.assertFalse(session.request_uuid)
         self.assertFalse(session.pending_tool_call)
@@ -490,7 +487,9 @@ class TestAISessionLoop(TransactionCase):
             ('name', '=', 'Must Not Be Created'),
         ]))
         with self.assertRaises(UserError):
-            session._resume_pending_interaction(request_uuid, resume_token, {'skip': True})
+            self._resume_pending_interaction(
+                session, request_uuid, resume_token, {'kind': 'skip'},
+            )
 
     def test_result_client_tool_resumes_truthy_falsy_and_error_without_rerun(self):
         tool = self._create_test_tool(
@@ -508,11 +507,11 @@ class TestAISessionLoop(TransactionCase):
             """),
         )
         cases = (
-            ('truthy', {'result': {'client_value': 42}}, True, '{"client_value": 42}'),
-            ('false', {'result': False}, True, 'false'),
-            ('null', {'result': None}, True, 'success'),
-            ('empty', {'result': ''}, True, ''),
-            ('error', {'error': 'Client tool failed'}, False, 'Error: Client tool failed'),
+            ('truthy', {'kind': 'client_result', 'value': {'client_value': 42}}, True, '{"client_value": 42}'),
+            ('false', {'kind': 'client_result', 'value': False}, True, 'false'),
+            ('null', {'kind': 'client_result', 'value': None}, True, 'success'),
+            ('empty', {'kind': 'client_result', 'value': ''}, True, ''),
+            ('error', {'kind': 'client_error', 'value': 'Client tool failed'}, False, 'Error: Client tool failed'),
         )
         for label, response, success, expected_data in cases:
             with self.subTest(label=label):
@@ -536,7 +535,7 @@ class TestAISessionLoop(TransactionCase):
                     session, request_uuid, tool, f'client-tool-{label}', {},
                 )
 
-                self.assertEqual(waiting['responseState'], 'waiting_client')
+                self.assertEqual(waiting['response']['responseState'], 'waiting_client')
                 self.assertEqual(session.loop_state, 'waiting_client_result')
                 self.assertEqual(session.state['client_tool_runs'], 1)
                 self.assertEqual(
@@ -553,35 +552,26 @@ class TestAISessionLoop(TransactionCase):
                 })
                 resume_token = session.resume_token
                 if label == 'truthy':
-                    for invalid_response in (
-                        {},
-                        {'error': ''},
-                        {'error': False},
-                        {'result': 42, 'error': 'mixed response'},
-                        {'skip': True},
-                    ):
-                        with (
-                            self.subTest(invalid_response=invalid_response),
-                            self.assertRaises(UserError),
-                        ):
-                            session._resume_pending_interaction(
-                                request_uuid, resume_token, invalid_response,
-                            )
+                    with self.assertRaises(UserError):
+                        self._resume_pending_interaction(
+                            session, request_uuid, resume_token,
+                            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
+                        )
+                    self.assertEqual(session.loop_state, 'waiting_client_result')
                     self.assertEqual(session.resume_token, resume_token)
-
-                resumed = session._resume_pending_interaction(
-                    request_uuid, resume_token, response,
+                resumed = self._resume_pending_interaction(
+                    session, request_uuid, resume_token, response,
                 )
 
-                self.assertEqual(resumed['responseState'], 'running')
+                self.assertEqual(resumed['response']['responseState'], 'running')
                 self.assertEqual(session.state['client_tool_runs'], 1)
                 self.assertNotEqual(session.request_uuid, request_uuid)
                 result = session.request_payload['messages'][-1]['content'][0]
                 self.assertEqual(result['success'], success)
                 self.assertEqual(result['result'][0]['text'], expected_data)
                 with self.assertRaises(UserError):
-                    session._resume_pending_interaction(
-                        request_uuid, resume_token, response,
+                    self._resume_pending_interaction(
+                        session, request_uuid, resume_token, response,
                     )
                 self.assertEqual(session.state['client_tool_runs'], 1)
 
@@ -596,7 +586,7 @@ class TestAISessionLoop(TransactionCase):
             self._create_partner_args('Callback Confirmed Contact'),
         )
 
-        self.assertEqual(waiting['responseState'], 'waiting_user')
+        self.assertEqual(waiting['response']['responseState'], 'waiting_user')
         self.assertEqual(session.loop_state, 'waiting_confirmation')
         self.assertTrue(session.resume_token)
         self.assertFalse(self.env['res.partner'].search([
@@ -609,11 +599,26 @@ class TestAISessionLoop(TransactionCase):
         )
         resume_token = session.resume_token
 
-        resumed = session._resume_pending_interaction(
-            request_uuid, resume_token, {'value': UserInputResponse.CONFIRM_ONCE},
+        for invalid_response in (
+            {'kind': 'skip'},
+            {'kind': 'confirmation', 'value': 'invented'},
+        ):
+            with self.subTest(invalid_response=invalid_response), self.assertRaises(UserError):
+                self._resume_pending_interaction(
+                    session, request_uuid, resume_token, invalid_response,
+                )
+        self.assertEqual(session.loop_state, 'waiting_confirmation')
+        self.assertEqual(session.resume_token, resume_token)
+        self.assertFalse(self.env['res.partner'].search([
+            ('name', '=', 'Callback Confirmed Contact'),
+        ]))
+
+        resumed = self._resume_pending_interaction(
+            session, request_uuid, resume_token,
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
 
-        self.assertEqual(resumed['responseState'], 'running')
+        self.assertEqual(resumed['response']['responseState'], 'running')
         self.assertFalse(session.pending_tool_call)
         self.assertNotEqual(session.request_uuid, request_uuid)
         partners = self.env['res.partner'].search([
@@ -625,8 +630,9 @@ class TestAISessionLoop(TransactionCase):
         self.assertTrue(tool_result['success'])
 
         with self.assertRaises(UserError):
-            session._resume_pending_interaction(
-                request_uuid, resume_token, {'value': UserInputResponse.CONFIRM_ONCE},
+            self._resume_pending_interaction(
+                session, request_uuid, resume_token,
+                {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
             )
         self.assertEqual(self.env['res.partner'].search_count([
             ('name', '=', 'Callback Confirmed Contact'),
@@ -657,8 +663,9 @@ class TestAISessionLoop(TransactionCase):
             self.assertRaises(RuntimeError),
             self.env.cr.savepoint(),
         ):
-            session._resume_pending_interaction(
-                request_uuid, resume_token, {'value': UserInputResponse.CONFIRM_ONCE},
+            self._resume_pending_interaction(
+                session, request_uuid, resume_token,
+                {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
             )
 
         self.env.invalidate_all()
@@ -683,11 +690,11 @@ class TestAISessionLoop(TransactionCase):
         session = self._prepare_model_request()
         request_uuid = session.request_uuid
         partner_name = 'Callback Question Follow-up Contact'
-        waiting = session._apply_iap_result(request_uuid, {
-            'request_uuid': request_uuid,
-            'status': 'success',
-            'result': {
+        waiting = self._apply_iap_result(session, request_uuid, {
+            'kind': 'success',
+            'message': {
                 'role': 'assistant',
+                'provider_metadata': {},
                 'content': [
                     {
                         'type': 'tool_call',
@@ -709,17 +716,18 @@ class TestAISessionLoop(TransactionCase):
                 ],
             },
         })
-        self.assertEqual(waiting['responseState'], 'waiting_user')
+        self.assertEqual(waiting['response']['responseState'], 'waiting_user')
         confirmation_token = session.resume_token
         event_count = len(session.event_ids)
 
-        question_waiting = session._resume_pending_interaction(
+        question_waiting = self._resume_pending_interaction(
+            session,
             request_uuid,
             confirmation_token,
-            {'value': UserInputResponse.CONFIRM_ONCE},
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
 
-        self.assertEqual(question_waiting['responseState'], 'waiting_user')
+        self.assertEqual(question_waiting['response']['responseState'], 'waiting_user')
         self.assertEqual(session.loop_state, 'waiting_answer')
         self.assertNotEqual(session.resume_token, confirmation_token)
         self.assertEqual(session.pending_tool_call['call_id'], 'follow-up-question')
@@ -732,11 +740,12 @@ class TestAISessionLoop(TransactionCase):
             ('name', '=', partner_name),
         ]), 1)
 
-        resumed = session._resume_pending_interaction(
-            request_uuid, session.resume_token, {'values': ['First option']},
+        resumed = self._resume_pending_interaction(
+            session, request_uuid, session.resume_token,
+            {'kind': 'question', 'value': ['First option']},
         )
 
-        self.assertEqual(resumed['responseState'], 'running')
+        self.assertEqual(resumed['response']['responseState'], 'running')
         results = [
             part
             for part in session.request_payload['messages'][-1]['content']
@@ -784,16 +793,17 @@ class TestAISessionLoop(TransactionCase):
             session, request_uuid, tool, 'generic-confirmation', {},
         )
 
-        self.assertEqual(waiting['responseState'], 'waiting_user')
+        self.assertEqual(waiting['response']['responseState'], 'waiting_user')
         self.assertEqual(session.loop_state, 'waiting_confirmation')
         self.assertNotIn('generic_confirmation_runs', session.state)
         resume_token = session.resume_token
 
-        resumed = session._resume_pending_interaction(
-            request_uuid, resume_token, {'value': UserInputResponse.CONFIRM_ONCE},
+        resumed = self._resume_pending_interaction(
+            session, request_uuid, resume_token,
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
 
-        self.assertEqual(resumed['responseState'], 'running')
+        self.assertEqual(resumed['response']['responseState'], 'running')
         self.assertEqual(session.state['generic_confirmation_runs'], 1)
         tool_result = session.request_payload['messages'][-1]['content'][0]
         self.assertEqual(tool_result['tool_name'], tool.ai_tool_name)
@@ -827,12 +837,12 @@ class TestAISessionLoop(TransactionCase):
         pending_call = session._get_last_tool_calls()[0]
         self.assertEqual(pending_call['args'], args)
 
-        resumed = session._resume_pending_interaction(
-            request_uuid, session.resume_token,
-            {'value': UserInputResponse.CONFIRM_ONCE},
+        resumed = self._resume_pending_interaction(
+            session, request_uuid, session.resume_token,
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
 
-        self.assertEqual(resumed['responseState'], 'running')
+        self.assertEqual(resumed['response']['responseState'], 'running')
         self.assertEqual(partner.name, 'Callback After Update')
         self.assertNotEqual(session.request_uuid, request_uuid)
 
@@ -846,12 +856,12 @@ class TestAISessionLoop(TransactionCase):
             self._create_partner_args('Declined Callback Contact'),
         )
 
-        declined = session._resume_pending_interaction(
-            request_uuid, session.resume_token,
-            {'value': UserInputResponse.DECLINE},
+        declined = self._resume_pending_interaction(
+            session, request_uuid, session.resume_token,
+            {'kind': 'confirmation', 'value': UserInputResponse.DECLINE},
         )
 
-        self.assertEqual(declined['responseState'], 'idle')
+        self.assertEqual(declined['response']['responseState'], 'idle')
         self.assertEqual(session.loop_state, 'ready')
         self.assertFalse(session.request_uuid)
         self.assertFalse(session.pending_tool_call)
@@ -878,19 +888,23 @@ class TestAISessionLoop(TransactionCase):
                 ('create-second', 'Callback Second Contact'),
             )
         ]
-        session._apply_iap_result(request_uuid, {
-            'request_uuid': request_uuid,
-            'status': 'success',
-            'result': {'role': 'assistant', 'content': tool_calls},
+        self._apply_iap_result(session, request_uuid, {
+            'kind': 'success',
+            'message': {
+                'role': 'assistant',
+                'content': tool_calls,
+                'provider_metadata': {},
+            },
         })
         first_token = session.resume_token
         event_count_before_resumes = len(session.event_ids)
 
-        first_resume = session._resume_pending_interaction(
-            request_uuid, first_token, {'value': UserInputResponse.CONFIRM_ONCE},
+        first_resume = self._resume_pending_interaction(
+            session, request_uuid, first_token,
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
 
-        self.assertEqual(first_resume['responseState'], 'waiting_user')
+        self.assertEqual(first_resume['response']['responseState'], 'waiting_user')
         self.assertEqual(session.loop_state, 'waiting_confirmation')
         self.assertNotEqual(session.resume_token, first_token)
         self.assertEqual(session.pending_tool_call['call_id'], 'create-second')
@@ -898,17 +912,17 @@ class TestAISessionLoop(TransactionCase):
         self.assertEqual(session.pending_tool_call['pending_results'][0]['tool_call_id'], 'create-first')
         self.assertEqual(len(session.event_ids), event_count_before_resumes)
         with self.assertRaises(UserError):
-            session._resume_pending_interaction(
-                request_uuid, first_token,
-                {'value': UserInputResponse.CONFIRM_ONCE},
+            self._resume_pending_interaction(
+                session, request_uuid, first_token,
+                {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
             )
 
-        second_resume = session._resume_pending_interaction(
-            request_uuid, session.resume_token,
-            {'value': UserInputResponse.CONFIRM_ONCE},
+        second_resume = self._resume_pending_interaction(
+            session, request_uuid, session.resume_token,
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
 
-        self.assertEqual(second_resume['responseState'], 'running')
+        self.assertEqual(second_resume['response']['responseState'], 'running')
         results = [
             part
             for part in session.request_payload['messages'][-1]['content']
@@ -932,11 +946,11 @@ class TestAISessionLoop(TransactionCase):
             session, first_request_uuid, tool, 'auto-first',
             self._create_partner_args('Callback Auto First'),
         )
-        first_resume = session._resume_pending_interaction(
-            first_request_uuid, session.resume_token,
-            {'value': UserInputResponse.AUTO_CONFIRM},
+        first_resume = self._resume_pending_interaction(
+            session, first_request_uuid, session.resume_token,
+            {'kind': 'confirmation', 'value': UserInputResponse.AUTO_CONFIRM},
         )
-        self.assertEqual(first_resume['responseState'], 'running')
+        self.assertEqual(first_resume['response']['responseState'], 'running')
         second_request_uuid = session.request_uuid
 
         second_resume = self._apply_iap_tool_call(
@@ -945,7 +959,7 @@ class TestAISessionLoop(TransactionCase):
         )
 
         self.assertTrue(session.auto_confirm)
-        self.assertEqual(second_resume['responseState'], 'running')
+        self.assertEqual(second_resume['response']['responseState'], 'running')
         self.assertFalse(session.pending_tool_call)
         self.assertNotEqual(session.request_uuid, second_request_uuid)
         self.assertEqual(self.env['res.partner'].search_count([

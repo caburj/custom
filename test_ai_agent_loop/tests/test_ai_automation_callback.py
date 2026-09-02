@@ -7,7 +7,7 @@ from odoo.tests import HttpCase, tagged
 
 @tagged('post_install', '-at_install')
 class TestAIAutomationCallback(HttpCase):
-    def test_automation_run_prepares_then_submits_after_commit(self):
+    def test_automation_run_registers_postcommit_submission_in_order(self):
         agent = self.env['ai.agent'].create({
             'name': 'Callback Automation Agent',
             'system_prompt': 'Run the requested automation.',
@@ -23,7 +23,7 @@ class TestAIAutomationCallback(HttpCase):
         })
 
         with patch(
-            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
+            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
             side_effect=lambda _connection, _route, payload, **_kwargs: {
                 'request_uuid': payload['request_uuid'],
                 'status': 'queued',
@@ -56,11 +56,11 @@ class TestAIAutomationCallback(HttpCase):
         self.assertEqual(session.request_phase, 'submitted')
 
         session._apply_iap_result(request_uuid, {
-            'request_uuid': request_uuid,
-            'status': 'success',
-            'result': {
+            'kind': 'success',
+            'message': {
                 'role': 'assistant',
                 'content': [{'type': 'text', 'text': 'Automation complete'}],
+                'provider_metadata': {},
             },
         })
 

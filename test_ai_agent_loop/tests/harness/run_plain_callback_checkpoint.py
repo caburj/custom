@@ -17,7 +17,7 @@ import requests
 
 
 CUSTOM = Path(__file__).resolve().parents[3]
-ENTERPRISE = Path('/Users/joseph/.wt/worktrees/odoo/enterprise/master-ai-callback-driven-loop')
+ENTERPRISE = Path('/Users/joseph/.wt/worktrees/odoo/enterprise/master-ai-callback-driven-establish-trust-layers-jcb')
 CORE = Path('/Users/joseph/.wt/worktrees/odoo/odoo/master-odoo-ai-iap-service-lba')
 IAP_CORE = Path('/Users/joseph/.wt/worktrees/odoo/odoo/saas-19.4-odoo-ai-iap-service-lba')
 IAP_ENTERPRISE = Path('/Users/joseph/.wt/worktrees/odoo/enterprise/saas-19.4-odoo-ai-iap-service-lba')
@@ -257,6 +257,7 @@ class ProviderHandler(BaseHTTPRequestHandler):
                     'text': 'Hello from the paired fake provider.',
                 }],
             }
+        result['provider_metadata'] = {'provider': 'test', 'model': 'test', 'api': 'test'}
         self._json(200, {'result': result})
 
     def _read_json(self):
@@ -389,7 +390,7 @@ def resume_pending_confirmation(session, channel_id, status):
             'channel_id': channel_id,
             'request_uuid': status['request_uuid'],
             'resume_token': status['resume_token'],
-            'response': {'value': 'confirm_once'},
+            'response': {'kind': 'confirmation', 'value': 'confirm_once'},
         },
         session=session,
     )
@@ -640,7 +641,7 @@ def main():
                             'channel_id': consumer_setup['channel_id'],
                             'request_uuid': first_confirmation_status['request_uuid'],
                             'resume_token': first_confirmation_status['resume_token'],
-                            'response': {'value': 'confirm_once'},
+                            'response': {'kind': 'confirmation', 'value': 'confirm_once'},
                         },
                         session=session,
                     )
@@ -701,7 +702,7 @@ def main():
                     'channel_id': consumer_setup['channel_id'],
                     'request_uuid': question_status['request_uuid'],
                     'resume_token': question_status['resume_token'],
-                    'response': {'values': ['Draft']},
+                    'response': {'kind': 'question', 'value': ['Draft']},
                 },
                 session=session,
             )

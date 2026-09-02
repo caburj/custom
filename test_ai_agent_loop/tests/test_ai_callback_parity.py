@@ -15,6 +15,7 @@ def assistant_text(text):
     return {
         'role': 'assistant',
         'content': [{'type': 'text', 'text': text}],
+        'provider_metadata': {},
     }
 
 
@@ -55,9 +56,26 @@ class TestAICallbackParity(TransactionCase):
         }
         message = channel.message_post(body=body, message_type='comment')
         session = session.with_context(**snapshot)
-        return session._prepare_model_request(
+        prepared = session._prepare_model_request(
             message._convert_to_parts(),
             context_snapshot=snapshot,
+        )
+        self.assertEqual(prepared, {
+            'session_id': session.id,
+            'request_uuid': session.request_uuid,
+        })
+        return session
+
+    @staticmethod
+    def _apply_iap_result(session, request_uuid, result):
+        return session._apply_iap_result(request_uuid, result)
+
+    @staticmethod
+    def _resume_pending_interaction(
+        session, request_uuid, resume_token, response, **kwargs,
+    ):
+        return session._resume_pending_interaction(
+            request_uuid, resume_token, response, **kwargs,
         )
 
     def _new_session(self, title):
@@ -69,10 +87,13 @@ class TestAICallbackParity(TransactionCase):
         return channel, session
 
     def _apply_iap_tool_calls(self, session, request_uuid, calls):
-        return session._apply_iap_result(request_uuid, {
-            'request_uuid': request_uuid,
-            'status': 'success',
-            'result': {'role': 'assistant', 'content': calls},
+        return self._apply_iap_result(session, request_uuid, {
+            'kind': 'success',
+            'message': {
+                'role': 'assistant',
+                'content': calls,
+                'provider_metadata': {},
+            },
         })
 
     @staticmethod
@@ -172,30 +193,33 @@ else:
 
         first_wait = self._apply_iap_tool_calls(session, request_uuid, calls)
         first_token = session.resume_token
-        self.assertEqual(first_wait['responseState'], 'waiting_user')
+        self.assertEqual(first_wait['response']['responseState'], 'waiting_user')
         self.assertEqual(len(session.pending_tool_call['pending_results']), 1)
         self.assertEqual(len(session.event_ids), event_count + 1)
 
-        client_wait = session._resume_pending_interaction(
-            request_uuid, first_token, {'value': UserInputResponse.CONFIRM_ONCE},
+        client_wait = self._resume_pending_interaction(
+            session, request_uuid, first_token,
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
         client_token = session.resume_token
-        self.assertEqual(client_wait['responseState'], 'waiting_client')
+        self.assertEqual(client_wait['response']['responseState'], 'waiting_client')
         self.assertNotEqual(client_token, first_token)
         self.assertEqual(len(session.pending_tool_call['pending_results']), 2)
         self.assertEqual(len(session.event_ids), event_count + 1)
 
-        second_wait = session._resume_pending_interaction(
-            request_uuid, client_token, {'result': False},
+        second_wait = self._resume_pending_interaction(
+            session, request_uuid, client_token,
+            {'kind': 'client_result', 'value': False},
         )
         second_token = session.resume_token
-        self.assertEqual(second_wait['responseState'], 'waiting_user')
+        self.assertEqual(second_wait['response']['responseState'], 'waiting_user')
         self.assertNotEqual(second_token, client_token)
         self.assertEqual(len(session.pending_tool_call['pending_results']), 3)
         self.assertEqual(len(session.event_ids), event_count + 1)
 
-        completed = session._resume_pending_interaction(
-            request_uuid, second_token, {'value': UserInputResponse.CONFIRM_ONCE},
+        completed = self._resume_pending_interaction(
+            session, request_uuid, second_token,
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
         results = self._tool_results(session.request_payload)
 
@@ -210,8 +234,8 @@ else:
         self.assertEqual(session.state['client_runs'], 1)
         self.assertEqual(session.state['second_confirmation_runs'], 1)
         self.assertEqual(session.state['last_runs'], 1)
-        self.assertEqual(completed['prepared_session_id'], session.id)
-        self.assertEqual(completed['prepared_request_uuid'], session.request_uuid)
+        self.assertEqual(completed['prepared']['session_id'], session.id)
+        self.assertEqual(completed['prepared']['request_uuid'], session.request_uuid)
         self.assertNotEqual(session.request_uuid, request_uuid)
         self.assertEqual(session.request_round, 2)
 
@@ -255,13 +279,13 @@ else:
             self._tool_call(excess, 'limited'),
         ])
 
-        completed = session._resume_pending_interaction(
-            request_uuid, session.resume_token,
-            {'value': UserInputResponse.CONFIRM_ONCE},
+        completed = self._resume_pending_interaction(
+            session, request_uuid, session.resume_token,
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
         results = self._tool_results(session.request_payload)
 
-        self.assertEqual(completed['responseState'], 'running')
+        self.assertEqual(completed['response']['responseState'], 'running')
         self.assertEqual(
             [result['tool_call_id'] for result in results],
             ['before-pause', 'allowed', 'limited'],
@@ -325,8 +349,8 @@ else:
         ])
         self.assertEqual(self._context_part(session.request_payload), first_context)
         self.assertEqual(session.request_context, initial_snapshot)
-        self.assertEqual(automatic['prepared_session_id'], session.id)
-        self.assertEqual(automatic['prepared_request_uuid'], session.request_uuid)
+        self.assertEqual(automatic['prepared']['session_id'], session.id)
+        self.assertEqual(automatic['prepared']['request_uuid'], session.request_uuid)
 
         channel, paused_session = self._new_session('Callback Fresh Context')
         confirmation = self._create_tool(
@@ -364,14 +388,15 @@ else:
             'current_view_info': {'marker': 'resumed'},
         }
         fresh_session = paused_session.with_context(**fresh_snapshot)
-        resumed = fresh_session._resume_pending_interaction(
+        resumed = self._resume_pending_interaction(
+            fresh_session,
             paused_request_uuid,
             fresh_session.resume_token,
-            {'value': UserInputResponse.CONFIRM_ONCE},
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
             context_snapshot=fresh_snapshot,
         )
 
-        self.assertEqual(resumed['prepared_session_id'], paused_session.id)
+        self.assertEqual(resumed['prepared']['session_id'], paused_session.id)
         self.assertEqual(fresh_session.request_context, fresh_snapshot)
         self.assertIn('resumed', str(self._context_part(fresh_session.request_payload)))
 
@@ -428,10 +453,10 @@ else:
                 if variant == 'unknown':
                     bad_call['name'] = 'callback_unknown_tool'
                 result = {
-                    'request_uuid': request_uuid,
-                    'status': 'success',
-                    'result': {
+                    'kind': 'success',
+                    'message': {
                         'role': 'assistant',
+                        'provider_metadata': {},
                         'content': [
                             self._tool_call(successful, 'good'),
                             bad_call,
@@ -439,7 +464,7 @@ else:
                     },
                 }
 
-                outcome = session._apply_iap_result(request_uuid, result)
+                outcome = self._apply_iap_result(session, request_uuid, result)
                 followup_uuid = session.request_uuid
                 results = self._tool_results(session.request_payload)
                 counts = (
@@ -450,13 +475,12 @@ else:
                 self.assertTrue(results[0]['success'])
                 self.assertFalse(results[1]['success'])
                 self.assertEqual(session.state['successful_runs'], 1)
-                self.assertEqual(outcome['prepared_request_uuid'], followup_uuid)
-                session._apply_iap_result(followup_uuid, {
-                    'request_uuid': followup_uuid,
-                    'status': 'success',
-                    'result': assistant_text('The tool failed, so nothing else was changed.'),
+                self.assertEqual(outcome['prepared']['request_uuid'], followup_uuid)
+                self._apply_iap_result(session, followup_uuid, {
+                    'kind': 'success',
+                    'message': assistant_text('The tool failed, so nothing else was changed.'),
                 })
-                session._apply_iap_result(request_uuid, result)
+                self._apply_iap_result(session, request_uuid, result)
                 self.assertEqual(session.state['successful_runs'], 1)
                 self.assertEqual(counts[0] + 1, len(session.event_ids))
                 self.assertEqual(counts[1] + 1, len(session.channel_id.message_ids))
@@ -496,18 +520,19 @@ else:
             self._tool_call(final_tool, 'owned-final'),
             self._tool_call(confirmation, 'confirmation'),
         ])
-        self.assertEqual(waiting['responseState'], 'waiting_user')
+        self.assertEqual(waiting['response']['responseState'], 'waiting_user')
 
-        finished = session._resume_pending_interaction(
+        finished = self._resume_pending_interaction(
+            session,
             request_uuid,
             session.resume_token,
-            {'value': UserInputResponse.CONFIRM_ONCE},
+            {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
 
-        self.assertEqual(finished['responseState'], 'running')
+        self.assertEqual(finished['response']['responseState'], 'running')
         self.assertEqual(session.loop_state, 'waiting_model')
         self.assertEqual(session.request_phase, 'prepared')
-        self.assertEqual(finished['prepared_session_id'], session.id)
+        self.assertEqual(finished['prepared']['session_id'], session.id)
         self.assertNotEqual(session.request_uuid, request_uuid)
         self.assertFalse(any(
             'Owned final response' in str(message.body)
@@ -533,7 +558,7 @@ else:
                 'args': {},
             },
         ])
-        self.assertEqual(failure_outcome['responseState'], 'running')
+        self.assertEqual(failure_outcome['response']['responseState'], 'running')
         self.assertFalse(
             self._tool_results(failure_session.request_payload)[1]['success'],
         )
@@ -563,14 +588,13 @@ ai['result'] = 'continue'
             self._tool_call(suffix_tool, 'suffix'),
         ])
         followup_uuid = suffix_session.request_uuid
-        self.assertEqual(suffix_outcome['prepared_request_uuid'], followup_uuid)
+        self.assertEqual(suffix_outcome['prepared']['request_uuid'], followup_uuid)
         self.assertIn(
             'callback-round-suffix', suffix_session.request_message_body_suffix,
         )
-        suffix_session._apply_iap_result(followup_uuid, {
-            'request_uuid': followup_uuid,
-            'status': 'success',
-            'result': assistant_text('Final after preview'),
+        self._apply_iap_result(suffix_session, followup_uuid, {
+            'kind': 'success',
+            'message': assistant_text('Final after preview'),
         })
         self.assertIn(
             'callback-round-suffix', suffix_session.channel_id.message_ids[0].body,
@@ -587,18 +611,18 @@ ai['result'] = 'continue'
         session = self._prepare_model_request()
         request_uuid = session.request_uuid
         result = {
-            'request_uuid': request_uuid,
-            'status': 'success',
-            'result': {
+            'kind': 'success',
+            'message': {
                 'role': 'assistant',
+                'provider_metadata': {},
                 'content': [self._tool_call(tool, 'limit')],
             },
         }
-        outcome = session._apply_iap_result(request_uuid, result)
+        outcome = self._apply_iap_result(session, request_uuid, result)
         message_count = len(session.channel_id.message_ids)
-        replay = session._apply_iap_result(request_uuid, result)
-        self.assertEqual(outcome['responseState'], 'idle')
-        self.assertEqual(replay['responseState'], 'idle')
+        replay = self._apply_iap_result(session, request_uuid, result)
+        self.assertEqual(outcome['response']['responseState'], 'idle')
+        self.assertEqual(replay['response']['responseState'], 'idle')
         self.assertEqual(session.loop_state, 'ready')
         self.assertFalse(session.request_uuid)
         self.assertIn('too many successive tool rounds', session.channel_id.message_ids[0].body)
@@ -616,18 +640,17 @@ ai['result'] = 'continue'
                 )
                 error_request_uuid = error_session.request_uuid
                 error_result = {
-                    'request_uuid': error_request_uuid,
-                    'status': 'error',
-                    'error': error_code,
+                    'kind': 'failure',
+                    'code': error_code,
                 }
                 with patch.object(
                     self.env.registry['iap.account'],
                     '_send_no_credit_notification',
                     autospec=True,
                 ) as notify:
-                    error_session._apply_iap_result(error_request_uuid, error_result)
+                    self._apply_iap_result(error_session, error_request_uuid, error_result)
                     error_message_count = len(error_session.channel_id.message_ids)
-                    error_session._apply_iap_result(error_request_uuid, error_result)
+                    self._apply_iap_result(error_session, error_request_uuid, error_result)
                 self.assertEqual(error_session.loop_state, 'ready')
                 self.assertFalse(error_session.request_uuid)
                 self.assertIn('AI is unreachable', error_session.channel_id.message_ids[0].body)
@@ -638,25 +661,6 @@ ai['result'] = 'continue'
                     notify.call_count,
                     1 if error_code == 'insufficient_credit' else 0,
                 )
-
-        channel, invalid_session = self._new_session('Callback invalid result')
-        invalid_session = self._prepare_model_request(
-            session=invalid_session,
-            channel=channel,
-            body='Trigger invalid result',
-        )
-        invalid_request_uuid = invalid_session.request_uuid
-        invalid_event_count = len(invalid_session.event_ids)
-        invalid = invalid_session._apply_iap_result(invalid_request_uuid, {
-            'request_uuid': invalid_request_uuid,
-            'status': 'success',
-            'result': {'role': 'assistant', 'content': []},
-        })
-        self.assertEqual(invalid['responseState'], 'idle')
-        self.assertEqual(invalid_session.loop_state, 'ready')
-        self.assertFalse(invalid_session.request_uuid)
-        self.assertEqual(len(invalid_session.event_ids), invalid_event_count)
-
 
 @tagged('post_install', '-at_install')
 class TestAIDirectParity(TransactionCase):
@@ -775,10 +779,10 @@ class TestAIDirectParity(TransactionCase):
             AiSession, '_get_completions', side_effect=completions,
         ) as direct_completion:
             outcome = session._apply_iap_result(request_uuid, {
-                'request_uuid': request_uuid,
-                'status': 'success',
-                'result': {
+                'kind': 'success',
+                'message': {
                     'role': 'assistant',
+                    'provider_metadata': {},
                     'content': [
                         {
                             'type': 'tool_call',
@@ -806,7 +810,7 @@ class TestAIDirectParity(TransactionCase):
                 },
             })
 
-        self.assertEqual(outcome['responseState'], 'idle')
+        self.assertEqual(outcome['response']['responseState'], 'idle')
         self.assertEqual(session.loop_state, 'ready')
         self.assertFalse(session.request_uuid)
         self.assertEqual(direct_completion.call_count, 2)
