@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import requests
 
-from odoo import Command
+from odoo import Command, http
 from odoo.addons.mail.tools.discuss import Store
 from odoo.tests import HttpCase, tagged
 
@@ -80,6 +80,8 @@ ai['result'] = {
         self.assertFalse(self.env["ai.session"].sudo().search([
             ("channel_id", "=", channel_id),
         ]))
+        # CORS must still use the guest, even when the browser has admin cookies.
+        self.authenticate('admin', 'admin')
 
         with patch(
             "odoo.addons.ai.utils.session_env.call_odoo_ai_transport",
@@ -115,6 +117,7 @@ ai['result'] = {
         self.assertEqual(session.loop_state, "waiting_model")
         origin_message = self.env["mail.message"].browse(message_id)
         self.assertEqual(session.request_guest_id, origin_message.author_guest_id)
+        self.assertEqual(session.request_user_id, self.env.ref('base.public_user'))
         self.assertEqual(submit.call_args.args[1], "1/get_completions")
         submitted_payload = submit.call_args.args[2]
         self.assertEqual(submitted_payload["webhook_url"], session.request_callback_url)
@@ -125,24 +128,45 @@ ai['result'] = {
                 "available_tools": [client_tool.id],
             }
 
-        callback_response = self._post_completion_callback({
-            "request_uuid": request_uuid,
-            "llm_result": {
-                "status": "success",
-                "result": {
-                    "role": "assistant",
-                    "content": [{
-                        "type": "tool_call",
-                        "call_id": "livechat-client-tool",
-                        "name": client_tool.ai_tool_name,
-                        "args": {},
-                    }],
+        original_continue = self.registry['ai.session']._continue
+        observed = {}
+
+        def observe_guest_environment(session, request_uuid):
+            request_env = http.request.env
+            observed.update({
+                'actor_uid': request_env.uid,
+                'guest_id': request_env.context['guest'].id,
+                'default_environment': request_env.transaction.default_env is request_env,
+                'sudo': request_env.su,
+            })
+            return original_continue(session, request_uuid)
+
+        with patch.object(
+            self.registry['ai.session'], '_continue',
+            autospec=True, side_effect=observe_guest_environment,
+        ):
+            callback_response = self._post_completion_callback({
+                "request_uuid": request_uuid,
+                "llm_result": {
+                    "status": "success",
+                    "result": {
+                        "role": "assistant",
+                        "content": [{
+                            "type": "tool_call",
+                            "call_id": "livechat-client-tool",
+                            "name": client_tool.ai_tool_name,
+                            "args": {},
+                        }],
+                    },
                 },
-            },
-            "llm_error": False,
-        })
+                "llm_error": False,
+            })
         self.assertEqual(callback_response.status_code, 200)
         self.assertIsNone(callback_response.json())
+        self.assertEqual(observed['actor_uid'], session.request_user_id.id)
+        self.assertEqual(observed['guest_id'], session.request_guest_id.id)
+        self.assertTrue(observed['default_environment'])
+        self.assertFalse(observed['sudo'])
 
         self.env.invalidate_all()
         self.assertEqual(session.loop_state, "waiting_client_result")
@@ -188,6 +212,8 @@ ai['result'] = {
         self.assertEqual(session.request_phase, "submitted")
         self.assertEqual(session.request_round, 2)
         self.assertNotEqual(session.request_uuid, request_uuid)
+        self.assertEqual(session.request_user_id, self.env.ref('base.public_user'))
+        self.assertEqual(session.request_guest_id, origin_message.author_guest_id)
 
     def test_same_origin_guest_session_advance_route_creates_livechat_session(self):
         agent = self.env["ai.agent"].create({"name": "Same-Origin Livechat Agent"})

@@ -1,22 +1,27 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+from contextlib import nullcontext
+from threading import current_thread
 from unittest.mock import patch
 
 import requests
 from psycopg2.errors import LockNotAvailable
+from werkzeug.test import EnvironBuilder
+from werkzeug.wrappers import Request as WerkzeugRequest
 
 from odoo import api, Command, http
 from odoo.exceptions import LockError, MissingError
+from odoo.http.requestlib import Request as HttpRequest
 from odoo.tests import HttpCase, new_test_user, tagged
 
 from odoo.addons.iap import InsufficientCreditError
 from odoo.addons.ai.controllers.thread import AIThreadController
-from odoo.addons.ai.utils.ai_utils import IAP_TRANSPORT_TIMEOUT, UserInputResponse
-from odoo.addons.ai.utils.session_env import (
-    commit_on_success,
-    rebind_session,
-    submit_prepared_request,
+from odoo.addons.ai.utils.ai_utils import (
+    get_odoo_ai_connection_data,
+    IAP_TRANSPORT_TIMEOUT,
+    UserInputResponse,
 )
+from odoo.addons.ai.utils.session_env import submit_prepared_request
 
 from .common import apply_iap_result
 
@@ -105,7 +110,7 @@ class TestAISessionLoopHttp(HttpCase):
             env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
             return submit_prepared_request(env, prepared)
 
-    def _create_committed_prepared_session(self, label):
+    def _create_committed_prepared_session(self, label, *, auto_confirm=False):
         with self.registry.cursor() as cr:
             env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
             channel = env['ai.agent'].browse(
@@ -114,7 +119,13 @@ class TestAISessionLoopHttp(HttpCase):
             session = env['ai.session'].sudo().create({
                 'agent_id': self.agent_id,
                 'channel_id': channel.id,
+                'auto_confirm': auto_confirm,
             })
+            if auto_confirm:
+                session.state = {'available_tools': [
+                    env.ref('ai.ir_actions_server_create_records').id,
+                    env.ref('ai.ir_actions_server_update_records').id,
+                ]}
             message = channel.message_post(body=label, message_type='comment')
             session._prepare_model_request(
                 message._convert_to_parts(),
@@ -130,7 +141,7 @@ class TestAISessionLoopHttp(HttpCase):
                 'event_count': len(session.event_ids),
             }
 
-    def _create_committed_confirmation(self, label='HTTP Confirmed Contact'):
+    def _create_committed_confirmation(self, label='HTTP Confirmed Contact', *, context_snapshot=None):
         with self.registry.cursor() as cr:
             env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
             channel = env['ai.agent'].browse(self.agent_id)._create_ai_chat_channel(label)
@@ -141,17 +152,14 @@ class TestAISessionLoopHttp(HttpCase):
             tool = env.ref('ai.ir_actions_server_create_records')
             session.state = {'available_tools': [tool.id]}
             message = channel.message_post(body=label, message_type='comment')
-            company_ids = env.companies.ids
-            session = session.with_context(
-                active_company_ids=company_ids,
-                allowed_company_ids=company_ids,
-            )
+            context_snapshot = context_snapshot or {
+                'active_company_ids': env.companies.ids,
+                'allowed_company_ids': env.companies.ids,
+            }
+            session = session.with_context(context_snapshot)
             session._prepare_model_request(
                 message._convert_to_parts(),
-                context_snapshot={
-                    'active_company_ids': company_ids,
-                    'allowed_company_ids': company_ids,
-                },
+                context_snapshot=context_snapshot,
             )
             request_uuid = session.request_uuid
             apply_iap_result(session, request_uuid, {
@@ -201,31 +209,117 @@ class TestAISessionLoopHttp(HttpCase):
             json=self.build_rpc_payload(values),
         )
 
-    def test_rebind_session_reuses_cursor_and_restores_request_env(self):
+    def test_callback_restores_request_and_default_environment_on_same_cursor(self):
         prepared = self._create_committed_prepared_session(
             'Request actor environment',
         )
-        session_sudo = self._get_session(prepared['session_id'])
-        session_sudo = rebind_session(session_sudo)
+        original_continue = self.registry['ai.session']._continue
+        observed = {}
 
-        self.assertIs(session_sudo.env.cr, self.env.cr)
-        self.assertEqual(session_sudo.env.uid, session_sudo.request_user_id.id)
+        def observe_callback_environment(session, request_uuid):
+            request_env = http.request.env
+            observed.update({
+                'same_cursor': session.env.cr is request_env.cr,
+                'default_environment': request_env.transaction.default_env is request_env,
+                'actor_uid': request_env.uid,
+                'sudo': request_env.su,
+                'context': dict(request_env.context),
+            })
+            return original_continue(session, request_uuid)
+
+        with patch.object(
+            self.registry['ai.session'], '_continue',
+            autospec=True, side_effect=observe_callback_environment,
+        ):
+            response = self._post_completion_callback({
+                'request_uuid': prepared['request_uuid'],
+                'llm_result': {'status': 'success', 'result': assistant_text('Actor restored')},
+                'llm_error': False,
+            })
+
+        self.assertEqual(response.status_code, 200)
+        session = self._get_session(prepared['session_id'])
+        self.assertTrue(observed['same_cursor'])
+        self.assertTrue(observed['default_environment'])
+        self.assertFalse(observed['sudo'])
+        self.assertEqual(observed['actor_uid'], session.request_user_id.id)
         self.assertEqual(
-            session_sudo.env.context['allowed_company_ids'],
-            session_sudo.request_context['allowed_company_ids'],
+            observed['context'], session.request_context,
         )
 
-    def test_commit_on_success_rolls_back_a_failed_commit(self):
+    def test_actor_transaction_restores_caller_after_commit_or_rollback(self):
         cr = self.env.cr
-        with (
-            patch.object(cr, 'commit', side_effect=RuntimeError('commit failed')),
-            patch.object(cr, 'rollback') as rollback,
-            self.assertRaisesRegex(RuntimeError, 'commit failed'),
-            commit_on_success(cr),
-        ):
-            pass
+        actor_id = self.env.ref('base.user_admin').id
+        caller_id = self.env.ref('base.public_user').id
+        guest_id = self.env['mail.guest'].create({'name': 'Actor transaction guest'}).id
+        previous_default_env = cr.transaction.default_env
+        builder = EnvironBuilder(path='/ai/completion_result_ready', method='POST')
+        incoming_request = HttpRequest(WerkzeugRequest(builder.get_environ()))
+        builder.close()
+        incoming_request.registry = self.registry
+        incoming_request.env = self.env(user=caller_id, context={'lang': 'en_US'}, su=False)
+        request_token = http.request_var.set(incoming_request)
+        controller = AIThreadController()
+        try:
+            with patch.object(current_thread(), 'uid', caller_id, create=True):
+                incoming_request.update_env()
+                caller_env = incoming_request.env
+                for exit_kind in ('success', 'early_return', 'body_error', 'commit_error'):
+                    with self.subTest(exit_kind=exit_kind):
+                        observations = []
 
-        rollback.assert_called_once_with()
+                        def observe_transaction(operation):
+                            env = http.request.env
+                            observations.append((operation, env.uid, current_thread().uid))
+                            self.assertIs(env.transaction.default_env, env)
+                            self.assertIs(env.cr, cr)
+                            self.assertFalse(env.su)
+                            self.assertEqual(env.context['guest'].id, guest_id)
+                            if operation == 'commit' and exit_kind == 'commit_error':
+                                raise RuntimeError('commit failed')
+
+                        def run_transaction():
+                            with controller._request_actor_transaction(
+                                user_id=actor_id, context={'lang': 'fr_FR'}, guest_id=guest_id,
+                            ) as env:
+                                self.assertIs(env, http.request.env)
+                                self.assertIs(env.transaction.default_env, env)
+                                self.assertIs(env.cr, cr)
+                                self.assertEqual(env.uid, actor_id)
+                                self.assertFalse(env.su)
+                                self.assertEqual(env.context['lang'], 'fr_FR')
+                                self.assertEqual(env.context['guest'].env.uid, actor_id)
+                                self.assertFalse(env.context['guest'].env.su)
+                                if exit_kind == 'body_error':
+                                    raise RuntimeError('body failed')
+                                if exit_kind == 'early_return':
+                                    return True
+                            return False
+
+                        error = self.assertRaisesRegex(RuntimeError, 'failed') if exit_kind in (
+                            'body_error', 'commit_error',
+                        ) else nullcontext()
+                        with (
+                            patch.object(cr, 'commit', side_effect=lambda: observe_transaction('commit')),
+                            patch.object(cr, 'rollback', side_effect=lambda: observe_transaction('rollback')),
+                            error,
+                        ):
+                            self.assertEqual(run_transaction(), exit_kind == 'early_return')
+
+                        operations = (
+                            ['rollback'] if exit_kind == 'body_error'
+                            else ['commit', 'rollback'] if exit_kind == 'commit_error'
+                            else ['commit']
+                        )
+                        self.assertEqual(observations, [
+                            (operation, actor_id, actor_id) for operation in operations
+                        ])
+                        self.assertIs(http.request.env, caller_env)
+                        self.assertIs(cr.transaction.default_env, caller_env)
+                        self.assertEqual(current_thread().uid, caller_id)
+        finally:
+            cr.transaction.default_env = previous_default_env
+            http.request_var.reset(request_token)
 
     def test_start_rebinds_the_channel_and_exact_message_in_caller_environment(self):
         self.authenticate('admin', 'admin')
@@ -236,8 +330,10 @@ class TestAISessionLoopHttp(HttpCase):
         observed = {}
 
         def observe_caller_environment(controller, env, channel_id):
-            observed['caller_environment'] = env is not http.request.env
+            observed['caller_environment'] = env is http.request.env
             observed['request_cursor'] = env.cr is http.request.env.cr
+            observed['default_environment'] = env.transaction.default_env is env
+            observed['sudo'] = env.su
             return original_get_channel(controller, env, channel_id)
 
         with (
@@ -257,6 +353,8 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertNotIn('error', response.json())
         self.assertTrue(observed['caller_environment'])
         self.assertTrue(observed['request_cursor'])
+        self.assertTrue(observed['default_environment'])
+        self.assertFalse(observed['sudo'])
 
         with self.registry.cursor() as cr:
             env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
@@ -433,6 +531,79 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(session.loop_state, 'waiting_model')
         self.assertEqual(session.request_phase, 'prepared')
 
+    def test_auto_approved_callback_mutations_keep_actor_attribution_after_flush(self):
+        prepared = self._create_committed_prepared_session(
+            'Callback actor attribution', auto_confirm=True,
+        )
+        create_tool = self.env.ref('ai.ir_actions_server_create_records')
+        update_tool = self.env.ref('ai.ir_actions_server_update_records')
+        actor_id = self.env.ref('base.user_admin').id
+        create_call = {
+            'type': 'tool_call',
+            'call_id': 'callback-actor-create',
+            'name': create_tool.ai_tool_name,
+            'args': {
+                'explanation': 'Create the attribution test contact.',
+                'model_name': 'res.partner',
+                'preview_menu_id': False,
+                'values': [{'field_values': [{
+                    'field': 'name', 'value': 'Callback Actor Before',
+                }]}],
+            },
+        }
+        with patch(
+            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            side_effect=accept_submitted_request,
+        ):
+            created = self._post_completion_callback({
+                'request_uuid': prepared['request_uuid'],
+                'llm_result': {
+                    'status': 'success',
+                    'result': {'role': 'assistant', 'content': [create_call]},
+                },
+                'llm_error': False,
+            })
+        self.assertEqual(created.status_code, 200)
+        self.env.invalidate_all()
+        partner = self.env['res.partner'].search([('name', '=', 'Callback Actor Before')])
+        self.assertEqual(len(partner), 1)
+        self.assertEqual(partner.create_uid.id, actor_id)
+        # Computed contact fields write during commit, after the tool returns.
+        self.assertEqual(partner.write_uid.id, actor_id)
+
+        session = self._get_session(prepared['session_id'])
+        self.assertEqual(session.request_phase, 'submitted')
+        update_call = {
+            'type': 'tool_call',
+            'call_id': 'callback-actor-update',
+            'name': update_tool.ai_tool_name,
+            'args': {
+                'explanation': 'Rename the attribution test contact.',
+                'preview_menus': [],
+                'updates': [{
+                    'model_name': 'res.partner',
+                    'domain': f"[('id', '=', {partner.id})]",
+                    'changes': [{'field': 'name', 'value': 'Callback Actor After'}],
+                }],
+            },
+        }
+        with patch(
+            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            side_effect=accept_submitted_request,
+        ):
+            updated = self._post_completion_callback({
+                'request_uuid': session.request_uuid,
+                'llm_result': {
+                    'status': 'success',
+                    'result': {'role': 'assistant', 'content': [update_call]},
+                },
+                'llm_error': False,
+            })
+        self.assertEqual(updated.status_code, 200)
+        self.env.invalidate_all()
+        self.assertEqual(partner.name, 'Callback Actor After')
+        self.assertEqual(partner.write_uid.id, actor_id)
+
     def test_error_callback_finishes_the_matching_request(self):
         prepared = self._create_committed_prepared_session(
             'Terminal error callback',
@@ -535,6 +706,80 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(self.env['res.partner'].search_count([
             ('name', '=', confirmation['label']),
         ]), 1)
+
+    def test_automation_resume_submits_with_final_prepared_context(self):
+        self.authenticate('admin', 'admin')
+        actor_id = self.env.ref('base.user_admin').id
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, actor_id, {})
+            company = env['res.company'].create({'name': 'Automation Request Company'})
+            env.user.company_ids = [Command.link(company.id)]
+            company_id = company.id
+
+        confirmation = self._create_committed_confirmation(
+            'Automation Resume Actor Contact',
+            context_snapshot={
+                'allowed_company_ids': [company_id],
+                'active_company_ids': [company_id],
+                'ai_automation_run': True,
+            },
+        )
+        observed = {}
+        original_resume = self.registry['ai.session']._resume_pending_interaction
+
+        def observe_activation_environment(session, *args, **kwargs):
+            observed['activation_context'] = dict(http.request.env.context)
+
+            def observe_activation_commit():
+                env = http.request.env
+                observed['activation_commit_context'] = dict(env.context)
+                self.assertIs(env.transaction.default_env, env)
+
+            session.env.cr.precommit.add(observe_activation_commit)
+            return original_resume(session, *args, **kwargs)
+
+        def observe_submission_environment(env):
+            observed.update({
+                'request_environment': env is http.request.env,
+                'default_environment': env.transaction.default_env is env,
+                'actor_uid': env.uid,
+                'sudo': env.su,
+                'context': dict(env.context),
+                'company_ids': env.companies.ids,
+            })
+            return get_odoo_ai_connection_data(env)
+
+        with (
+            patch.object(
+                self.registry['ai.session'], '_resume_pending_interaction',
+                autospec=True, side_effect=observe_activation_environment,
+            ),
+            patch(
+                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                side_effect=accept_submitted_request,
+            ),
+            patch(
+                'odoo.addons.ai.utils.session_env.get_odoo_ai_connection_data',
+                side_effect=observe_submission_environment,
+            ),
+        ):
+            response = self._resume_pending_confirmation(confirmation)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('error', response.json())
+        session = self._get_session(confirmation['session_id'])
+        self.assertTrue(observed['request_environment'])
+        self.assertTrue(observed['default_environment'])
+        self.assertFalse(observed['sudo'])
+        self.assertEqual(observed['actor_uid'], actor_id)
+        self.assertEqual(observed['activation_commit_context'], observed['activation_context'])
+        self.assertNotIn('ai_automation_run', observed['activation_commit_context'])
+        self.assertEqual(observed['context'], session.request_context)
+        self.assertTrue(observed['context']['ai_automation_run'])
+        self.assertEqual(observed['company_ids'], [company_id])
+        self.assertEqual(session.request_phase, 'submitted')
+        partner = self.env['res.partner'].search([('name', '=', confirmation['label'])])
+        self.assertEqual(partner.write_uid.id, actor_id)
 
     def test_confirmation_lock_contention_fails_before_tool_execution(self):
         self.authenticate('admin', 'admin')
@@ -724,6 +969,23 @@ class TestAISessionLoopHttp(HttpCase):
             'code': 'insufficient_credit',
         })
         self.assertIn('AI is unreachable', session.channel_id.message_ids[0].body)
+
+    def test_submission_leaves_commit_to_its_caller(self):
+        prepared = self._create_committed_prepared_session('Caller-owned submission commit')
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
+            with (
+                patch(
+                    'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                    side_effect=accept_submitted_request,
+                ),
+                patch.object(cr, 'commit') as commit,
+            ):
+                acknowledgement = submit_prepared_request(env, prepared)
+                commit.assert_not_called()
+
+        self.assertEqual(acknowledgement['request_uuid'], prepared['request_uuid'])
+        self.assertEqual(self._get_session(prepared['session_id']).request_phase, 'submitted')
 
     def test_submission_keeps_session_locked_across_iap_transport(self):
         raw_cursor = self.registry._db.cursor

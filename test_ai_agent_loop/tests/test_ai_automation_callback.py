@@ -2,6 +2,8 @@
 
 from unittest.mock import patch
 
+from odoo import Command
+from odoo.addons.ai.utils.ai_utils import get_odoo_ai_connection_data
 from odoo.tests import HttpCase, tagged
 
 from .common import apply_iap_result
@@ -23,11 +25,31 @@ class TestAIAutomationCallback(HttpCase):
             'state': 'ai',
             'ai_action_prompt': 'Summarize this contact.',
         })
+        actor = self.env.ref('base.user_admin')
+        company = self.env['res.company'].create({'name': 'Headless AI Company'})
+        actor.company_ids = [Command.link(company.id)]
+        action = action.with_user(actor).with_context(allowed_company_ids=company.ids)
+        observed = {}
 
-        with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
-            return_value=None,
-        ) as transport:
+        def observe_submission_environment(env):
+            observed.update({
+                'actor_uid': env.uid,
+                'sudo': env.su,
+                'context': dict(env.context),
+                'default_environment': env.transaction.default_env is env,
+            })
+            return get_odoo_ai_connection_data(env)
+
+        with (
+            patch(
+                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                return_value=None,
+            ) as transport,
+            patch(
+                'odoo.addons.ai.utils.session_env.get_odoo_ai_connection_data',
+                side_effect=observe_submission_environment,
+            ),
+        ):
             action._ai_action_run_agent(partner, agent)
             session = self.env['ai.session'].sudo().search([
                 ('agent_id', '=', agent.id),
@@ -46,6 +68,11 @@ class TestAIAutomationCallback(HttpCase):
             self.env.cr.postcommit.run()
 
         transport.assert_called_once()
+        self.assertEqual(observed['actor_uid'], actor.id)
+        self.assertFalse(observed['sudo'])
+        self.assertTrue(observed['default_environment'])
+        self.assertEqual(observed['context'], session.request_context)
+        self.assertEqual(observed['context']['allowed_company_ids'], company.ids)
         self.assertEqual(transport.call_args.args[1], '1/get_completions')
         self.assertEqual(
             transport.call_args.args[2]['request_uuid'],
