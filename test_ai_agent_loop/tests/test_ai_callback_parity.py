@@ -743,15 +743,14 @@ class TestAIDirectParity(TransactionCase):
         self.assertEqual(direct_response.call_count, 2)
         self.assertEqual(self._loop_snapshot(), loop_snapshot)
 
-    def test_nested_web_search_and_image_generation_remain_direct(self):
-        web_search = self.env.ref('ai.ir_actions_server_ai_web_search')
+    def test_nested_image_generation_remains_direct(self):
         image_generation = self.env.ref('ai.ir_actions_server_ai_generate_image')
         self.session.state = {
-            'available_tools': (web_search | image_generation).ids,
+            'available_tools': image_generation.ids,
         }
         company_ids = self.env.companies.ids
         message = self.channel.message_post(
-            body='Research callbacks and draw a diagram.',
+            body='Draw a callback diagram.',
             message_type='comment',
         )
         session = self.session.with_context(
@@ -768,7 +767,6 @@ class TestAIDirectParity(TransactionCase):
         request_uuid = session.request_uuid
         event_count = len(session.event_ids)
         completions = [
-            {'status': 'success', 'result': assistant_text('Search result')},
             {'status': 'success', 'result': assistant_text('Need more detail')},
         ]
         with patch.object(
@@ -780,16 +778,6 @@ class TestAIDirectParity(TransactionCase):
                 'result': {
                     'role': 'assistant',
                     'content': [
-                        {
-                            'type': 'tool_call',
-                            'call_id': 'nested-web-search',
-                            'name': web_search.ai_tool_name,
-                            'args': {
-                                'query': 'callback parity',
-                                'retrieval_mode': 'summary',
-                                'context_hint': None,
-                            },
-                        },
                         {
                             'type': 'tool_call',
                             'call_id': 'nested-image-generation',
@@ -809,12 +797,54 @@ class TestAIDirectParity(TransactionCase):
         self.assertEqual(outcome['response']['responseState'], 'idle')
         self.assertEqual(session.loop_state, 'ready')
         self.assertEqual(session.request_uuid, request_uuid)
-        self.assertEqual(direct_completion.call_count, 2)
+        self.assertEqual(direct_completion.call_count, 1)
         self.assertEqual(len(session.event_ids), event_count + 2)
         tool_results = session.event_ids.sorted('id')[-1].metadata['content']
         self.assertEqual(
             [part['tool_call_id'] for part in tool_results],
-            ['nested-web-search', 'nested-image-generation'],
+            ['nested-image-generation'],
         )
         self.assertTrue(all(part['success'] for part in tool_results))
         self.assertIn('Need more detail', session.channel_id.message_ids[0].body)
+
+    def test_legacy_web_search_remains_direct(self):
+        web_search = self.env.ref('ai.ir_actions_server_ai_web_search')
+        loop_snapshot = self._loop_snapshot()
+        session_count = self.env['ai.session'].search_count([])
+        search_result = assistant_text('Grounded direct result.[WEB_SOURCE:abcd]')
+        search_result['content'][0]['sources'] = {
+            'abcd': {'url': 'https://example.com/direct', 'source_name': 'example.com'},
+        }
+        completions = [
+            {'status': 'success', 'result': {
+                'role': 'assistant',
+                'content': [{
+                    'type': 'tool_call',
+                    'call_id': 'direct-web-search',
+                    'name': web_search.ai_tool_name,
+                    'args': {
+                        'query': 'callback compatibility',
+                        'retrieval_mode': 'summary',
+                        'context_hint': None,
+                    },
+                }],
+            }},
+            {'status': 'success', 'result': search_result},
+            {'status': 'success', 'result': assistant_text('Direct answer.[WEB_SOURCE:abcd]')},
+        ]
+        with patch.object(AiSession, '_get_completions', side_effect=completions) as direct_completion:
+            response = self.env['ai.session']._get_direct_response(
+                instructions='Research and answer directly.',
+                message=[{'type': 'text', 'text': 'Research callback compatibility.'}],
+                tools=web_search,
+            )
+
+        self.assertEqual(direct_completion.call_count, 3)
+        search_call = direct_completion.call_args_list[1]
+        self.assertIs(search_call.kwargs['web_grounding'], True)
+        self.assertEqual(search_call.kwargs['usage'], 'web_search')
+        self.assertFalse(search_call.args[2])
+        self.assertIn('https://example.com/direct', str(response))
+        self.assertNotIn('[WEB_SOURCE:', str(response))
+        self.assertEqual(self._loop_snapshot(), loop_snapshot)
+        self.assertEqual(self.env['ai.session'].search_count([]), session_count)

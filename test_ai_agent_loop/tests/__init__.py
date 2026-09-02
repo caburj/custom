@@ -7,3 +7,4 @@ from . import test_ai_channel_name_continuation
 from . import test_ai_session_loop_http
 from . import test_ai_livechat_callback
 from . import test_ai_website_callback
+from . import test_ai_web_search_continuation
