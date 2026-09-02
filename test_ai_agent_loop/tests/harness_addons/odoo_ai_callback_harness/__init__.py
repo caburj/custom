@@ -2,8 +2,8 @@ from . import controllers
 
 
 def post_load():
-    from odoo.addons.odoo_ai import dispatcher
+    from odoo.addons.odoo_ai import ai_service
 
-    from .provider import run_completion
+    from .provider import get_completions
 
-    dispatcher.run_completion = run_completion
+    ai_service.get_completions = get_completions

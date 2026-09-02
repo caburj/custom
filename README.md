@@ -27,6 +27,13 @@ rerunning an already-installed test database.
 
 The paired consumer/IAP fake-provider checkpoint is available separately:
 
+It runs the current
+`saas-19.4-odoo-ai-async-no-https-cwg-juc` IAP Apps checkout with a hermetic
+fake provider. Enterprise supplies the complete `/ai/completion_result_ready`
+URL on every submission, and the harness verifies that the IAP broker persists
+and calls that exact URL. A terminal consumer session must be `ready` with no
+request phase while retaining its last request UUID and result.
+
 ```bash
 cd /Users/joseph/.wt/worktrees/caburj/custom/master-ai-callback-driven-loop
 
@@ -45,6 +52,14 @@ cd /Users/joseph/.wt/worktrees/caburj/custom/master-ai-callback-driven-loop
 /Users/joseph/.venvs/master/bin/python3 \
   test_ai_agent_loop/tests/harness/run_plain_callback_checkpoint.py \
   --scenario question
+
+/Users/joseph/.venvs/master/bin/python3 \
+  test_ai_agent_loop/tests/harness/run_plain_callback_checkpoint.py \
+  --scenario tool-failure
+
+/Users/joseph/.venvs/master/bin/python3 \
+  test_ai_agent_loop/tests/harness/run_plain_callback_checkpoint.py \
+  --scenario terminal-error
 ```
 
 ## ai_debug — Live Tracer for the AI Agentic Loop

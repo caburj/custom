@@ -8,6 +8,7 @@ import {
 
 import { describe, expect, test } from "@odoo/hoot";
 import { press } from "@odoo/hoot-dom";
+import { animationFrame } from "@odoo/hoot-mock";
 
 import {
     Command,
@@ -137,7 +138,7 @@ test("livechat starts a callback-driven response", async () => {
     await contains(".o-mail-ChatWindow-typing", { count: 0 });
 });
 
-test("session advance starts naming an initially empty AI chat", async () => {
+test("posting an initially empty AI chat leaves naming to the server", async () => {
     const pyEnv = await startServer();
     const partnerId = pyEnv["res.partner"].create({ name: "Agent Partner" });
     const aiAgentId = pyEnv["ai.agent"].create({
@@ -163,9 +164,10 @@ test("session advance starts naming an initially empty AI chat", async () => {
             responseState: "running",
         };
     });
-    onRpc("/ai/compute_channel_name", () => {
-        expect.step("compute_channel_name");
-        return "Named callback chat";
+    let writeChannelCalls = 0;
+    onRpc("discuss.channel", "write", () => {
+        writeChannelCalls++;
+        return true;
     });
     setupChatHub({ opened: [channelId] });
     await start();
@@ -174,7 +176,9 @@ test("session advance starts naming an initially empty AI chat", async () => {
     await insertText(".o-mail-ChatWindow .o-mail-Composer-input", "Name this chat");
     await press("Enter");
 
-    await expect.waitForSteps(["start session advance", "compute_channel_name"]);
+    await expect.waitForSteps(["start session advance"]);
+    await animationFrame();
+    expect(writeChannelCalls).toBe(0);
 });
 
 test("definitive session-advance error releases the optimistic submission latch", async () => {

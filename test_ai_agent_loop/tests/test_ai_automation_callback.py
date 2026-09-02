@@ -4,10 +4,12 @@ from unittest.mock import patch
 
 from odoo.tests import HttpCase, tagged
 
+from .common import apply_iap_result
+
 
 @tagged('post_install', '-at_install')
 class TestAIAutomationCallback(HttpCase):
-    def test_automation_run_registers_postcommit_submission_in_order(self):
+    def test_automation_run_prepares_then_submits_after_commit(self):
         agent = self.env['ai.agent'].create({
             'name': 'Callback Automation Agent',
             'system_prompt': 'Run the requested automation.',
@@ -58,17 +60,18 @@ class TestAIAutomationCallback(HttpCase):
         session.invalidate_recordset()
         self.assertEqual(session.request_phase, 'submitted')
 
-        session._apply_iap_result(request_uuid, {
-            'kind': 'success',
-            'message': {
+        apply_iap_result(session, request_uuid, {
+            'request_uuid': request_uuid,
+            'status': 'success',
+            'result': {
                 'role': 'assistant',
                 'content': [{'type': 'text', 'text': 'Automation complete'}],
-                'provider_metadata': {},
             },
         })
 
         self.assertEqual(session.loop_state, 'ready')
-        self.assertFalse(session.request_uuid)
+        self.assertEqual(session.request_uuid, request_uuid)
+        self.assertTrue(session.request_result)
         self.assertFalse(session.auto_confirm)
         self.assertIn(
             'Automation complete',

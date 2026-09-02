@@ -5,6 +5,8 @@ from odoo.tests import tagged, TransactionCase
 from odoo.addons.ai_website.models.ai_session import WEBSITE_BUILDER_TIMEOUT
 from odoo.addons.ai.utils.ai_utils import UserInputResponse
 
+from .common import apply_iap_result
+
 
 @tagged('post_install', '-at_install')
 class TestAIWebsiteCallback(TransactionCase):
@@ -47,10 +49,8 @@ class TestAIWebsiteCallback(TransactionCase):
         prepared = session._prepare_model_request(context_snapshot=snapshot)
         tools_context = session._build_tools_context()
 
-        self.assertEqual(prepared, {
-            'session_id': session.id,
-            'request_uuid': session.request_uuid,
-        })
+        self.assertEqual(prepared['session_id'], session.id)
+        self.assertEqual(prepared['request_uuid'], session.request_uuid)
         self.assertEqual(session.request_payload['timeout'], WEBSITE_BUILDER_TIMEOUT)
         self.assertEqual(tools_context['ai_session_id'], session.id)
         self.assertIn('## AI JavaScript', str(session.request_payload['messages']))
@@ -95,11 +95,11 @@ else:
         session = session.with_context(**snapshot)
         session._prepare_model_request(context_snapshot=snapshot)
         request_uuid = session.request_uuid
-        waiting = session._apply_iap_result(request_uuid, {
-            'kind': 'success',
-            'message': {
+        waiting = apply_iap_result(session, request_uuid, {
+            'request_uuid': request_uuid,
+            'status': 'success',
+            'result': {
                 'role': 'assistant',
-                'provider_metadata': {},
                 'content': [{
                     'type': 'tool_call',
                     'call_id': 'website-confirmation',

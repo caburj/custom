@@ -17,11 +17,16 @@ import requests
 
 
 CUSTOM = Path(__file__).resolve().parents[3]
-ENTERPRISE = Path('/Users/joseph/.wt/worktrees/odoo/enterprise/master-ai-callback-driven-establish-trust-layers-jcb')
+ENTERPRISE = Path('/Users/joseph/.wt/worktrees/odoo/enterprise/master-ai-callback-driven-loop')
 CORE = Path('/Users/joseph/.wt/worktrees/odoo/odoo/master-odoo-ai-iap-service-lba')
-IAP_CORE = Path('/Users/joseph/.wt/worktrees/odoo/odoo/saas-19.4-odoo-ai-iap-service-lba')
-IAP_ENTERPRISE = Path('/Users/joseph/.wt/worktrees/odoo/enterprise/saas-19.4-odoo-ai-iap-service-lba')
-IAP_APPS = Path('/Users/joseph/.wt/worktrees/odoo/iap-apps/saas-19.4-odoo-ai-async-jcb')
+IAP_CORE = Path('/Users/joseph/.wt/worktrees/odoo/odoo/saas-19.4-odoo-ai-async-cwg-juc')
+IAP_ENTERPRISE = Path(
+    '/Users/joseph/.wt/worktrees/odoo/enterprise/saas-19.4-odoo-ai-async-cwg-juc'
+)
+IAP_APPS = Path(
+    '/Users/joseph/.wt/worktrees/odoo/iap-apps/'
+    'saas-19.4-odoo-ai-async-no-https-cwg-juc'
+)
 HARNESS_ADDONS = CUSTOM / 'test_ai_agent_loop/tests/harness_addons'
 MASTER_PYTHON = Path('/Users/joseph/.venvs/master/bin/python3')
 IAP_PYTHON = Path('/Users/joseph/.venvs/saas-19.4/bin/python3')
@@ -33,12 +38,11 @@ CONSUMER_GEVENT_PORT = 18272
 IAP_PORT = 18270
 IAP_EVENTED_PORT = 18273
 PROVIDER_PORT = 18280
-CALLBACK_SHIM_PORT = 18281
 CONSUMER_URL = f'http://127.0.0.1:{CONSUMER_PORT}'
 IAP_URL = f'http://127.0.0.1:{IAP_PORT}'
 IAP_EVENTED_URL = f'http://127.0.0.1:{IAP_EVENTED_PORT}'
 PROVIDER_URL = f'http://127.0.0.1:{PROVIDER_PORT}'
-CALLBACK_SHIM_URL = f'http://127.0.0.1:{CALLBACK_SHIM_PORT}'
+CONSUMER_CALLBACK_URL = CONSUMER_URL + '/ai/completion_result_ready'
 PLAIN_SCENARIO = 'plain'
 SERVER_TOOL_SCENARIO = 'server-tool'
 CONFIRMATION_TOOLS_SCENARIO = 'confirmation-tools'
@@ -56,7 +60,6 @@ LOOPBACK_PORTS = {
     'IAP HTTP': IAP_PORT,
     'IAP evented': IAP_EVENTED_PORT,
     'fake provider': PROVIDER_PORT,
-    'callback shim': CALLBACK_SHIM_PORT,
 }
 
 
@@ -68,7 +71,6 @@ def append_jsonl(path, payload):
 class LoopbackState:
     def __init__(self, evidence_dir, scenario):
         self.provider_journal = evidence_dir / 'provider-requests.jsonl'
-        self.callback_journal = evidence_dir / 'callback-shim.jsonl'
         self.scenario = scenario
         self.confirmation_skill_ids = []
 
@@ -257,7 +259,6 @@ class ProviderHandler(BaseHTTPRequestHandler):
                     'text': 'Hello from the paired fake provider.',
                 }],
             }
-        result['provider_metadata'] = {'provider': 'test', 'model': 'test', 'api': 'test'}
         self._json(200, {'result': result})
 
     def _read_json(self):
@@ -274,27 +275,6 @@ class ProviderHandler(BaseHTTPRequestHandler):
 
     def log_message(self, _format, *_args):
         return
-
-
-class CallbackShimHandler(ProviderHandler):
-    def do_POST(self):
-        if self.path != '/ai/completion_result_ready':
-            self.send_error(404)
-            return
-        payload = self._read_json()
-        params = payload.get('params') or {}
-        response = requests.post(
-            CONSUMER_URL + '/ai/completion_result_ready',
-            json=payload,
-            timeout=15,
-            allow_redirects=False,
-        )
-        append_jsonl(self.state.callback_journal, {
-            'request_uuid': params.get('request_uuid'),
-            'forwarded_to': CONSUMER_URL + '/ai/completion_result_ready',
-            'consumer_status': response.status_code,
-        })
-        self._json(response.status_code, response.json())
 
 
 def start_loopback_server(port, handler, state):
@@ -383,6 +363,22 @@ def jsonrpc_post(url, params, session=None):
     return response, response.json()
 
 
+def call_kw(session, model, method, args, kwargs=None):
+    _response, payload = jsonrpc_post(
+        CONSUMER_URL + f'/web/dataset/call_kw/{model}/{method}',
+        {
+            'model': model,
+            'method': method,
+            'args': args,
+            'kwargs': kwargs or {},
+        },
+        session=session,
+    )
+    if payload.get('error'):
+        raise RuntimeError(f'{model}.{method} failed: {payload["error"]}')
+    return payload['result']
+
+
 def resume_pending_confirmation(session, channel_id, status):
     _response, payload = jsonrpc_post(
         CONSUMER_URL + '/ai/resume_pending_interaction',
@@ -434,7 +430,6 @@ def main():
             'consumer-http-state.jsonl',
             'iap-dispatch-state.jsonl',
             'provider-requests.jsonl',
-            'callback-shim.jsonl',
         )
     }
     for path in evidence.values():
@@ -442,7 +437,6 @@ def main():
 
     state = LoopbackState(evidence_dir, scenario)
     provider = start_loopback_server(PROVIDER_PORT, ProviderHandler, state)
-    shim = start_loopback_server(CALLBACK_SHIM_PORT, CallbackShimHandler, state)
     processes = []
     streams = []
     try:
@@ -521,10 +515,9 @@ def main():
             process=owned_processes['iap-http'], process_name='IAP HTTP',
         )
         wait_json(PROVIDER_URL.removesuffix('/completion') + '/ready')
-        wait_json(CALLBACK_SHIM_URL + '/ready')
         wait_json(
             IAP_EVENTED_URL + '/odoo_ai_callback_harness/ready',
-            lambda payload: payload.get('dispatcher_alive')
+            lambda payload: payload.get('broker_alive')
             and payload.get('provider_patched'),
             process=owned_processes['iap-evented'], process_name='IAP evented',
         )
@@ -536,11 +529,10 @@ def main():
         state.confirmation_skill_ids = consumer_setup['confirmation_skill_ids']
         iap_setup = json_post(
             IAP_URL + '/odoo_ai_callback_harness/setup',
-            {
-                'database_uuid': consumer_setup['database_uuid'],
-                'callback_url': CALLBACK_SHIM_URL,
-            },
+            {},
         )
+        if not iap_setup.get('ready'):
+            raise RuntimeError(f'IAP harness setup failed: {iap_setup}')
         append_jsonl(evidence['consumer-http-state.jsonl'], {
             'phase': 'setup',
             'channel_id': consumer_setup['channel_id'],
@@ -548,7 +540,7 @@ def main():
             'message_id': consumer_setup['message_id'],
         })
         append_jsonl(evidence['iap-dispatch-state.jsonl'], {
-            'phase': 'setup', 'database_uuid_matches': bool(iap_setup.get('ready')),
+            'phase': 'setup', 'ready': True,
         })
 
         session = requests.Session()
@@ -641,7 +633,10 @@ def main():
                             'channel_id': consumer_setup['channel_id'],
                             'request_uuid': first_confirmation_status['request_uuid'],
                             'resume_token': first_confirmation_status['resume_token'],
-                            'response': {'kind': 'confirmation', 'value': 'confirm_once'},
+                            'response': {
+                                'kind': 'confirmation',
+                                'value': 'confirm_once',
+                            },
                         },
                         session=session,
                     )
@@ -733,11 +728,12 @@ def main():
             )['requests']
             if (
                 consumer_status.get('loop_state') == 'ready'
-                and not consumer_status.get('request_uuid')
+                and consumer_status.get('request_uuid')
                 and not consumer_status.get('request_phase')
                 and len(iap_statuses) == expected_round_count
                 and all(
-                    status.get('callback_state') == 'delivered'
+                    status.get('state') == 'done'
+                    and not status.get('odoo_error')
                     for status in iap_statuses
                 )
             ):
@@ -747,26 +743,91 @@ def main():
             raise RuntimeError(f'Consumer did not reach done: {consumer_status}')
         require_processes_alive(processes)
 
+        if any(
+            status.get('state') != 'done'
+            for status in iap_statuses
+        ):
+            raise AssertionError(iap_statuses)
+        if any(
+            status.get('webhook_url') != CONSUMER_CALLBACK_URL
+            or status.get('odoo_error')
+            or status.get('odoo_retry_count') != 1
+            for status in iap_statuses
+        ):
+            raise AssertionError(iap_statuses)
+        terminal_request_uuid = consumer_status['request_uuid']
+        terminal_iap_status = next((
+            status for status in iap_statuses
+            if status['request_uuid'] == terminal_request_uuid
+        ), None)
+        if not terminal_iap_status:
+            raise AssertionError({
+                'terminal_request_uuid': terminal_request_uuid,
+                'iap_statuses': iap_statuses,
+            })
+        terminal_session_rows = call_kw(
+            session,
+            'ai.session',
+            'read',
+            [[consumer_setup['session_id']], [
+                'loop_state', 'request_phase', 'request_uuid', 'request_result',
+            ]],
+        )
+        if len(terminal_session_rows) != 1:
+            raise AssertionError(terminal_session_rows)
+        terminal_session = terminal_session_rows[0]
+        expected_request_result = (
+            {
+                'kind': 'failure',
+                'code': 'request_failed',
+            }
+            if terminal_iap_status['llm_error']
+            else {
+                'kind': 'success',
+                'message': terminal_iap_status['llm_result']['result'],
+            }
+        )
+        if (
+            terminal_session['loop_state'] != 'ready'
+            or terminal_session['request_phase']
+            or terminal_session['request_uuid'] != terminal_request_uuid
+            or terminal_session['request_result'] != expected_request_result
+        ):
+            raise AssertionError(terminal_session)
+        consumer_status['request_result'] = terminal_session['request_result']
+
         if scenario == CONFIRMATION_TOOLS_SCENARIO:
-            replayed_callback, replayed_payload = jsonrpc_post(
-                CONSUMER_URL + '/ai/completion_result_ready',
-                {'request_uuid': request_uuid},
+            replayed_callback = requests.post(
+                CONSUMER_URL + '/ai/completion_result_ready', json={
+                    'request_uuid': terminal_request_uuid,
+                    'llm_result': terminal_iap_status['llm_result'],
+                    'llm_error': terminal_iap_status['llm_error'],
+                }, timeout=12,
             )
-            if replayed_callback.status_code != 200 or replayed_payload.get('result') is not None:
-                raise AssertionError(replayed_payload)
+            if replayed_callback.status_code != 200 or replayed_callback.json() is not None:
+                raise AssertionError(replayed_callback.text)
             status_after_replay = json_post(
                 CONSUMER_URL + '/ai_callback_consumer_harness/status',
                 {'session_id': consumer_setup['session_id']},
             )
             if (
                 status_after_replay['loop_state'] != 'ready'
-                or status_after_replay['request_uuid']
+                or status_after_replay['request_uuid'] != terminal_request_uuid
                 or status_after_replay['request_phase']
                 or status_after_replay['created_contact_count'] != 1
                 or status_after_replay['before_update_count'] != 0
                 or status_after_replay['after_update_count'] != 1
             ):
                 raise AssertionError(status_after_replay)
+            result_after_replay = call_kw(
+                session,
+                'ai.session',
+                'read',
+                [[consumer_setup['session_id']], ['request_result']],
+            )[0]['request_result']
+            if result_after_replay != expected_request_result:
+                raise AssertionError(result_after_replay)
+            status_after_replay['request_result'] = result_after_replay
             consumer_status = status_after_replay
 
         append_jsonl(evidence['consumer-http-state.jsonl'], {
@@ -803,14 +864,6 @@ def main():
             final_text = 'Hello from the paired fake provider.'
         if not any(final_text in body for body in bodies):
             raise AssertionError(bodies)
-        expected_iap_state = (
-            'error' if scenario == TERMINAL_ERROR_SCENARIO else 'success'
-        )
-        if any(
-            status.get('state') != expected_iap_state
-            for status in iap_statuses
-        ):
-            raise AssertionError(iap_statuses)
         request_uuids = [status['request_uuid'] for status in iap_statuses]
         if len(set(request_uuids)) != expected_round_count:
             raise AssertionError(request_uuids)
@@ -821,13 +874,6 @@ def main():
         if len(provider_requests) != expected_round_count:
             raise AssertionError(
                 f'Expected {expected_round_count} provider executions'
-            )
-        callback_count = len(
-            evidence['callback-shim.jsonl'].read_text().splitlines()
-        )
-        if callback_count != expected_round_count:
-            raise AssertionError(
-                f'Expected {expected_round_count} callback deliveries'
             )
         if scenario == SERVER_TOOL_SCENARIO:
             tools = provider_requests[0].get('tools') or []
@@ -923,6 +969,7 @@ def main():
             'status': 'passed',
             'scenario': scenario,
             'request_uuid': request_uuid,
+            'terminal_request_uuid': terminal_request_uuid,
             'evidence_dir': str(evidence_dir),
             'runtime_dir': str(runtime_dir),
         }, sort_keys=True))
@@ -940,8 +987,6 @@ def main():
             stream.close()
         provider.shutdown()
         provider.server_close()
-        shim.shutdown()
-        shim.server_close()
         for database in (CONSUMER_DB, IAP_DB):
             subprocess.run(['dropdb', '--if-exists', database], check=False)
 

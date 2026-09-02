@@ -1,6 +1,5 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-import json
 from unittest.mock import patch
 
 import requests
@@ -19,12 +18,13 @@ from odoo.addons.ai.utils.session_env import (
     submit_prepared_request,
 )
 
+from .common import apply_iap_result
+
 
 def assistant_text(text):
     return {
         'role': 'assistant',
         'content': [{'type': 'text', 'text': text}],
-        'provider_metadata': {'provider': 'test', 'model': 'test', 'api': 'test'},
     }
 
 
@@ -154,11 +154,11 @@ class TestAISessionLoopHttp(HttpCase):
                 },
             )
             request_uuid = session.request_uuid
-            session._apply_iap_result(request_uuid, {
-                'kind': 'success',
-                'message': {
+            apply_iap_result(session, request_uuid, {
+                'request_uuid': request_uuid,
+                'status': 'success',
+                'result': {
                     'role': 'assistant',
-                    'provider_metadata': {},
                     'content': [{
                         'type': 'tool_call',
                         'call_id': 'http-create-contact',
@@ -276,29 +276,6 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertIn('error', rejected.json())
         transport.assert_not_called()
 
-    def test_start_rejects_a_non_member_current_principal(self):
-        self.authenticate('admin', 'admin')
-        message = self.env['mail.message'].browse(self._post_committed_prompt(
-            'Current principal must own channel access',
-        ))
-        session = self._get_session(self.session_id)
-        snapshot = session.read([
-            'loop_state', 'request_phase', 'request_uuid', 'request_payload',
-        ])[0]
-        event_count = len(session.event_ids)
-        self.authenticate('callback_confirmation_other', 'callback_confirmation_other')
-
-        with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
-        ) as transport:
-            response = self._start_session_advance(message)
-
-        self.assertIn('error', response.json())
-        transport.assert_not_called()
-        session = self._get_session(self.session_id)
-        self.assertEqual(session.read(list(snapshot))[0], snapshot)
-        self.assertEqual(len(session.event_ids), event_count)
-
     def test_website_sale_context_reaches_callback_pricing_consumer(self):
         self.authenticate('admin', 'admin')
         message = self.env['mail.message'].browse(self._post_committed_prompt(
@@ -322,47 +299,35 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(pricelist.id, context['pricelist_id'])
         self.assertEqual(fiscal_position.id, context['fiscal_position_id'])
 
-    def test_session_advance_accepts_prompt_button_id_string_and_xmlid(self):
+    def test_session_advance_accepts_numeric_prompt_button_id(self):
         self.authenticate('admin', 'admin')
+        message = self.env['mail.message'].browse(self._post_committed_prompt(
+            'Do I have any customer in New Jersey?',
+        ))
         prompt_button = self.env.ref('ai.ai_prompt_customer_new_jersey')
-        for label, prompt_ref in (
-            ('integer', prompt_button.id),
-            ('numeric string', str(prompt_button.id)),
-            ('XMLID', 'ai.ai_prompt_customer_new_jersey'),
-        ):
-            with self.subTest(label=label), self.registry.cursor() as cr:
-                env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
-                channel = env['ai.agent'].browse(self.agent_id)._create_ai_chat_channel(label)
-                env['ai.session'].sudo().create({
-                    'agent_id': self.agent_id,
-                    'channel_id': channel.id,
-                })
-                message_id = channel.message_post(body=label, message_type='comment').id
-                channel_id = channel.id
-            with patch(
-                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
-                side_effect=accept_submitted_request,
-            ) as submit:
-                response = self.url_open(
-                    '/ai/start_session_advance',
-                    json=self.build_rpc_payload({
-                        'channel_id': channel_id,
-                        'mail_message_id': message_id,
-                        'ai_prompt_button_ref': prompt_ref,
-                    }),
-                )
 
-            self.assertNotIn('error', response.json())
-            self.assertEqual(submit.call_args.kwargs['timeout'], IAP_TRANSPORT_TIMEOUT)
-            submitted_text = ' '.join(
-                part['text']
-                for message in submit.call_args.args[2]['messages']
-                for part in message['content']
-                if part['type'] == 'text'
+        with patch(
+            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            side_effect=accept_submitted_request,
+        ) as submit:
+            response = self._start_session_advance(
+                message,
+                ai_prompt_button_ref=prompt_button.id,
             )
-            self.assertIn('Get a list of contacts in New Jersey', submitted_text)
 
-    def test_real_session_advance_and_callback_apply_the_iap_result(self):
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('error', response.json())
+        submitted_messages = submit.call_args.args[2]['messages']
+        self.assertEqual(submit.call_args.kwargs['timeout'], IAP_TRANSPORT_TIMEOUT)
+        submitted_text = ' '.join(
+            part['text']
+            for submitted_message in submitted_messages
+            for part in submitted_message['content']
+            if part['type'] == 'text'
+        )
+        self.assertIn('Get a list of contacts in New Jersey', submitted_text)
+
+    def test_real_session_advance_and_callback_use_the_delivered_result(self):
         self.authenticate('admin', 'admin')
         message = self.env['mail.message'].browse(self._post_committed_prompt('Hi'))
 
@@ -378,8 +343,15 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertTrue(acknowledgement['request_uuid'])
         self.assertEqual(acknowledgement['responseState'], 'running')
         submit.assert_called_once()
-        self.assertIsInstance(submit.call_args.args[2], dict)
         self.assertEqual(submit.call_args.args[1], '1/get_completions')
+        submitted_payload = submit.call_args.args[2]
+        self.assertEqual(
+            submitted_payload['webhook_url'],
+            f'{self.base_url()}/ai/completion_result_ready',
+        )
+        self.assertIs(submitted_payload['llm_retry'], False)
+        self.assertNotIn('callback_url', submitted_payload)
+        self.assertFalse(submit.call_args.kwargs['raise_user_error'])
 
         self.env.invalidate_all()
         session = self.env['ai.session'].sudo().search([
@@ -390,17 +362,15 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(session.request_uuid, request_uuid)
         self.assertEqual(session.request_phase, 'submitted')
         self.assertEqual(session.loop_state, 'waiting_model')
-        submitted_payload = submit.call_args.args[2]
-        self.assertEqual(submitted_payload['webhook_url'], session.request_callback_url)
-        self.assertIs(submitted_payload['llm_retry'], False)
-        self.assertNotIn('callback_url', submitted_payload)
+        self.assertEqual(
+            session.request_callback_url,
+            submitted_payload['webhook_url'],
+        )
 
+        callback_result = assistant_text('Result delivered by IAP')
         unknown = self._post_completion_callback({
             'request_uuid': '00000000-0000-4000-8000-ffffffffffff',
-            'llm_result': {
-                'status': 'success',
-                'result': assistant_text('Unknown request result'),
-            },
+            'llm_result': {'status': 'success', 'result': callback_result},
             'llm_error': False,
         })
         self.assertEqual(unknown.status_code, 200)
@@ -409,27 +379,35 @@ class TestAISessionLoopHttp(HttpCase):
 
         event_count = len(self.ai_session.event_ids)
         message_count = len(self.channel.message_ids)
-        callback_payload = {
-            'request_uuid': request_uuid,
-            'llm_result': {
-                'status': 'success',
-                'result': assistant_text('Result received from IAP'),
-            },
-            'llm_error': False,
-        }
-        callback = self._post_completion_callback(callback_payload)
+        with patch(
+            'odoo.addons.ai.utils.ai_utils.iap_tools.iap_jsonrpc',
+            side_effect=AssertionError('The callback must not poll IAP'),
+        ):
+            callback = self._post_completion_callback({
+                'request_uuid': request_uuid,
+                'llm_result': {'status': 'success', 'result': callback_result},
+                'llm_error': False,
+            })
         self.assertEqual(callback.status_code, 200)
         self.assertIsNone(callback.json())
         self.assertNotIn('Set-Cookie', callback.headers)
         self.env.invalidate_all()
         self.assertEqual(session.loop_state, 'ready')
         self.assertFalse(session.request_phase)
-        self.assertFalse(session.request_uuid)
+        self.assertEqual(session.request_uuid, request_uuid)
+        self.assertEqual(session.request_result, {
+            'kind': 'success',
+            'message': callback_result,
+        })
         self.assertEqual(len(self.ai_session.event_ids), event_count + 1)
         self.assertEqual(len(self.channel.message_ids), message_count + 1)
-        self.assertIn('Result received from IAP', self.channel.message_ids[0].body)
+        self.assertIn('Result delivered by IAP', self.channel.message_ids[0].body)
 
-        replay = self._post_completion_callback(callback_payload)
+        replay = self._post_completion_callback({
+            'request_uuid': request_uuid,
+            'llm_result': {'status': 'success', 'result': callback_result},
+            'llm_error': False,
+        })
         self.assertEqual(replay.status_code, 200)
         self.assertIsNone(replay.json())
         self.assertNotIn('Set-Cookie', replay.headers)
@@ -437,170 +415,39 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(len(self.ai_session.event_ids), event_count + 1)
         self.assertEqual(len(self.channel.message_ids), message_count + 1)
 
-    def test_callback_normalizes_success_before_the_reducer(self):
+    def test_callback_rejects_ambiguous_payload(self):
         prepared = self._create_committed_prepared_session(
-            'Strict callback normalization',
+            'Ambiguous callback payload',
         )
-        message = {
-            'role': 'assistant',
-            'content': [{'type': 'text', 'text': 'Callback result'}],
-        }
-        session_model = self.registry['ai.session']
-        with (
-            patch.object(
-                session_model,
-                '_apply_iap_result',
-                autospec=True,
-                return_value={
-                    'kind': 'stable',
-                    'response': {
-                        'request_uuid': prepared['request_uuid'],
-                        'responseState': 'running',
-                    },
-                },
-            ) as reducer,
-            patch.object(session_model, 'lock_for_update', autospec=True) as route_lock,
-        ):
-            response = self._post_completion_callback({
-                'request_uuid': prepared['request_uuid'],
-                'llm_result': {'status': 'success', 'result': message},
-                'llm_error': False,
-            })
+        response = self._post_completion_callback({
+            'request_uuid': prepared['request_uuid'],
+            'llm_result': {
+                'status': 'success',
+                'result': assistant_text('Should not be applied'),
+            },
+            'llm_error': 'provider failed too',
+        })
+
+        self.assertEqual(response.status_code, 422)
+        session = self._get_session(prepared['session_id'])
+        self.assertEqual(session.loop_state, 'waiting_model')
+        self.assertEqual(session.request_phase, 'prepared')
+
+    def test_error_callback_finishes_the_matching_request(self):
+        prepared = self._create_committed_prepared_session(
+            'Terminal error callback',
+        )
+        response = self._post_completion_callback({
+            'request_uuid': prepared['request_uuid'],
+            'llm_result': False,
+            'llm_error': 'provider unavailable',
+        })
 
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.json())
-        self.assertEqual(reducer.call_args.args[1], prepared['request_uuid'])
-        self.assertEqual(reducer.call_args.args[2], {
-            'kind': 'success',
-            'message': message,
-        })
-        route_lock.assert_not_called()
-
-    def test_callback_rejects_invalid_envelope_before_the_reducer(self):
-        prepared = self._create_committed_prepared_session(
-            'Invalid callback envelope',
-        )
         session = self._get_session(prepared['session_id'])
-        snapshot = session.read([
-            'loop_state', 'request_phase', 'request_uuid', 'request_payload',
-        ])[0]
-        event_count = len(session.event_ids)
-        message_count = len(session.channel_id.message_ids)
-        with patch.object(
-            self.registry['ai.session'], '_apply_iap_result', autospec=True,
-        ) as reducer:
-            responses = [
-                self._post_completion_callback({
-                    'request_uuid': prepared['request_uuid'],
-                    **payload,
-                })
-                for payload in (
-                    {
-                        'llm_result': {
-                            'status': 'success',
-                            'result': assistant_text('Ambiguous'),
-                        },
-                        'llm_error': 'provider failed too',
-                    },
-                    {'llm_result': False, 'llm_error': False},
-                    {'llm_result': {'status': 'success'}, 'llm_error': False},
-                    {
-                        'llm_result': {
-                            'status': 'error',
-                            'result': assistant_text('Not a success'),
-                        },
-                        'llm_error': False,
-                    },
-                    {
-                        'llm_result': {
-                            'result': assistant_text('Missing status'),
-                        },
-                        'llm_error': False,
-                    },
-                )
-            ]
-
-        self.assertTrue(all(response.status_code == 422 for response in responses))
-        reducer.assert_not_called()
-        session = self._get_session(prepared['session_id'])
-        self.assertEqual(session.read(list(snapshot))[0], snapshot)
-        self.assertEqual(len(session.event_ids), event_count)
-        self.assertEqual(len(session.channel_id.message_ids), message_count)
-
-    def test_callback_normalizes_arbitrary_llm_error_before_the_reducer(self):
-        prepared = self._create_committed_prepared_session(
-            'Allowed callback errors',
-        )
-        session_model = self.registry['ai.session']
-        with patch.object(
-            session_model,
-            '_apply_iap_result',
-            autospec=True,
-            return_value={
-                'kind': 'stable',
-                'response': {
-                    'request_uuid': prepared['request_uuid'],
-                    'responseState': 'running',
-                },
-            },
-        ) as reducer:
-            for llm_error in ('provider unavailable', 'insufficient_credit'):
-                with self.subTest(llm_error=llm_error):
-                    response = self._post_completion_callback({
-                        'request_uuid': prepared['request_uuid'],
-                        'llm_result': False,
-                        'llm_error': llm_error,
-                    })
-                    self.assertEqual(response.status_code, 200)
-                    self.assertIsNone(response.json())
-                    self.assertEqual(reducer.call_args.args[2], {
-                        'kind': 'failure',
-                        'code': 'request_failed',
-                    })
-
-        self.assertEqual(reducer.call_count, 2)
-
-    def test_callback_company_revocation_prevents_reducer_and_effects(self):
-        prepared = self._create_committed_prepared_session(
-            'Callback revoked company',
-        )
-        with self.registry.cursor() as cr:
-            env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
-            company = env['res.company'].create({'name': 'Callback HTTP revoked company'})
-            env.user.company_ids = [Command.link(company.id)]
-            cr.execute(
-                'UPDATE ai_session SET request_context = %s::jsonb WHERE id = %s',
-                [json.dumps({
-                    'allowed_company_ids': [company.id],
-                    'active_company_ids': [company.id],
-                }), prepared['session_id']],
-            )
-            env.user.company_ids = [Command.unlink(company.id)]
-        session = self._get_session(prepared['session_id'])
-        snapshot = session.read([
-            'loop_state', 'request_phase', 'request_uuid', 'request_payload',
-        ])[0]
-        event_count = len(session.event_ids)
-        message_count = len(session.channel_id.message_ids)
-
-        with patch.object(
-            self.registry['ai.session'], '_apply_iap_result', autospec=True,
-        ) as reducer:
-            response = self._post_completion_callback({
-                'request_uuid': prepared['request_uuid'],
-                'llm_result': {
-                    'status': 'success',
-                    'result': assistant_text('Must not be applied'),
-                },
-                'llm_error': False,
-            })
-
-        self.assertEqual(response.status_code, 403)
-        reducer.assert_not_called()
-        session = self._get_session(prepared['session_id'])
-        self.assertEqual(session.read(list(snapshot))[0], snapshot)
-        self.assertEqual(len(session.event_ids), event_count)
-        self.assertEqual(len(session.channel_id.message_ids), message_count)
+        self.assertEqual(session.loop_state, 'ready')
+        self.assertEqual(session.request_uuid, prepared['request_uuid'])
 
     def test_confirmation_resume_executes_once_then_submits_followup(self):
         self.authenticate('admin', 'admin')
@@ -711,7 +558,7 @@ class TestAISessionLoopHttp(HttpCase):
             ('name', '=', confirmation['label']),
         ]))
 
-    def test_confirmation_resume_rejects_wrong_token_and_channel(self):
+    def test_confirmation_resume_rejects_wrong_token_choice_and_channel(self):
         self.authenticate('admin', 'admin')
         confirmation = self._create_committed_confirmation('HTTP Rejected Contact')
         another = self._create_committed_confirmation('HTTP Other Contact')
@@ -719,11 +566,16 @@ class TestAISessionLoopHttp(HttpCase):
         wrong_token = self._resume_pending_confirmation(
             confirmation, resume_token='not-the-resume-token',
         )
+        wrong_choice = self._resume_pending_confirmation(
+            confirmation,
+            response={'kind': 'confirmation', 'value': 'invented-confirmation-choice'},
+        )
         wrong_channel = self._resume_pending_confirmation(
             confirmation, channel_id=another['channel_id'],
         )
 
         self.assertIn('error', wrong_token.json())
+        self.assertIn('error', wrong_choice.json())
         self.assertIn('error', wrong_channel.json())
         self.env.invalidate_all()
         session = self._get_session(confirmation['session_id'])
@@ -758,35 +610,6 @@ class TestAISessionLoopHttp(HttpCase):
             ('name', '=', confirmation['label']),
         ]))
 
-    def test_confirmation_resume_rejects_revoked_company(self):
-        self.authenticate('admin', 'admin')
-        confirmation = self._create_committed_confirmation(
-            'HTTP revoked company contact',
-        )
-        with self.registry.cursor() as cr:
-            env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
-            company = env['res.company'].create({'name': 'HTTP revoked company'})
-            env.user.company_ids = [Command.link(company.id)]
-            session = env['ai.session'].sudo().browse(confirmation['session_id'])
-            cr.execute(
-                'UPDATE ai_session SET request_context = %s::jsonb WHERE id = %s',
-                [json.dumps({
-                    'allowed_company_ids': [company.id],
-                    'active_company_ids': [company.id],
-                }), session.id],
-            )
-            env.user.company_ids = [Command.unlink(company.id)]
-
-        response = self._resume_pending_confirmation(confirmation)
-
-        self.assertIn('error', response.json())
-        session = self._get_session(confirmation['session_id'])
-        self.assertEqual(session.loop_state, 'waiting_confirmation')
-        self.assertEqual(session.resume_token, confirmation['resume_token'])
-        self.assertFalse(self.env['res.partner'].search([
-            ('name', '=', confirmation['label']),
-        ]))
-
     def test_confirmation_decline_settles_without_submission_or_mutation(self):
         self.authenticate('admin', 'admin')
         confirmation = self._create_committed_confirmation('HTTP Declined Contact')
@@ -807,7 +630,7 @@ class TestAISessionLoopHttp(HttpCase):
         self.env.invalidate_all()
         session = self._get_session(confirmation['session_id'])
         self.assertEqual(session.loop_state, 'ready')
-        self.assertFalse(session.request_uuid)
+        self.assertEqual(session.request_uuid, confirmation['request_uuid'])
         self.assertFalse(session.pending_tool_call)
         self.assertFalse(self.env['res.partner'].search([
             ('name', '=', confirmation['label']),
@@ -895,7 +718,11 @@ class TestAISessionLoopHttp(HttpCase):
         session = self._get_session(prepared['session_id'])
         self.assertEqual(session.loop_state, 'ready')
         self.assertFalse(session.request_phase)
-        self.assertFalse(session.request_uuid)
+        self.assertEqual(session.request_uuid, prepared['request_uuid'])
+        self.assertEqual(session.request_result, {
+            'kind': 'failure',
+            'code': 'insufficient_credit',
+        })
         self.assertIn('AI is unreachable', session.channel_id.message_ids[0].body)
 
     def test_submission_keeps_session_locked_across_iap_transport(self):

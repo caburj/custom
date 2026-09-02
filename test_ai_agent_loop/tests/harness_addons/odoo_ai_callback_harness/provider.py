@@ -4,7 +4,7 @@ import requests
 PROVIDER_URL = 'http://127.0.0.1:18280/completion'
 
 
-def run_completion(messages, instructions, tools, options):
+def get_completions(messages, instructions, tools, options):
     response = requests.post(
         PROVIDER_URL,
         json={
@@ -16,7 +16,4 @@ def run_completion(messages, instructions, tools, options):
         timeout=15,
     )
     response.raise_for_status()
-    return {
-        'status': 'success',
-        'result': response.json()['result'],
-    }, 0.0
+    return response.json()['result'], 0.0

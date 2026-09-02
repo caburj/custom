@@ -1,10 +1,9 @@
 import json
-from datetime import timedelta
 
 from werkzeug.exceptions import NotFound
 from werkzeug.wrappers import Response
 
-from odoo import fields, http
+from odoo import http
 
 
 def _require_loopback():
@@ -23,13 +22,13 @@ class OdooAICallbackHarness(http.Controller):
     )
     def ready(self):
         _require_loopback()
-        from odoo.addons.odoo_ai import dispatcher
+        from odoo.addons.odoo_ai import ai_broker, ai_service
 
-        runner = dispatcher.PROCESS_DISPATCHER.runner
+        broker = ai_broker._ai_brokers.get(http.request.db)
         return _json_response({
-            'dispatcher_alive': bool(runner and not runner.dead),
+            'broker_alive': bool(broker and broker.started and not broker.stopped),
             'provider_patched': (
-                dispatcher.run_completion.__module__
+                ai_service.get_completions.__module__
                 == 'odoo.addons.odoo_ai_callback_harness.provider'
             ),
         })
@@ -41,23 +40,10 @@ class OdooAICallbackHarness(http.Controller):
     )
     def setup(self):
         _require_loopback()
-        body = http.request.httprequest.get_json(silent=True) or {}
-        database_uuid = body.get('database_uuid')
-        callback_url = body.get('callback_url')
-        if not database_uuid or callback_url != 'http://127.0.0.1:18281':
-            raise NotFound()
         env = http.request.env
         env['ir.config_parameter'].sudo().set_bool('odoo_ai.use_credits', False)
-        Database = env['iap_tools.database'].sudo()
-        Database.search([('db_uuid', '=', database_uuid)]).unlink()
-        Database.create({
-            'db_uuid': database_uuid,
-            'db_name': 'ai_callback_consumer_test',
-            'url': callback_url,
-            'expiration_date': fields.Datetime.now() + timedelta(days=1),
-        })
-        env['odoo_ai.completion.request'].sudo().search([]).unlink()
-        return _json_response({'database_uuid': database_uuid, 'ready': True})
+        env['odoo_ai.step'].sudo().search([]).unlink()
+        return _json_response({'ready': True})
 
     @http.route(
         '/odoo_ai_callback_harness/status',
@@ -68,20 +54,22 @@ class OdooAICallbackHarness(http.Controller):
         _require_loopback()
         body = http.request.httprequest.get_json(silent=True) or {}
         if body.get('all') is True:
-            requests = http.request.env['odoo_ai.completion.request'].sudo().search(
+            requests = http.request.env['odoo_ai.step'].sudo().search(
                 [], order='id',
             )
             return _json_response({
                 'requests': [{
                     'request_uuid': request.request_uuid,
                     'state': request.state,
-                    'callback_state': request.callback_state,
-                    'callback_attempts': request.callback_attempts,
-                    'error': request.error or False,
+                    'webhook_url': request.webhook_url,
+                    'llm_result': request.llm_result or False,
+                    'llm_error': request.llm_error or False,
+                    'odoo_error': request.odoo_error or False,
+                    'odoo_retry_count': request.odoo_retry_count,
                 } for request in requests],
             })
         request_uuid = body.get('request_uuid')
-        request = http.request.env['odoo_ai.completion.request'].sudo().search([
+        request = http.request.env['odoo_ai.step'].sudo().search([
             ('request_uuid', '=', request_uuid),
         ], limit=1)
         if not request:
@@ -90,7 +78,9 @@ class OdooAICallbackHarness(http.Controller):
             'known': True,
             'request_uuid': request.request_uuid,
             'state': request.state,
-            'callback_state': request.callback_state,
-            'callback_attempts': request.callback_attempts,
-            'error': request.error or False,
+            'webhook_url': request.webhook_url,
+            'llm_result': request.llm_result or False,
+            'llm_error': request.llm_error or False,
+            'odoo_error': request.odoo_error or False,
+            'odoo_retry_count': request.odoo_retry_count,
         })

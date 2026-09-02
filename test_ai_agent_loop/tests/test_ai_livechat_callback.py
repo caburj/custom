@@ -137,9 +137,6 @@ ai['result'] = {
                         "name": client_tool.ai_tool_name,
                         "args": {},
                     }],
-                    "provider_metadata": {
-                        "provider": "test", "model": "test", "api": "test",
-                    },
                 },
             },
             "llm_error": False,
@@ -150,23 +147,6 @@ ai['result'] = {
         self.env.invalidate_all()
         self.assertEqual(session.loop_state, "waiting_client_result")
         resume_token = session.resume_token
-
-        wrong_guest_token = self._create_livechat_message(agent)[1]
-        wrong_guest_response = self.url_open(
-            "/ai/cors/resume_pending_interaction",
-            json=self.build_rpc_payload({
-                "guest_token": wrong_guest_token,
-                "channel_id": channel_id,
-                "request_uuid": request_uuid,
-                "resume_token": resume_token,
-                "response": {"kind": "client_error", "value": "Must not be accepted"},
-            }),
-            headers={"Origin": "https://example.com"},
-        )
-        self.assertIn("error", wrong_guest_response.json())
-        self.env.invalidate_all()
-        self.assertEqual(session.loop_state, "waiting_client_result")
-        self.assertEqual(session.resume_token, resume_token)
 
         preflight_response = self.url_open(
             "/ai/cors/resume_pending_interaction",

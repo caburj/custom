@@ -10,12 +10,13 @@ from odoo.addons.ai.models.ai_session import AiSession
 from odoo.addons.ai.utils.ai_fields_tools import get_ai_value
 from odoo.addons.ai.utils.ai_utils import UserInputResponse
 
+from .common import apply_iap_result
+
 
 def assistant_text(text):
     return {
         'role': 'assistant',
         'content': [{'type': 'text', 'text': text}],
-        'provider_metadata': {},
     }
 
 
@@ -56,27 +57,11 @@ class TestAICallbackParity(TransactionCase):
         }
         message = channel.message_post(body=body, message_type='comment')
         session = session.with_context(**snapshot)
-        prepared = session._prepare_model_request(
+        session._prepare_model_request(
             message._convert_to_parts(),
             context_snapshot=snapshot,
         )
-        self.assertEqual(prepared, {
-            'session_id': session.id,
-            'request_uuid': session.request_uuid,
-        })
         return session
-
-    @staticmethod
-    def _apply_iap_result(session, request_uuid, result):
-        return session._apply_iap_result(request_uuid, result)
-
-    @staticmethod
-    def _resume_pending_interaction(
-        session, request_uuid, resume_token, response, **kwargs,
-    ):
-        return session._resume_pending_interaction(
-            request_uuid, resume_token, response, **kwargs,
-        )
 
     def _new_session(self, title):
         channel = self.agent._create_ai_chat_channel(title)
@@ -87,13 +72,10 @@ class TestAICallbackParity(TransactionCase):
         return channel, session
 
     def _apply_iap_tool_calls(self, session, request_uuid, calls):
-        return self._apply_iap_result(session, request_uuid, {
-            'kind': 'success',
-            'message': {
-                'role': 'assistant',
-                'content': calls,
-                'provider_metadata': {},
-            },
+        return apply_iap_result(session, request_uuid, {
+            'request_uuid': request_uuid,
+            'status': 'success',
+            'result': {'role': 'assistant', 'content': calls},
         })
 
     @staticmethod
@@ -197,8 +179,8 @@ else:
         self.assertEqual(len(session.pending_tool_call['pending_results']), 1)
         self.assertEqual(len(session.event_ids), event_count + 1)
 
-        client_wait = self._resume_pending_interaction(
-            session, request_uuid, first_token,
+        client_wait = session._resume_pending_interaction(
+            request_uuid, first_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
         client_token = session.resume_token
@@ -207,9 +189,8 @@ else:
         self.assertEqual(len(session.pending_tool_call['pending_results']), 2)
         self.assertEqual(len(session.event_ids), event_count + 1)
 
-        second_wait = self._resume_pending_interaction(
-            session, request_uuid, client_token,
-            {'kind': 'client_result', 'value': False},
+        second_wait = session._resume_pending_interaction(
+            request_uuid, client_token, {'kind': 'client_result', 'value': False},
         )
         second_token = session.resume_token
         self.assertEqual(second_wait['response']['responseState'], 'waiting_user')
@@ -217,8 +198,8 @@ else:
         self.assertEqual(len(session.pending_tool_call['pending_results']), 3)
         self.assertEqual(len(session.event_ids), event_count + 1)
 
-        completed = self._resume_pending_interaction(
-            session, request_uuid, second_token,
+        completed = session._resume_pending_interaction(
+            request_uuid, second_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
         results = self._tool_results(session.request_payload)
@@ -279,8 +260,8 @@ else:
             self._tool_call(excess, 'limited'),
         ])
 
-        completed = self._resume_pending_interaction(
-            session, request_uuid, session.resume_token,
+        completed = session._resume_pending_interaction(
+            request_uuid, session.resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
         results = self._tool_results(session.request_payload)
@@ -388,8 +369,7 @@ else:
             'current_view_info': {'marker': 'resumed'},
         }
         fresh_session = paused_session.with_context(**fresh_snapshot)
-        resumed = self._resume_pending_interaction(
-            fresh_session,
+        resumed = fresh_session._resume_pending_interaction(
             paused_request_uuid,
             fresh_session.resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
@@ -453,10 +433,10 @@ else:
                 if variant == 'unknown':
                     bad_call['name'] = 'callback_unknown_tool'
                 result = {
-                    'kind': 'success',
-                    'message': {
+                    'request_uuid': request_uuid,
+                    'status': 'success',
+                    'result': {
                         'role': 'assistant',
-                        'provider_metadata': {},
                         'content': [
                             self._tool_call(successful, 'good'),
                             bad_call,
@@ -464,7 +444,7 @@ else:
                     },
                 }
 
-                outcome = self._apply_iap_result(session, request_uuid, result)
+                outcome = apply_iap_result(session, request_uuid, result)
                 followup_uuid = session.request_uuid
                 results = self._tool_results(session.request_payload)
                 counts = (
@@ -476,16 +456,17 @@ else:
                 self.assertFalse(results[1]['success'])
                 self.assertEqual(session.state['successful_runs'], 1)
                 self.assertEqual(outcome['prepared']['request_uuid'], followup_uuid)
-                self._apply_iap_result(session, followup_uuid, {
-                    'kind': 'success',
-                    'message': assistant_text('The tool failed, so nothing else was changed.'),
+                apply_iap_result(session, followup_uuid, {
+                    'request_uuid': followup_uuid,
+                    'status': 'success',
+                    'result': assistant_text('The tool failed, so nothing else was changed.'),
                 })
-                self._apply_iap_result(session, request_uuid, result)
+                apply_iap_result(session, request_uuid, result)
                 self.assertEqual(session.state['successful_runs'], 1)
                 self.assertEqual(counts[0] + 1, len(session.event_ids))
                 self.assertEqual(counts[1] + 1, len(session.channel_id.message_ids))
                 self.assertEqual(session.loop_state, 'ready')
-                self.assertFalse(session.request_uuid)
+                self.assertEqual(session.request_uuid, followup_uuid)
 
     def test_later_tool_clears_an_earlier_tool_owned_final(self):
         final_tool = self._create_tool(
@@ -522,8 +503,7 @@ else:
         ])
         self.assertEqual(waiting['response']['responseState'], 'waiting_user')
 
-        finished = self._resume_pending_interaction(
-            session,
+        finished = session._resume_pending_interaction(
             request_uuid,
             session.resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
@@ -592,15 +572,16 @@ ai['result'] = 'continue'
         self.assertIn(
             'callback-round-suffix', suffix_session.request_message_body_suffix,
         )
-        self._apply_iap_result(suffix_session, followup_uuid, {
-            'kind': 'success',
-            'message': assistant_text('Final after preview'),
+        apply_iap_result(suffix_session, followup_uuid, {
+            'request_uuid': followup_uuid,
+            'status': 'success',
+            'result': assistant_text('Final after preview'),
         })
         self.assertIn(
             'callback-round-suffix', suffix_session.channel_id.message_ids[0].body,
         )
 
-    def test_round_limit_and_terminal_iap_errors_settle_once(self):
+    def test_round_limit_terminal_errors_and_empty_results_settle_once(self):
         self.env['ir.config_parameter'].sudo().set_int(
             'ai.max_successive_calls', 1,
         )
@@ -611,20 +592,20 @@ ai['result'] = 'continue'
         session = self._prepare_model_request()
         request_uuid = session.request_uuid
         result = {
-            'kind': 'success',
-            'message': {
+            'request_uuid': request_uuid,
+            'status': 'success',
+            'result': {
                 'role': 'assistant',
-                'provider_metadata': {},
                 'content': [self._tool_call(tool, 'limit')],
             },
         }
-        outcome = self._apply_iap_result(session, request_uuid, result)
+        outcome = apply_iap_result(session, request_uuid, result)
         message_count = len(session.channel_id.message_ids)
-        replay = self._apply_iap_result(session, request_uuid, result)
+        replay = apply_iap_result(session, request_uuid, result)
         self.assertEqual(outcome['response']['responseState'], 'idle')
         self.assertEqual(replay['response']['responseState'], 'idle')
         self.assertEqual(session.loop_state, 'ready')
-        self.assertFalse(session.request_uuid)
+        self.assertEqual(session.request_uuid, request_uuid)
         self.assertIn('too many successive tool rounds', session.channel_id.message_ids[0].body)
         self.assertEqual(len(session.channel_id.message_ids), message_count)
 
@@ -640,19 +621,20 @@ ai['result'] = 'continue'
                 )
                 error_request_uuid = error_session.request_uuid
                 error_result = {
-                    'kind': 'failure',
-                    'code': error_code,
+                    'request_uuid': error_request_uuid,
+                    'status': 'error',
+                    'error': error_code,
                 }
                 with patch.object(
                     self.env.registry['iap.account'],
                     '_send_no_credit_notification',
                     autospec=True,
                 ) as notify:
-                    self._apply_iap_result(error_session, error_request_uuid, error_result)
+                    apply_iap_result(error_session, error_request_uuid, error_result)
                     error_message_count = len(error_session.channel_id.message_ids)
-                    self._apply_iap_result(error_session, error_request_uuid, error_result)
+                    apply_iap_result(error_session, error_request_uuid, error_result)
                 self.assertEqual(error_session.loop_state, 'ready')
-                self.assertFalse(error_session.request_uuid)
+                self.assertEqual(error_session.request_uuid, error_request_uuid)
                 self.assertIn('AI is unreachable', error_session.channel_id.message_ids[0].body)
                 self.assertEqual(
                     len(error_session.channel_id.message_ids), error_message_count,
@@ -661,6 +643,25 @@ ai['result'] = 'continue'
                     notify.call_count,
                     1 if error_code == 'insufficient_credit' else 0,
                 )
+
+        channel, invalid_session = self._new_session('Callback invalid result')
+        invalid_session = self._prepare_model_request(
+            session=invalid_session,
+            channel=channel,
+            body='Trigger invalid result',
+        )
+        invalid_request_uuid = invalid_session.request_uuid
+        invalid_event_count = len(invalid_session.event_ids)
+        invalid = apply_iap_result(invalid_session, invalid_request_uuid, {
+            'request_uuid': invalid_request_uuid,
+            'status': 'success',
+            'result': {'role': 'assistant', 'content': []},
+        })
+        self.assertEqual(invalid['response']['responseState'], 'idle')
+        self.assertEqual(invalid_session.loop_state, 'ready')
+        self.assertEqual(invalid_session.request_uuid, invalid_request_uuid)
+        self.assertEqual(len(invalid_session.event_ids), invalid_event_count + 1)
+
 
 @tagged('post_install', '-at_install')
 class TestAIDirectParity(TransactionCase):
@@ -690,21 +691,16 @@ class TestAIDirectParity(TransactionCase):
             'pending_tool_call',
         ])[0]
 
-    def test_channel_title_and_agent_wrapper_remain_direct(self):
+    def test_agent_wrapper_remains_direct(self):
         loop_snapshot = self._loop_snapshot()
-        completions = [
-            {'status': 'success', 'result': assistant_text('Direct title')},
-            {'status': 'success', 'result': assistant_text('Direct answer')},
-        ]
-        with patch.object(AiSession, '_get_completions', side_effect=completions):
-            title = self.session._generate_channel_name([
-                {'type': 'text', 'text': 'Name this chat'},
-            ])
+        with patch.object(AiSession, '_get_completions', return_value={
+            'status': 'success',
+            'result': assistant_text('Direct answer'),
+        }):
             answer = self.agent._generate_single_response([
                 {'type': 'text', 'text': 'Answer directly'},
             ])
 
-        self.assertEqual(title, 'Direct title')
         self.assertEqual(answer, assistant_text('Direct answer')['content'])
         self.assertEqual(self._loop_snapshot(), loop_snapshot)
 
@@ -778,11 +774,11 @@ class TestAIDirectParity(TransactionCase):
         with patch.object(
             AiSession, '_get_completions', side_effect=completions,
         ) as direct_completion:
-            outcome = session._apply_iap_result(request_uuid, {
-                'kind': 'success',
-                'message': {
+            outcome = apply_iap_result(session, request_uuid, {
+                'request_uuid': request_uuid,
+                'status': 'success',
+                'result': {
                     'role': 'assistant',
-                    'provider_metadata': {},
                     'content': [
                         {
                             'type': 'tool_call',
@@ -812,7 +808,7 @@ class TestAIDirectParity(TransactionCase):
 
         self.assertEqual(outcome['response']['responseState'], 'idle')
         self.assertEqual(session.loop_state, 'ready')
-        self.assertFalse(session.request_uuid)
+        self.assertEqual(session.request_uuid, request_uuid)
         self.assertEqual(direct_completion.call_count, 2)
         self.assertEqual(len(session.event_ids), event_count + 2)
         tool_results = session.event_ids.sorted('id')[-1].metadata['content']
