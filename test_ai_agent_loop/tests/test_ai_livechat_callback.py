@@ -2,20 +2,29 @@
 
 from unittest.mock import patch
 
+import requests
+
 from odoo import Command
 from odoo.addons.mail.tools.discuss import Store
 from odoo.tests import HttpCase, tagged
 
 
-def queue_submitted_request(_connection, _route, payload, **_kwargs):
-    return {
-        "request_uuid": payload["request_uuid"],
-        "status": "queued",
-    }
+def accept_submitted_request(_connection, _route, _payload, **_kwargs):
+    return None
 
 
 @tagged("post_install", "-at_install")
 class TestAILivechatCallback(HttpCase):
+    def _post_completion_callback(self, payload):
+        with self.allow_requests(all_requests=True):
+            response = requests.post(
+                f"{self.base_url()}/ai/completion_result_ready",
+                json=payload,
+                timeout=12,
+            )
+        self.assertNotIn("Cookie", response.request.headers)
+        return response
+
     def _create_livechat_message(self, agent):
         livechat_channel = self.env["im_livechat.channel"].create({
             "name": "Callback Livechat Channel",
@@ -74,8 +83,8 @@ ai['result'] = {
 
         with patch(
             "odoo.addons.ai.utils.session_env.call_odoo_ai_transport",
-            side_effect=queue_submitted_request,
-        ):
+            side_effect=accept_submitted_request,
+        ) as submit:
             response = self.url_open(
                 "/ai/cors/start_session_advance",
                 json=self.build_rpc_payload({
@@ -106,26 +115,37 @@ ai['result'] = {
         self.assertEqual(session.loop_state, "waiting_model")
         origin_message = self.env["mail.message"].browse(message_id)
         self.assertEqual(session.request_guest_id, origin_message.author_guest_id)
+        self.assertEqual(submit.call_args.args[1], "1/get_completions")
+        submitted_payload = submit.call_args.args[2]
+        self.assertEqual(submitted_payload["webhook_url"], session.request_callback_url)
+        self.assertIs(submitted_payload["llm_retry"], False)
+        self.assertNotIn("callback_url", submitted_payload)
         with self.registry.cursor() as cr:
             self.env(cr=cr)["ai.session"].sudo().browse(session.id).state = {
                 "available_tools": [client_tool.id],
             }
 
-        self.make_jsonrpc_request("/ai/completion_result_ready", {
+        callback_response = self._post_completion_callback({
             "request_uuid": request_uuid,
-            "result": {
-                "role": "assistant",
-                "content": [{
-                    "type": "tool_call",
-                    "call_id": "livechat-client-tool",
-                    "name": client_tool.ai_tool_name,
-                    "args": {},
-                }],
-                "provider_metadata": {
-                    "provider": "test", "model": "test", "api": "test",
+            "llm_result": {
+                "status": "success",
+                "result": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_call",
+                        "call_id": "livechat-client-tool",
+                        "name": client_tool.ai_tool_name,
+                        "args": {},
+                    }],
+                    "provider_metadata": {
+                        "provider": "test", "model": "test", "api": "test",
+                    },
                 },
             },
+            "llm_error": False,
         })
+        self.assertEqual(callback_response.status_code, 200)
+        self.assertIsNone(callback_response.json())
 
         self.env.invalidate_all()
         self.assertEqual(session.loop_state, "waiting_client_result")
@@ -163,7 +183,7 @@ ai['result'] = {
 
         with patch(
             "odoo.addons.ai.utils.session_env.call_odoo_ai_transport",
-            side_effect=queue_submitted_request,
+            side_effect=accept_submitted_request,
         ):
             resume_response = self.url_open(
                 "/ai/cors/resume_pending_interaction",
@@ -197,7 +217,7 @@ ai['result'] = {
 
         with patch(
             "odoo.addons.ai.utils.session_env.call_odoo_ai_transport",
-            side_effect=queue_submitted_request,
+            side_effect=accept_submitted_request,
         ):
             response = self.url_open(
                 "/ai/start_session_advance",

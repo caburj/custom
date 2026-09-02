@@ -24,10 +24,7 @@ class TestAIAutomationCallback(HttpCase):
 
         with patch(
             'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
-            side_effect=lambda _connection, _route, payload, **_kwargs: {
-                'request_uuid': payload['request_uuid'],
-                'status': 'queued',
-            },
+            return_value=None,
         ) as transport:
             action._ai_action_run_agent(partner, agent)
             session = self.env['ai.session'].sudo().search([
@@ -47,11 +44,17 @@ class TestAIAutomationCallback(HttpCase):
             self.env.cr.postcommit.run()
 
         transport.assert_called_once()
-        self.assertEqual(transport.call_args.args[1], '1/submit_completions')
+        self.assertEqual(transport.call_args.args[1], '1/get_completions')
         self.assertEqual(
             transport.call_args.args[2]['request_uuid'],
             request_uuid,
         )
+        self.assertEqual(
+            transport.call_args.args[2]['webhook_url'],
+            session.request_callback_url,
+        )
+        self.assertIs(transport.call_args.args[2]['llm_retry'], False)
+        self.assertNotIn('callback_url', transport.call_args.args[2])
         session.invalidate_recordset()
         self.assertEqual(session.request_phase, 'submitted')
 

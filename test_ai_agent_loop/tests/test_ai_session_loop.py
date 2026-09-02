@@ -139,16 +139,42 @@ class TestAISessionLoop(TransactionCase):
 
     def test_prepare_persists_one_immutable_active_model_round(self):
         message = self._post_prompt()
-        session = self._prepare_model_request(message)
+        with patch.object(
+            AiSession,
+            'get_base_url',
+            autospec=True,
+            return_value='https://callback.example',
+        ):
+            session = self._prepare_model_request(message)
         payload_before = copy.deepcopy(session.request_payload)
 
         self.assertEqual(session.loop_state, 'waiting_model')
         self.assertEqual(session.request_phase, 'prepared')
         self.assertEqual(session.request_round, 1)
         self.assertEqual(session.request_payload, payload_before)
+        self.assertEqual(
+            session.request_callback_url,
+            'https://callback.example/ai/completion_result_ready',
+        )
         self.assertEqual(len(self.session.event_ids), 1)
         self.assertNotIn('<odoo_current_context>', str(self.session.event_ids.metadata))
         self.assertIn('<odoo_current_context>', str(session.request_payload['messages']))
+        with patch.object(
+            AiSession,
+            'get_base_url',
+            autospec=True,
+            return_value='https://changed.example',
+        ) as get_base_url:
+            submission_payload = session._get_prepared_submission_payload(
+                session.request_uuid,
+            )
+        get_base_url.assert_not_called()
+        self.assertEqual(
+            submission_payload['webhook_url'],
+            session.request_callback_url,
+        )
+        self.assertIs(submission_payload['llm_retry'], False)
+        self.assertNotIn('callback_url', submission_payload)
         with self.assertRaises(UserError):
             session.write({'request_payload': {}})
 
@@ -1001,13 +1027,13 @@ class TestAISessionLoop(TransactionCase):
         params = {'request_uuid': '00000000-0000-4000-8000-000000000001'}
         with patch(
             'odoo.addons.ai.utils.ai_utils.iap_tools.iap_jsonrpc',
-            return_value={'status': 'queued'},
+            return_value=None,
         ) as transport:
             response = call_odoo_ai_transport(
-                connection, '1/submit_completions', params,
+                connection, '1/get_completions', params,
             )
 
-        self.assertEqual(response, {'status': 'queued'})
+        self.assertIsNone(response)
         self.assertNotIn('account_token', params)
         self.assertNotIn('dbuuid', params)
         sent_params = transport.call_args.kwargs['params']
@@ -1022,9 +1048,9 @@ class TestAISessionLoop(TransactionCase):
         }
         with patch(
             'odoo.addons.ai.utils.ai_utils.iap_tools.iap_jsonrpc',
-            return_value={'status': 'queued'},
+            return_value=None,
         ) as transport:
-            call_odoo_ai_transport(connection, '1/submit_completions', {})
+            call_odoo_ai_transport(connection, '1/get_completions', {})
 
         sent_params = transport.call_args.kwargs['params']
         self.assertIn('account_token', sent_params)
