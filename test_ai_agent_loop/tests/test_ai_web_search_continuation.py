@@ -31,6 +31,14 @@ def assistant_text(text, sources=None):
 class WebSearchFixture:
     """Shared fixtures, without inheriting or duplicating another test suite."""
 
+    fixture_name = 'Web search'
+    fixture_key = 'web_search'
+    fixture_skill = 'ai.ai_skill_web_search'
+    fixture_tool = 'ai.ir_actions_server_ai_web_search'
+    fixture_tool_key = 'search'
+    fixture_prompt = 'Research durable callbacks.'
+    fixture_instructions = 'Research the requested topic and cite the sources.'
+
     def _create_fixture(self, env):
         self.actor_id = env.uid
         self.context_snapshot = {
@@ -41,20 +49,20 @@ class WebSearchFixture:
             'current_view_info': {'res_model': 'res.partner', 'view_type': 'list'},
         }
         agent = env['ai.agent'].create({
-            'name': 'Web Search Continuation Agent',
-            'system_prompt': 'Research the requested topic and cite the sources.',
-            'skill_ids': [Command.link(env.ref('ai.ai_skill_web_search').id)],
+            'name': f'{self.fixture_name} Continuation Agent',
+            'system_prompt': self.fixture_instructions,
+            'skill_ids': [Command.link(env.ref(self.fixture_skill).id)],
         })
-        channel = agent._create_ai_chat_channel('Web Search Continuation')
+        channel = agent._create_ai_chat_channel(f'{self.fixture_name} Continuation')
         session = env['ai.session'].sudo().create({
             'agent_id': agent.id,
             'channel_id': channel.id,
         }).with_context(self.context_snapshot)
         self.session_id = session.id
         self.channel_id = channel.id
-        self.prefix_name = f'Web search prefix {session.id}'
+        self.prefix_name = f'{self.fixture_name} prefix {session.id}'
         tools = {
-            'search': env.ref('ai.ir_actions_server_ai_web_search'),
+            self.fixture_tool_key: env.ref(self.fixture_tool),
             'question': env.ref('ai.ir_actions_server_ask_user_question'),
         }
         codes = {
@@ -86,22 +94,23 @@ ai['result'] = {'client_tool': {'name': 'web_search_fixture_client', 'params': {
         }
         for name, code in codes.items():
             tools[name] = env['ir.actions.server'].create({
-                'name': f'Web search {name}',
-                'ai_tool_name': f'web_search_{name}_{session.id}',
+                'name': f'{self.fixture_name} {name}',
+                'ai_tool_name': f'{self.fixture_key}_{name}_{session.id}',
                 'ai_tool_thinking_text': f'Running {name}',
-                'ai_tool_description': 'Web search continuation fixture.',
+                'ai_tool_description': f'{self.fixture_name} continuation fixture.',
                 'ai_tool_schema': '{"type": "object", "properties": {}, "required": []}',
                 'model_id': env.ref('ai.model_ai_tool').id,
                 'state': 'code',
                 'use_in_ai': True,
                 'code': code,
             })
+        self.tool_ids = {name: tool.id for name, tool in tools.items()}
         self.tool_names = {name: tool.ai_tool_name for name, tool in tools.items()}
         session.state = {
             'available_tools': [tool.id for tool in tools.values()],
             'web_sources': {'f00d': {'url': 'https://example.org/old', 'source_name': 'Earlier source'}},
         }
-        message = channel.message_post(body='Research durable callbacks.', message_type='comment')
+        message = channel.message_post(body=self.fixture_prompt, message_type='comment')
         session._prepare_model_request(
             message._convert_to_parts(), context_snapshot=self.context_snapshot,
         )
@@ -134,7 +143,7 @@ ai['result'] = {'client_tool': {'name': 'web_search_fixture_client', 'params': {
     def _apply(self, session, message):
         with patch.object(
             AiSession, '_get_completions',
-            side_effect=AssertionError('Durable web search must not complete synchronously'),
+            side_effect=AssertionError(f'Durable {self.fixture_name} must not complete synchronously'),
         ) as direct:
             outcome = apply_iap_result(session, session.request_uuid, {
                 'kind': 'success', 'message': message,

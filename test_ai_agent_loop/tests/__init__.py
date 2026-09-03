@@ -8,3 +8,4 @@ from . import test_ai_session_loop_http
 from . import test_ai_livechat_callback
 from . import test_ai_website_callback
 from . import test_ai_web_search_continuation
+from . import test_ai_image_generation_continuation

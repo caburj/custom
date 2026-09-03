@@ -9,6 +9,7 @@ from odoo.tests import tagged, TransactionCase
 from odoo.addons.ai.models.ai_session import AiSession
 from odoo.addons.ai.utils.ai_fields_tools import get_ai_value
 from odoo.addons.ai.utils.ai_utils import UserInputResponse
+from odoo.addons.base.tests.files import PNG_B64, PNG_RAW
 
 from .common import apply_iap_result
 
@@ -743,69 +744,51 @@ class TestAIDirectParity(TransactionCase):
         self.assertEqual(direct_response.call_count, 2)
         self.assertEqual(self._loop_snapshot(), loop_snapshot)
 
-    def test_nested_image_generation_remains_direct(self):
+    def test_legacy_image_generation_remains_direct(self):
         image_generation = self.env.ref('ai.ir_actions_server_ai_generate_image')
-        self.session.state = {
-            'available_tools': image_generation.ids,
-        }
-        company_ids = self.env.companies.ids
-        message = self.channel.message_post(
-            body='Draw a callback diagram.',
-            message_type='comment',
-        )
-        session = self.session.with_context(
-            active_company_ids=company_ids,
-            allowed_company_ids=company_ids,
-        )
-        session._prepare_model_request(
-            message._convert_to_parts(),
-            context_snapshot={
-                'active_company_ids': company_ids,
-                'allowed_company_ids': company_ids,
-            },
-        )
-        request_uuid = session.request_uuid
-        event_count = len(session.event_ids)
+        loop_snapshot = self._loop_snapshot()
+        session_count = self.env['ai.session'].search_count([])
         completions = [
-            {'status': 'success', 'result': assistant_text('Need more detail')},
+            {'status': 'success', 'result': {
+                'role': 'assistant',
+                'content': [{
+                    'type': 'tool_call',
+                    'call_id': 'direct-image-generation',
+                    'name': image_generation.ai_tool_name,
+                    'args': {
+                        'prompt': 'Draw a lighthouse.',
+                        'images_paths': [],
+                        'image_title': 'Direct lighthouse',
+                        'feedback': 'Here is your lighthouse.',
+                        'aspect_ratio': '16:9',
+                    },
+                }],
+            }},
+            {'status': 'success', 'result': {
+                'role': 'assistant',
+                'content': [{'type': 'inline_data', 'data': PNG_B64, 'mimetype': 'image/png'}],
+            }},
         ]
-        with patch.object(
-            AiSession, '_get_completions', side_effect=completions,
-        ) as direct_completion:
-            outcome = apply_iap_result(session, request_uuid, {
-                'request_uuid': request_uuid,
-                'status': 'success',
-                'result': {
-                    'role': 'assistant',
-                    'content': [
-                        {
-                            'type': 'tool_call',
-                            'call_id': 'nested-image-generation',
-                            'name': image_generation.ai_tool_name,
-                            'args': {
-                                'prompt': 'Draw a callback diagram.',
-                                'images_paths': [],
-                                'image_title': 'Callback diagram',
-                                'feedback': 'Here is the diagram.',
-                                'aspect_ratio': '1:1',
-                            },
-                        },
-                    ],
-                },
-            })
+        with patch.object(AiSession, '_get_completions', side_effect=completions) as direct_completion:
+            response = self.env['ai.session']._get_direct_response(
+                instructions='Generate the requested image directly.',
+                message=[{'type': 'text', 'text': 'Draw a lighthouse.'}],
+                tools=image_generation,
+            )
 
-        self.assertEqual(outcome['response']['responseState'], 'idle')
-        self.assertEqual(session.loop_state, 'ready')
-        self.assertEqual(session.request_uuid, request_uuid)
-        self.assertEqual(direct_completion.call_count, 1)
-        self.assertEqual(len(session.event_ids), event_count + 2)
-        tool_results = session.event_ids.sorted('id')[-1].metadata['content']
-        self.assertEqual(
-            [part['tool_call_id'] for part in tool_results],
-            ['nested-image-generation'],
-        )
-        self.assertTrue(all(part['success'] for part in tool_results))
-        self.assertIn('Need more detail', session.channel_id.message_ids[0].body)
+        self.assertEqual(direct_completion.call_count, 2)
+        image_call = direct_completion.call_args_list[1]
+        self.assertIs(image_call.kwargs['image_generation'], True)
+        self.assertIs(image_call.kwargs['web_grounding'], False)
+        self.assertEqual(image_call.kwargs['aspect_ratio'], '16:9')
+        self.assertEqual(image_call.kwargs['timeout'], 115)
+        self.assertFalse(image_call.args[2])
+        self.assertEqual(response[0], {'type': 'text', 'text': 'Here is your lighthouse.'})
+        attachment = self.env['ir.attachment'].browse(response[1]['metadata']['attachment_id'])
+        self.assertEqual(attachment.raw.content, PNG_RAW)
+        self.assertEqual(response[1]['metadata']['image_path'], f'/web/image/ir.attachment/{attachment.id}/raw')
+        self.assertEqual(self._loop_snapshot(), loop_snapshot)
+        self.assertEqual(self.env['ai.session'].search_count([]), session_count)
 
     def test_legacy_web_search_remains_direct(self):
         web_search = self.env.ref('ai.ir_actions_server_ai_web_search')
