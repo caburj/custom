@@ -42,11 +42,11 @@ class TestAIAutomationCallback(HttpCase):
 
         with (
             patch(
-                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                 return_value=None,
             ) as transport,
             patch(
-                'odoo.addons.ai.utils.session_env.get_odoo_ai_connection_data',
+                'odoo.addons.ai.models.ai_session.get_odoo_ai_connection_data',
                 side_effect=observe_submission_environment,
             ),
         ):

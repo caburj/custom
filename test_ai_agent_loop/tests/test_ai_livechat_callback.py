@@ -89,7 +89,7 @@ ai['result'] = {
         self.authenticate('admin', 'admin')
 
         with patch(
-            "odoo.addons.ai.utils.session_env.call_odoo_ai_transport",
+            "odoo.addons.ai.models.ai_session.call_odoo_ai_transport",
             side_effect=accept_submitted_request,
         ) as submit:
             response = self.url_open(
@@ -191,7 +191,7 @@ ai['result'] = {
         )
 
         with patch(
-            "odoo.addons.ai.utils.session_env.call_odoo_ai_transport",
+            "odoo.addons.ai.models.ai_session.call_odoo_ai_transport",
             side_effect=accept_submitted_request,
         ):
             resume_response = self.url_open(
@@ -227,7 +227,7 @@ ai['result'] = {
         self.opener.cookies.set(cookie_name, guest_token)
 
         with patch(
-            "odoo.addons.ai.utils.session_env.call_odoo_ai_transport",
+            "odoo.addons.ai.models.ai_session.call_odoo_ai_transport",
             side_effect=accept_submitted_request,
         ):
             response = self.url_open(
@@ -302,7 +302,7 @@ else:
             self.opener.cookies.set(cookie_name, guest_token)
         route_prefix = '/ai/cors' if cors else '/ai'
         guest_args = {'guest_token': guest_token} if cors else {}
-        with patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+        with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                    side_effect=accept_submitted_request):
             started = self.url_open(f'{route_prefix}/start_session_advance', json=self.build_rpc_payload({
                 **guest_args, 'channel_id': channel_id, 'mail_message_id': message_id,
@@ -359,7 +359,7 @@ else:
         with (
             mute_logger('odoo.http'),
             patch.object(self.registry['ai.session'], '_resume_pending_interaction', observe_reply_actor),
-            patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                   side_effect=accept_submitted_request) as submit,
         ):
             if not cors:

@@ -22,7 +22,6 @@ from odoo.addons.ai.utils.ai_utils import (
     IAP_TRANSPORT_TIMEOUT,
     UserInputResponse,
 )
-from odoo.addons.ai.utils.session_env import submit_prepared_request
 
 from .common import apply_iap_result
 
@@ -109,7 +108,7 @@ class TestAISessionLoopHttp(HttpCase):
     def _submit_prepared(self, prepared):
         with self.registry.cursor() as cr:
             env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
-            return submit_prepared_request(env, prepared)
+            return env['ai.session'].browse(prepared['session_id'])._submit_prepared_request(prepared['request_uuid'])
 
     def _create_committed_prepared_session(self, label, *, auto_confirm=False):
         with self.registry.cursor() as cr:
@@ -396,7 +395,7 @@ class TestAISessionLoopHttp(HttpCase):
                 side_effect=observe_caller_environment,
             ),
             patch(
-                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                 side_effect=accept_submitted_request,
             ),
         ):
@@ -417,7 +416,7 @@ class TestAISessionLoopHttp(HttpCase):
                 body='Wrong channel', message_type='comment',
             ).id
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
         ) as transport:
             rejected = self._start_session_advance(
                 self.env['mail.message'].browse(foreign_message_id),
@@ -432,7 +431,7 @@ class TestAISessionLoopHttp(HttpCase):
             'Show me products',
         ))
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
             side_effect=accept_submitted_request,
         ):
             response = self._start_session_advance(message)
@@ -457,7 +456,7 @@ class TestAISessionLoopHttp(HttpCase):
         prompt_button = self.env.ref('ai.ai_prompt_customer_new_jersey')
 
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
             side_effect=accept_submitted_request,
         ) as submit:
             response = self._start_session_advance(
@@ -482,7 +481,7 @@ class TestAISessionLoopHttp(HttpCase):
         message = self.env['mail.message'].browse(self._post_committed_prompt('Hi'))
 
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
             side_effect=accept_submitted_request,
         ) as submit:
             advance_response = self._start_session_advance(message)
@@ -592,7 +591,7 @@ class TestAISessionLoopHttp(HttpCase):
                 side_effect=fail_before_first_send,
             ),
             patch(
-                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                 side_effect=accept_submitted_request,
             ) as transport,
         ):
@@ -668,7 +667,7 @@ class TestAISessionLoopHttp(HttpCase):
             },
         }
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
             side_effect=accept_submitted_request,
         ):
             created = self._post_completion_callback({
@@ -704,7 +703,7 @@ class TestAISessionLoopHttp(HttpCase):
             },
         }
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
             side_effect=accept_submitted_request,
         ):
             updated = self._post_completion_callback({
@@ -744,7 +743,7 @@ class TestAISessionLoopHttp(HttpCase):
         ]))
 
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
             side_effect=accept_submitted_request,
         ) as submit:
             response = self._resume_pending_confirmation(confirmation)
@@ -783,7 +782,7 @@ class TestAISessionLoopHttp(HttpCase):
         with (
             mute_logger('odoo.http'),
             patch(
-                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                 side_effect=fail_first_send,
             ) as transport,
         ):
@@ -838,7 +837,7 @@ class TestAISessionLoopHttp(HttpCase):
         self.opener.cookies['cids'] = str(resumed_company_id)
         try:
             with patch(
-                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                 side_effect=accept_submitted_request,
             ):
                 response = self._resume_pending_confirmation(
@@ -868,7 +867,7 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertIn('fresh-browser-view', str(session.request_payload['messages']))
 
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
         ) as transport:
             duplicate = self._resume_pending_confirmation(confirmation)
 
@@ -926,11 +925,11 @@ class TestAISessionLoopHttp(HttpCase):
                 autospec=True, side_effect=observe_activation_environment,
             ),
             patch(
-                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                 side_effect=accept_submitted_request,
             ),
             patch(
-                'odoo.addons.ai.utils.session_env.get_odoo_ai_connection_data',
+                'odoo.addons.ai.models.ai_session.get_odoo_ai_connection_data',
                 side_effect=observe_submission_environment,
             ),
         ):
@@ -957,7 +956,7 @@ class TestAISessionLoopHttp(HttpCase):
         confirmation = self._create_committed_confirmation('HTTP Rejected Contact')
         another = self._create_committed_confirmation('HTTP Other Contact')
 
-        with patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport') as transport:
+        with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport') as transport:
             stale_token = self._resume_pending_confirmation(
                 confirmation, resume_token='an-already-consumed-resume-token',
             )
@@ -1013,7 +1012,7 @@ class TestAISessionLoopHttp(HttpCase):
         self.authenticate('admin', 'admin')
         confirmation = self._create_committed_confirmation('HTTP Declined Contact')
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
         ) as transport:
             response = self._resume_pending_confirmation(
                 confirmation,
@@ -1042,7 +1041,7 @@ class TestAISessionLoopHttp(HttpCase):
 
         with (
             patch(
-                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
             ) as transport,
             self.assertRaises(MissingError),
         ):
@@ -1074,7 +1073,7 @@ class TestAISessionLoopHttp(HttpCase):
             return None
 
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
             side_effect=fail_first_send,
         ):
             with self.assertRaises(requests.ConnectionError):
@@ -1137,7 +1136,7 @@ class TestAISessionLoopHttp(HttpCase):
             'Trust null transport response',
         )
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
             return_value=None,
         ) as transport:
             acknowledgement = self._submit_prepared({
@@ -1171,7 +1170,7 @@ class TestAISessionLoopHttp(HttpCase):
         )
         with (
             patch(
-                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                 side_effect=InsufficientCreditError,
             ),
             patch.object(
@@ -1206,12 +1205,12 @@ class TestAISessionLoopHttp(HttpCase):
             env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
             with (
                 patch(
-                    'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                    'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                     side_effect=accept_submitted_request,
                 ),
                 patch.object(cr, 'commit') as commit,
             ):
-                acknowledgement = submit_prepared_request(env, prepared)
+                acknowledgement = env['ai.session'].browse(prepared['session_id'])._submit_prepared_request(prepared['request_uuid'])
                 commit.assert_not_called()
 
         self.assertEqual(acknowledgement['request_uuid'], prepared['request_uuid'])
@@ -1258,12 +1257,12 @@ class TestAISessionLoopHttp(HttpCase):
         with (
             raw_cursor() as cr,
             patch(
-                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                 side_effect=observe_submit,
             ),
         ):
             env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
-            acknowledgement = submit_prepared_request(env, prepared)
+            acknowledgement = env['ai.session'].browse(prepared['session_id'])._submit_prepared_request(prepared['request_uuid'])
 
         self.assertEqual(acknowledgement['request_uuid'], prepared['request_uuid'])
         with raw_cursor() as cr:

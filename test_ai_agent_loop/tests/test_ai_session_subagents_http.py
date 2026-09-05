@@ -133,7 +133,7 @@ class TestAISessionSubagentsHttp(HttpCase):
                 mute_logger('odoo.http'),
                 patch.object(AIThreadController, '_deliver_subagent_result',
                              autospec=True, side_effect=stop_before_first_merge),
-                patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                       return_value=None) as transport,
             ):
                 self.assertEqual(self._callback(child_uuid, 'Durable answer').status_code, 500)
@@ -224,7 +224,7 @@ class TestAISessionSubagentsHttp(HttpCase):
                              autospec=True, side_effect=synchronize_committed_children),
                 patch.object(self.registry['ai.session'], '_continue', observe_settlement),
                 patch.object(self.registry['ai.session'], '_merge_child_result', observe_parent_contention),
-                patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                       side_effect=submit_after_release) as transport,
                 self.allow_requests(all_requests=True),
                 ThreadPoolExecutor(max_workers=2) as pool,
@@ -249,7 +249,7 @@ class TestAISessionSubagentsHttp(HttpCase):
             child_id, child_uuid = fixture['children'][0]
             waiting = self._snapshot(fixture['parent_id'])
             self.assertEqual(waiting['loop_state'], 'waiting_confirmation')
-            with patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
                        return_value=None) as transport:
                 self.assertEqual(self._callback(child_uuid, 'Done while awaiting approval').status_code, 200)
                 filled = self._snapshot(fixture['parent_id'])
@@ -413,7 +413,7 @@ class TestAISessionSubagentsHttp(HttpCase):
                 patch.object(session_model, '_merge_child_result', observe_merge),
                 patch.object(session_model, '_resume_pending_interaction', observe_resume),
                 patch.object(self.registry['ir.actions.server'], '_ai_tool_run', count_confirmed_tool),
-                patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport', side_effect=submit_after_unlock) as transport,
+                patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', side_effect=submit_after_unlock) as transport,
                 patch('odoo.http.retrying.MAX_TRIES_ON_CONCURRENCY_FAILURE', 1),
                 self.allow_requests(all_requests=True),
                 ThreadPoolExecutor(max_workers=2) as pool,
@@ -536,7 +536,7 @@ class TestAISessionSubagentsHttp(HttpCase):
             with (
                 mute_logger('odoo.http'),
                 patch.object(self.registry['ai.session'], '_merge_child_result', stop_between_parent_edges),
-                patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport', return_value=None) as transport,
+                patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None) as transport,
             ):
                 self.assertEqual(self._callback(grandchild_uuid, 'Nested answer').status_code, 500)
                 parent = self._snapshot(parent_id)
@@ -590,7 +590,7 @@ class TestAISessionSubagentsHttp(HttpCase):
 
             with (
                 patch.object(self.registry['ai.session'], '_build_tools_context', hold_child_with_old_approval),
-                patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport', return_value=None) as transport,
+                patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None) as transport,
                 self.allow_requests(all_requests=True),
                 ThreadPoolExecutor(max_workers=1) as pool,
             ):
@@ -656,7 +656,7 @@ class TestAISessionSubagentsHttp(HttpCase):
                 mute_logger('odoo.http'),
                 patch.object(AIThreadController, '_resume_auto_confirmations',
                              autospec=True, side_effect=interrupt_first_sweep),
-                patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport', return_value=None) as transport,
+                patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None) as transport,
             ):
                 failed = self.url_open('/ai/resume_pending_interaction', json=payload)
                 self.assertIn('error', failed.json())

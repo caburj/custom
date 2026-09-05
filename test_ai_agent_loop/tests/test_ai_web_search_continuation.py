@@ -17,7 +17,7 @@ from odoo.addons.iap import InsufficientCreditError
 from .common import apply_iap_result
 
 
-TRANSPORT = 'odoo.addons.ai.utils.session_env.call_odoo_ai_transport'
+TRANSPORT = 'odoo.addons.ai.models.ai_session.call_odoo_ai_transport'
 SEARCH_SOURCE = {'url': 'https://example.com/search', 'source_name': 'example.com'}
 
 

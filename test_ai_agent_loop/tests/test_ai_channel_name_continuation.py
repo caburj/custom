@@ -224,7 +224,7 @@ class TestAIChannelNameContinuationHttp(HttpCase):
             return accept_submitted_request(_connection, route, payload)
 
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
             side_effect=observe_submission,
         ):
             response = self._start_session_advance(chat)
@@ -260,7 +260,7 @@ class TestAIChannelNameContinuationHttp(HttpCase):
             return None
 
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
             side_effect=submit,
         ):
             response = self._start_session_advance(chat)
@@ -281,7 +281,7 @@ class TestAIChannelNameContinuationHttp(HttpCase):
 
         with (
             patch(
-                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
             ) as transport,
         ):
             response = self._start_session_advance(chat)
@@ -295,7 +295,7 @@ class TestAIChannelNameContinuationHttp(HttpCase):
         self.authenticate('admin', 'admin')
         chat = self._create_committed_chat('Retry this title')
         with patch(
-            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
             side_effect=accept_submitted_request,
         ):
             self._start_session_advance(chat)
