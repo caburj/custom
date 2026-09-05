@@ -147,7 +147,7 @@ ai['result'] = {'client_tool': {'name': 'web_search_fixture_client', 'params': {
         ) as direct:
             outcome = apply_iap_result(session, session.request_uuid, {
                 'kind': 'success', 'message': message,
-            })
+            }, deliver_child=True)
         direct.assert_not_called()
         return outcome
 
@@ -189,8 +189,11 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         })
         self.assertEqual(parent.pending_tool_call['call_id'], 'search')
         self.assertEqual(
-            [part['tool_call_id'] for part in parent.pending_tool_call['pending_results']], ['prefix'],
+            [part['tool_call_id'] for part in parent.pending_tool_call['pending_results']], ['prefix', 'search'],
         )
+        self.assertEqual(parent.pending_tool_call['pending_results'][-1], {
+            'tool_name': self.tool_names['search'], 'tool_call_id': 'search', 'child_session_id': child.id,
+        })
         self._assert_prefix_once(parent)
         self.assertNotIn('suffix_runs', parent.state)
         self.assertEqual(child.parent_session_id, parent)
@@ -235,6 +238,7 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         self.assertEqual(child.loop_state, 'ready')
         self.assertFalse(child.request_phase)
         self.assertEqual(child.request_result['message'], search_message)
+        self.assertFalse(child.exchange_result)
         self.assertEqual(resumed['prepared']['session_id'], parent.id)
         self.assertNotEqual(parent.request_uuid, self.parent_request_uuid)
         self.assertEqual(parent.previous_request_uuid, child.request_uuid)
@@ -278,8 +282,11 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         self.assertEqual(len(parent.event_ids), 2)
         self.assertEqual(
             [part['tool_call_id'] for part in parent.pending_tool_call['pending_results']],
-            ['prefix', 'first-search'],
+            ['prefix', 'first-search', 'second-search'],
         )
+        self.assertEqual(parent.pending_tool_call['pending_results'][-1], {
+            'tool_name': self.tool_names['search'], 'tool_call_id': 'second-search', 'child_session_id': second.id,
+        })
         self._assert_prefix_once(parent)
         self.assertNotIn('suffix_runs', parent.state)
 
@@ -329,7 +336,7 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         outcome = self._apply_calls([self._call('prefix'), self._call('search'), self._call('suffix')])
         child = self._session(outcome['prepared']['session_id'])
         failure = {'kind': 'failure', 'code': 'request_failed'}
-        finished = apply_iap_result(child, child.request_uuid, failure)
+        finished = apply_iap_result(child, child.request_uuid, failure, deliver_child=True)
         parent = self._session()
 
         self.assertEqual(finished['response'], {
@@ -340,34 +347,131 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         self.assertFalse(parent.pending_tool_call)
         self.assertFalse(parent.request_phase)
         self.assertEqual(child.request_result, failure)
+        self.assertFalse(child.exchange_result)
         results = self._results(parent)
         self.assertEqual([part['tool_call_id'] for part in results], ['prefix', 'search', 'suffix'])
         self.assertEqual([part['success'] for part in results], [True, False, False])
         self._assert_prefix_once(parent)
         self.assertNotIn('suffix_runs', parent.state)
         counts = (len(parent.event_ids), len(parent.channel_id.message_ids))
-        apply_iap_result(child, child.request_uuid, failure)
+        apply_iap_result(child, child.request_uuid, failure, deliver_child=True)
         self.assertEqual((len(parent.event_ids), len(parent.channel_id.message_ids)), counts)
 
     def test_search_continuation_matches_the_pending_parent_call(self):
         outcome = self._apply_calls([self._call('prefix'), self._call('search'), self._call('suffix')])
         parent = self._session()
         child = self._session(outcome['prepared']['session_id'])
-        child._store_request_result(child.request_uuid, {
+        result = {
             'kind': 'success', 'message': assistant_text('Stored search result'),
-        })
+        }
+        apply_iap_result(child, child.request_uuid, result)
+        self.assertEqual(child.loop_state, 'ready')
+        self.assertEqual(child.request_result, result)
+        self.assertFalse(child.exchange_result)
         pending = copy.deepcopy(parent.pending_tool_call)
         parent.pending_tool_call = {**pending, 'call_id': 'different-call'}
         with self.assertRaises(UserError), self.env.cr.savepoint():
-            child._continue(child.request_uuid)
-        self.assertEqual(child.loop_state, 'waiting_model')
-        self.assertTrue(child.request_result)
+            apply_iap_result(child, child.request_uuid, result, deliver_child=True)
+        self.assertEqual(child.loop_state, 'ready')
+        self.assertEqual(child.request_result, result)
         self.assertEqual(parent.loop_state, 'waiting_child')
+        self.assertEqual(parent.pending_tool_call['pending_results'], pending['pending_results'])
         self.assertNotIn('suffix_runs', parent.state)
         parent.pending_tool_call = pending
-        child._continue(child.request_uuid)
+        apply_iap_result(child, child.request_uuid, result, deliver_child=True)
         self._assert_prefix_once(parent)
         self.assertEqual(parent.state['suffix_runs'], 1)
+
+    def test_completed_conversational_child_does_not_bypass_pending_search(self):
+        parent = self._session()
+        parent.agent_id.allowed_agent_ids = parent.agent_id
+        outcome = self._apply_calls([
+            self._call('prefix'), {
+                'type': 'tool_call', 'name': 'start_session', 'call_id': 'earlier-child',
+                'args': {'agent_id': parent.agent_id.id, 'message': 'Complete the earlier work.'},
+            }, self._call('search'), self._call('suffix'),
+        ])
+        search = self._session(outcome['prepared']['session_id'])
+        child = parent.search([('parent_session_id', '=', parent.id), ('agent_id', '!=', False)])
+        child_message = assistant_text('Earlier work complete')
+        self._apply(child, child_message)
+
+        self.assertEqual(parent.loop_state, 'waiting_child')
+        self.assertEqual(parent.request_uuid, self.parent_request_uuid)
+        self.assertEqual(parent.pending_tool_call['call_id'], 'search')
+        pending = parent.pending_tool_call['pending_results']
+        self.assertEqual([part['tool_call_id'] for part in pending], ['prefix', 'earlier-child', 'search'])
+        self.assertTrue(pending[1]['success'])
+        self.assertNotIn('child_session_id', pending[1])
+        self.assertEqual(pending[-1]['child_session_id'], search.id)
+        self.assertNotIn('suffix_runs', parent.state)
+        self._assert_prefix_once(parent)
+
+        search_message = assistant_text('Search complete', {'abcd': SEARCH_SOURCE})
+        self._apply(search, search_message)
+        self.assertEqual(parent.request_phase, 'prepared')
+        self.assertEqual(parent.request_round, 2)
+        self.assertEqual([part['tool_call_id'] for part in self._results(parent)], [
+            'prefix', 'earlier-child', 'search', 'suffix',
+        ])
+        self.assertTrue(all(part['success'] for part in self._results(parent)))
+        self.assertEqual(parent.state['web_sources']['abcd'], SEARCH_SOURCE)
+        self.assertEqual(parent.state['suffix_runs'], 1)
+        counts = (len(parent.event_ids), len(parent.channel_id.message_ids))
+        self._apply(child, child_message)
+        self._apply(search, search_message)
+        self.assertEqual((len(parent.event_ids), len(parent.channel_id.message_ids)), counts)
+        self.assertEqual(parent.state['suffix_runs'], 1)
+        self._assert_prefix_once(parent)
+
+    def test_search_failure_aborts_suffix_and_retains_running_conversational_child(self):
+        parent = self._session()
+        parent.agent_id.allowed_agent_ids = parent.agent_id
+        outcome = self._apply_calls([
+            self._call('prefix'), {
+                'type': 'tool_call', 'name': 'start_session', 'call_id': 'earlier-child',
+                'args': {'agent_id': parent.agent_id.id, 'message': 'Complete the earlier work.'},
+            }, self._call('search'), self._call('suffix'),
+        ])
+        search = self._session(outcome['prepared']['session_id'])
+        child = parent.search([('parent_session_id', '=', parent.id), ('agent_id', '!=', False)])
+        failure = {'kind': 'failure', 'code': 'request_failed'}
+        apply_iap_result(search, search.request_uuid, failure, deliver_child=True)
+
+        self.assertEqual(search.loop_state, 'ready')
+        self.assertEqual(search.request_result, failure)
+        self.assertFalse(search.exchange_result)
+        self.assertEqual(child.loop_state, 'waiting_model')
+        self.assertFalse(child.request_result)
+        self.assertEqual(parent.loop_state, 'waiting_child')
+        self.assertEqual(parent.pending_tool_call['exchange_status'], 'failed')
+        self.assertNotIn('call_id', parent.pending_tool_call)
+        pending = copy.deepcopy(parent.pending_tool_call)
+        results = pending['pending_results']
+        self.assertEqual([part['tool_call_id'] for part in results], ['prefix', 'earlier-child', 'search', 'suffix'])
+        self.assertEqual(results[1]['child_session_id'], child.id)
+        self.assertEqual([part['success'] for part in results[2:]], [False, False])
+        self.assertNotIn('suffix_runs', parent.state)
+        apply_iap_result(search, search.request_uuid, failure, deliver_child=True)
+        self.assertEqual(parent.pending_tool_call, pending)
+
+        child_message = assistant_text('Earlier work complete')
+        self._apply(child, child_message)
+        self.assertEqual(child.loop_state, 'ready')
+        self.assertEqual(parent.loop_state, 'ready')
+        self.assertFalse(parent.request_phase)
+        self.assertFalse(parent.pending_tool_call)
+        self.assertEqual(parent.request_round, 1)
+        self.assertEqual([part['tool_call_id'] for part in self._results(parent)], [
+            'prefix', 'earlier-child', 'search', 'suffix',
+        ])
+        self.assertEqual([part['success'] for part in self._results(parent)], [True, True, False, False])
+        counts = (len(parent.event_ids), len(parent.channel_id.message_ids))
+        self._apply(child, child_message)
+        apply_iap_result(search, search.request_uuid, failure, deliver_child=True)
+        self.assertEqual((len(parent.event_ids), len(parent.channel_id.message_ids)), counts)
+        self.assertNotIn('suffix_runs', parent.state)
+        self._assert_prefix_once(parent)
 
 
 @tagged('post_install', '-at_install')
@@ -658,15 +762,15 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
         self.assertEqual(response.status_code, 200)
         child = self._child()
         message = assistant_text('Retained search result', {'abcd': SEARCH_SOURCE})
-        original_continue = AiSession._continue_web_search
+        original_apply = AiSession._apply_web_search_child
 
-        def fail_after_effect(session):
-            original_continue(session)
+        def fail_after_effect(parent, search):
+            original_apply(parent, search)
             raise RuntimeError('roll back the search continuation')
 
         with (
             mute_logger('odoo.http'),
-            patch.object(AiSession, '_continue_web_search', autospec=True, side_effect=fail_after_effect),
+            patch.object(AiSession, '_apply_web_search_child', autospec=True, side_effect=fail_after_effect),
             patch(TRANSPORT) as submit,
         ):
             failed = self._post_callback(child.request_uuid, message)
@@ -674,11 +778,20 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
         submit.assert_not_called()
         child = self._fresh_session(child.id)
         self.assertEqual(child.request_result, {'kind': 'success', 'message': message})
-        self.assertEqual(child.loop_state, 'waiting_model')
+        self.assertEqual(child.loop_state, 'ready')
+        self.assertFalse(child.request_phase)
+        self.assertFalse(child.exchange_result)
         parent = self._fresh_session()
         self.assertEqual(parent.loop_state, 'waiting_child')
+        self.assertEqual(parent.pending_tool_call['call_id'], 'search')
+        self.assertEqual(parent.pending_tool_call['pending_results'][-1], {
+            'tool_name': self.tool_names['search'], 'tool_call_id': 'search', 'child_session_id': child.id,
+        })
+        self.assertNotIn('abcd', parent.state['web_sources'])
         self.assertNotIn('suffix_runs', parent.state)
         self._assert_prefix_once(parent)
+        partner = self.env['res.partner'].browse(parent.state['prefix_partner_ids'])
+        self.assertFalse(partner.comment)
 
         with patch(TRANSPORT, return_value=None) as submit:
             redelivered = self._post_callback(child.request_uuid, message)
@@ -691,6 +804,7 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
         self._assert_prefix_once(parent)
         partner = self.env['res.partner'].browse(parent.state['prefix_partner_ids'])
         self.assertEqual(partner.write_uid.id, self.actor_id)
+        self.assertIn('Suffix executed', partner.comment)
         self.assertEqual(self._fresh_session(child.id).loop_state, 'ready')
 
     def test_confirmation_to_search_keeps_parent_acknowledgement_and_fresh_context(self):
