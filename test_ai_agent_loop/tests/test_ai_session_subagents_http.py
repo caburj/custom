@@ -4,18 +4,24 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
-from threading import Barrier, Event
+from threading import Barrier, Event, current_thread
 from unittest.mock import patch
 
 import requests
+from werkzeug.test import EnvironBuilder
+from werkzeug.wrappers import Request as WerkzeugRequest
 
 from odoo import Command, api, http
+from odoo.http.requestlib import Request as HttpRequest
 from odoo.tests import HttpCase, tagged
-from odoo.tools import mute_logger
+from odoo.tools import SQL, mute_logger
 
 from .common import apply_iap_result
 from .test_ai_session_subagents import tool_call
-from odoo.addons.ai.controllers.thread import AIThreadController
+from odoo.addons.ai.controllers.thread import (
+    AI_SESSION_LOCK_NAMESPACE,
+    AIThreadController,
+)
 
 
 @tagged('post_install', '-at_install')
@@ -115,6 +121,69 @@ class TestAISessionSubagentsHttp(HttpCase):
     def _results(self, snapshot):
         return [part for message in snapshot['payload']['messages']
                 for part in message['content'] if part.get('type') == 'tool_result']
+
+    def test_locked_actor_checkpoint_cleans_up_after_unlock_failure(self):
+        actor_id = self.env.ref('base.user_admin').id
+        caller_id = self.env.ref('base.public_user').id
+        with self._physical_tree() as fixture:
+            lock_key = (AI_SESSION_LOCK_NAMESPACE, fixture['parent_id'])
+            for fail_forever in (False, True):
+                with (
+                    self.subTest(fail_forever=fail_forever),
+                    self.registry._db.cursor() as observer,
+                    self.registry._db.cursor() as cr,
+                    patch.object(current_thread(), 'uid', caller_id, create=True),
+                ):
+                    builder = EnvironBuilder(path='/ai/completion_result_ready', method='POST')
+                    incoming_request = HttpRequest(WerkzeugRequest(builder.get_environ()))
+                    builder.close()
+                    incoming_request.registry = self.registry
+                    incoming_request.env = api.Environment(cr, caller_id, {'lang': 'en_US'}, su=False)
+                    incoming_request.update_env()
+                    caller_env = incoming_request.env
+                    request_token = http.request_var.set(incoming_request)
+                    execute = cr.execute
+                    unlock_attempts = 0
+                    business_callbacks = []
+
+                    def fail_unlock(query, *args, **kwargs):
+                        nonlocal unlock_attempts
+                        if 'pg_advisory_unlock(' in (query._sql_tuple[0] if isinstance(query, SQL) else query):
+                            unlock_attempts += 1
+                            if fail_forever or unlock_attempts == 1:
+                                message = 'advisory unlock failed'
+                                raise RuntimeError(message)
+                        return execute(query, *args, **kwargs)
+
+                    try:
+                        with (
+                            patch.object(cr, 'execute', side_effect=fail_unlock),
+                            self.assertRaisesRegex(RuntimeError, 'advisory unlock failed'),
+                            AIThreadController()._locked_actor_checkpoint(fixture['parent_id']) as env,
+                        ):
+                            actor_env = env
+                            actor_default_env = env.transaction.default_env
+                            actor_thread_uid = current_thread().uid
+                            observer.execute('SELECT pg_try_advisory_lock(%s, %s)', lock_key)
+                            lock_available_during_checkpoint = observer.fetchone()[0]
+                            env.cr.postcommit.add(lambda: business_callbacks.append('business'))
+
+                        self.assertIs(actor_env.cr, cr)
+                        self.assertEqual(actor_env.uid, actor_id)
+                        self.assertIs(actor_default_env, actor_env)
+                        self.assertEqual(actor_thread_uid, actor_id)
+                        self.assertFalse(lock_available_during_checkpoint)
+                        self.assertFalse(business_callbacks)
+                        self.assertIs(http.request.env, caller_env)
+                        self.assertIs(cr.transaction.default_env, caller_env)
+                        self.assertEqual(current_thread().uid, caller_id)
+                        self.assertEqual(cr.closed, fail_forever)
+                        # The observer stays open throughout cleanup, so it cannot reuse the owner connection.
+                        observer.execute('SELECT pg_try_advisory_lock(%s, %s)', lock_key)
+                        self.assertTrue(observer.fetchone()[0])
+                        observer.execute('SELECT pg_advisory_unlock(%s, %s)', lock_key)
+                    finally:
+                        http.request_var.reset(request_token)
 
     def test_callback_replay_delivers_a_committed_child_after_interrupted_merge(self):
         with self._physical_tree() as fixture:
