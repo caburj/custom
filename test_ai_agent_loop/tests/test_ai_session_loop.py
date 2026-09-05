@@ -6,10 +6,11 @@ from textwrap import dedent
 from unittest.mock import patch
 
 from psycopg2 import IntegrityError
+from psycopg2.errors import SerializationFailure
 
 from odoo import Command
 from odoo.tests import new_test_user, tagged, TransactionCase
-from odoo.exceptions import AccessError, MissingError, UserError
+from odoo.exceptions import AccessError, ConcurrencyError, MissingError, UserError
 from odoo.tools import mute_logger
 
 from odoo.addons.ai.controllers.thread import AIThreadController
@@ -80,6 +81,19 @@ class TestAISessionLoop(TransactionCase):
             'use_in_ai': True,
             'code': code,
         })
+
+    def test_tool_runner_bubbles_retryable_concurrency(self):
+        tool = self._create_test_tool('retryable_tool', "ai['result'] = 'ok'")
+        tool_call = {'type': 'tool_call', 'call_id': 'retryable', 'name': tool.ai_tool_name, 'args': {}}
+        for error in (SerializationFailure('retry tool'), ConcurrencyError('retry tool')):
+            with (
+                self.subTest(error=type(error).__name__),
+                patch.object(self.env.registry['ir.actions.server'], '_ai_tool_run', side_effect=error),
+                self.assertRaises(type(error)),
+            ):
+                list(self.session._handle_tool_calls(
+                    [tool_call], {tool.ai_tool_name: tool}, {'auto_confirm': True, 'state': {}}, None,
+                ))
 
     def _apply_iap_tool_call(self, session, request_uuid, tool, call_id, args):
         return apply_iap_result(session, request_uuid, {

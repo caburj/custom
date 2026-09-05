@@ -1,18 +1,19 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+import copy
 from contextlib import nullcontext
 from threading import current_thread
 from unittest.mock import patch
 
 import requests
-from psycopg2.errors import LockNotAvailable
 from werkzeug.test import EnvironBuilder
 from werkzeug.wrappers import Request as WerkzeugRequest
 
 from odoo import api, Command, http
-from odoo.exceptions import LockError, MissingError
+from odoo.exceptions import MissingError
 from odoo.http.requestlib import Request as HttpRequest
 from odoo.tests import HttpCase, new_test_user, tagged
+from odoo.tools import mute_logger
 
 from odoo.addons.iap import InsufficientCreditError
 from odoo.addons.ai.controllers.thread import AIThreadController
@@ -137,6 +138,7 @@ class TestAISessionLoopHttp(HttpCase):
             return {
                 'session_id': session.id,
                 'request_uuid': session.request_uuid,
+                'request_webhook_token': session.request_webhook_token,
                 'request_payload': session.request_payload,
                 'event_count': len(session.event_ids),
             }
@@ -209,6 +211,23 @@ class TestAISessionLoopHttp(HttpCase):
             json=self.build_rpc_payload(values),
         )
 
+    def _create_contact_tool_call(self, label, call_id):
+        tool = self.env.ref('ai.ir_actions_server_create_records')
+        return {
+            'type': 'tool_call',
+            'call_id': call_id,
+            'name': tool.ai_tool_name,
+            'args': {
+                'explanation': f'Create {label}.',
+                'model_name': 'res.partner',
+                'preview_menu_id': False,
+                'values': [{'field_values': [{
+                    'field': 'name',
+                    'value': label,
+                }]}],
+            },
+        }
+
     def test_callback_restores_request_and_default_environment_on_same_cursor(self):
         prepared = self._create_committed_prepared_session(
             'Request actor environment',
@@ -246,6 +265,39 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(
             observed['context'], session.request_context,
         )
+
+    def test_callback_rechecks_actor_company_before_storing_result(self):
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
+            company = env['res.company'].create({'name': 'Revoked callback company'})
+            env.user.company_ids = [Command.link(company.id)]
+            channel = env['ai.agent'].browse(self.agent_id)._create_ai_chat_channel('Revoked callback')
+            session = env['ai.session'].sudo().create({
+                'agent_id': self.agent_id,
+                'channel_id': channel.id,
+            })
+            message = channel.message_post(body='Revoked callback', message_type='comment')
+            context_snapshot = {
+                'allowed_company_ids': [company.id],
+                'active_company_ids': [company.id],
+            }
+            session._prepare_model_request(
+                message._convert_to_parts(), context_snapshot=context_snapshot,
+            )
+            prepared = {'session_id': session.id, 'request_uuid': session.request_uuid}
+            env.user.company_ids = [Command.unlink(company.id)]
+
+        with mute_logger('odoo.http'):
+            response = self._post_completion_callback({
+                'request_uuid': prepared['request_uuid'],
+                'llm_result': {'status': 'success', 'result': assistant_text('Must not be stored')},
+                'llm_error': False,
+            })
+
+        self.assertNotEqual(response.status_code, 200)
+        session = self._get_session(prepared['session_id'])
+        self.assertEqual(session.loop_state, 'waiting_model')
+        self.assertFalse(session.request_result)
 
     def test_actor_transaction_restores_caller_after_commit_or_rollback(self):
         cr = self.env.cr
@@ -513,6 +565,70 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(len(self.ai_session.event_ids), event_count + 1)
         self.assertEqual(len(self.channel.message_ids), message_count + 1)
 
+    def test_ready_replay_submits_the_committed_successor_without_repeating_effects(self):
+        prepared = self._create_committed_prepared_session(
+            'Ready replay after continuation commit', auto_confirm=True,
+        )
+        label = 'Ready checkpoint contact'
+        callback_result = {
+            'role': 'assistant',
+            'content': [self._create_contact_tool_call(label, 'ready-checkpoint-create')],
+        }
+        original_submit_successor = AIThreadController._submit_request_successor
+        submission_attempts = []
+
+        def fail_before_first_send(controller, request_uuid):
+            submission_attempts.append(request_uuid)
+            if len(submission_attempts) == 1:
+                raise RuntimeError('fail after continuation commit')
+            return original_submit_successor(controller, request_uuid)
+
+        with (
+            mute_logger('odoo.http'),
+            patch.object(
+                AIThreadController,
+                '_submit_request_successor',
+                autospec=True,
+                side_effect=fail_before_first_send,
+            ),
+            patch(
+                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                side_effect=accept_submitted_request,
+            ) as transport,
+        ):
+            failed = self._post_completion_callback({
+                'request_uuid': prepared['request_uuid'],
+                'llm_result': {'status': 'success', 'result': callback_result},
+                'llm_error': False,
+            })
+            self.assertEqual(failed.status_code, 500)
+            transport.assert_not_called()
+
+            session = self._get_session(prepared['session_id'])
+            successor_uuid = session.request_uuid
+            successor_token = session.request_webhook_token
+            self.assertNotEqual(successor_uuid, prepared['request_uuid'])
+            self.assertEqual(session.previous_request_uuid, prepared['request_uuid'])
+            self.assertEqual(session.request_phase, 'prepared')
+            self.assertEqual(self.env['res.partner'].search_count([('name', '=', label)]), 1)
+
+            replay = self._post_completion_callback({
+                'request_uuid': prepared['request_uuid'],
+                'llm_result': {'status': 'success', 'result': callback_result},
+                'llm_error': False,
+            })
+
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(submission_attempts, [prepared['request_uuid']] * 2)
+        transport.assert_called_once()
+        payload = transport.call_args.args[2]
+        self.assertEqual(payload['request_uuid'], successor_uuid)
+        self.assertEqual(payload['webhook_token'], successor_token)
+        session = self._get_session(prepared['session_id'])
+        self.assertEqual(session.request_uuid, successor_uuid)
+        self.assertEqual(session.request_phase, 'submitted')
+        self.assertEqual(self.env['res.partner'].search_count([('name', '=', label)]), 1)
+
     def test_callback_rejects_ambiguous_payload(self):
         prepared = self._create_committed_prepared_session(
             'Ambiguous callback payload',
@@ -651,6 +767,57 @@ class TestAISessionLoopHttp(HttpCase):
             ('name', '=', confirmation['label']),
         ]), 1)
 
+    def test_resume_replay_submits_the_existing_successor_without_repeating_effects(self):
+        self.authenticate('admin', 'admin')
+        confirmation = self._create_committed_confirmation(
+            'Resume checkpoint contact',
+        )
+        sent_payloads = []
+
+        def fail_first_send(_connection, _route, payload, **_kwargs):
+            sent_payloads.append(copy.deepcopy(payload))
+            if len(sent_payloads) == 1:
+                raise requests.ConnectionError('fail after resume commit')
+            return None
+
+        with (
+            mute_logger('odoo.http'),
+            patch(
+                'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                side_effect=fail_first_send,
+            ) as transport,
+        ):
+            failed = self._resume_pending_confirmation(confirmation)
+            self.assertIn('error', failed.json())
+
+            session = self._get_session(confirmation['session_id'])
+            successor_uuid = session.request_uuid
+            successor_token = session.request_webhook_token
+            self.assertNotEqual(successor_uuid, confirmation['request_uuid'])
+            self.assertEqual(session.previous_request_uuid, confirmation['request_uuid'])
+            self.assertEqual(session.request_phase, 'prepared')
+            self.assertEqual(self.env['res.partner'].search_count([
+                ('name', '=', confirmation['label']),
+            ]), 1)
+
+            replay = self._resume_pending_confirmation(confirmation)
+
+        self.assertNotIn('error', replay.json())
+        self.assertEqual(replay.json()['result'], {
+            'request_uuid': successor_uuid,
+            'responseState': 'running',
+        })
+        self.assertEqual(transport.call_count, 2)
+        self.assertEqual(sent_payloads[0], sent_payloads[1])
+        self.assertEqual(sent_payloads[0]['request_uuid'], successor_uuid)
+        self.assertEqual(sent_payloads[0]['webhook_token'], successor_token)
+        session = self._get_session(confirmation['session_id'])
+        self.assertEqual(session.request_uuid, successor_uuid)
+        self.assertEqual(session.request_phase, 'submitted')
+        self.assertEqual(self.env['res.partner'].search_count([
+            ('name', '=', confirmation['label']),
+        ]), 1)
+
     def test_confirmation_resume_captures_fresh_browser_context(self):
         self.authenticate('admin', 'admin')
         with self.registry.cursor() as cr:
@@ -700,9 +867,13 @@ class TestAISessionLoopHttp(HttpCase):
         )
         self.assertIn('fresh-browser-view', str(session.request_payload['messages']))
 
-        duplicate = self._resume_pending_confirmation(confirmation)
+        with patch(
+            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+        ) as transport:
+            duplicate = self._resume_pending_confirmation(confirmation)
 
-        self.assertIn('error', duplicate.json())
+        self.assertEqual(duplicate.json()['result'], acknowledgement)
+        transport.assert_not_called()
         self.assertEqual(self.env['res.partner'].search_count([
             ('name', '=', confirmation['label']),
         ]), 1)
@@ -781,36 +952,16 @@ class TestAISessionLoopHttp(HttpCase):
         partner = self.env['res.partner'].search([('name', '=', confirmation['label'])])
         self.assertEqual(partner.write_uid.id, actor_id)
 
-    def test_confirmation_lock_contention_fails_before_tool_execution(self):
-        self.authenticate('admin', 'admin')
-        confirmation = self._create_committed_confirmation(
-            'HTTP Locked Confirmation Contact',
-        )
-
-        with patch.object(
-            self.registry['ai.session'],
-            'lock_for_update',
-            side_effect=LockError('fixture lock contention'),
-        ):
-            response = self._resume_pending_confirmation(confirmation)
-
-        self.assertIn('error', response.json())
-        self.env.invalidate_all()
-        session = self._get_session(confirmation['session_id'])
-        self.assertEqual(session.loop_state, 'waiting_confirmation')
-        self.assertEqual(session.resume_token, confirmation['resume_token'])
-        self.assertFalse(self.env['res.partner'].search([
-            ('name', '=', confirmation['label']),
-        ]))
-
-    def test_confirmation_resume_rejects_wrong_token_choice_and_channel(self):
+    def test_confirmation_resume_treats_stale_token_as_noop_and_rejects_choice_and_channel(self):
         self.authenticate('admin', 'admin')
         confirmation = self._create_committed_confirmation('HTTP Rejected Contact')
         another = self._create_committed_confirmation('HTTP Other Contact')
 
-        wrong_token = self._resume_pending_confirmation(
-            confirmation, resume_token='not-the-resume-token',
-        )
+        with patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport') as transport:
+            stale_token = self._resume_pending_confirmation(
+                confirmation, resume_token='an-already-consumed-resume-token',
+            )
+        transport.assert_not_called()
         wrong_choice = self._resume_pending_confirmation(
             confirmation,
             response={'kind': 'confirmation', 'value': 'invented-confirmation-choice'},
@@ -819,7 +970,10 @@ class TestAISessionLoopHttp(HttpCase):
             confirmation, channel_id=another['channel_id'],
         )
 
-        self.assertIn('error', wrong_token.json())
+        self.assertEqual(stale_token.json()['result'], {
+            'request_uuid': confirmation['request_uuid'],
+            'responseState': 'waiting_user',
+        })
         self.assertIn('error', wrong_choice.json())
         self.assertIn('error', wrong_channel.json())
         self.env.invalidate_all()
@@ -903,6 +1057,81 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(session.request_phase, 'prepared')
         self.assertEqual(session.request_uuid, prepared['request_uuid'])
 
+    def test_submission_reuses_the_persisted_payload_after_transport_failure(self):
+        prepared = self._create_committed_prepared_session(
+            'Stable webhook token across reconstruction',
+        )
+        request = {
+            'session_id': prepared['session_id'],
+            'request_uuid': prepared['request_uuid'],
+        }
+        sent_payloads = []
+
+        def fail_first_send(_connection, _route, payload, **_kwargs):
+            sent_payloads.append(copy.deepcopy(payload))
+            if len(sent_payloads) == 1:
+                raise requests.ConnectionError('uncertain first send')
+            return None
+
+        with patch(
+            'odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+            side_effect=fail_first_send,
+        ):
+            with self.assertRaises(requests.ConnectionError):
+                self._submit_prepared(request)
+            self.assertEqual(
+                self._get_session(prepared['session_id']).request_phase,
+                'prepared',
+            )
+            acknowledgement = self._submit_prepared(request)
+
+        self.assertEqual(acknowledgement, {
+            'request_uuid': prepared['request_uuid'],
+            'responseState': 'running',
+        })
+        self.assertEqual(sent_payloads[0], sent_payloads[1])
+        self.assertEqual(
+            sent_payloads[0]['webhook_token'],
+            prepared['request_webhook_token'],
+        )
+        self.assertEqual(
+            self._get_session(prepared['session_id']).request_phase,
+            'submitted',
+        )
+
+    def test_callback_before_late_acknowledgement_cannot_regress_session(self):
+        prepared = self._create_committed_prepared_session(
+            'Callback wins acknowledgement race',
+        )
+        callback_result = assistant_text('Callback completed before acknowledgement')
+
+        callback = self._post_completion_callback({
+            'request_uuid': prepared['request_uuid'],
+            'llm_result': {'status': 'success', 'result': callback_result},
+            'llm_error': False,
+        })
+        self.assertEqual(callback.status_code, 200)
+
+        session = self._get_session(prepared['session_id'])
+        self.assertEqual(session.loop_state, 'ready')
+        self.assertFalse(session.request_phase)
+        self.assertEqual(session.request_result, {
+            'kind': 'success', 'message': callback_result,
+        })
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
+            session = env['ai.session'].sudo().browse(prepared['session_id'])
+            self.assertFalse(session._apply_submission_acknowledgement(
+                prepared['request_uuid'],
+            ))
+
+        session = self._get_session(prepared['session_id'])
+        self.assertEqual(session.loop_state, 'ready')
+        self.assertFalse(session.request_phase)
+        self.assertEqual(session.request_result, {
+            'kind': 'success', 'message': callback_result,
+        })
+
     def test_null_submission_response_marks_session_submitted_after_transport(self):
         prepared = self._create_committed_prepared_session(
             'Trust null transport response',
@@ -927,6 +1156,7 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(transport.call_args.args[1], '1/get_completions')
         payload = transport.call_args.args[2]
         self.assertEqual(payload['request_uuid'], prepared['request_uuid'])
+        self.assertEqual(payload['webhook_token'], prepared['request_webhook_token'])
         self.assertEqual(payload['webhook_url'], session.request_callback_url)
         self.assertIs(payload['llm_retry'], False)
         self.assertNotIn('callback_url', payload)
@@ -987,7 +1217,7 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(acknowledgement['request_uuid'], prepared['request_uuid'])
         self.assertEqual(self._get_session(prepared['session_id']).request_phase, 'submitted')
 
-    def test_submission_keeps_session_locked_across_iap_transport(self):
+    def test_submission_does_not_hold_the_session_row_lock_during_transport(self):
         raw_cursor = self.registry._db.cursor
         with raw_cursor() as cr:
             env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
@@ -1000,7 +1230,7 @@ class TestAISessionLoopHttp(HttpCase):
                 'agent_id': agent.id,
                 'channel_id': channel.id,
             })
-            message = channel.message_post(body='Hold the row lock', message_type='comment')
+            message = channel.message_post(body='Release the row lock', message_type='comment')
             prepared = session._prepare_model_request(
                 message._convert_to_parts(),
                 context_snapshot={
@@ -1014,11 +1244,15 @@ class TestAISessionLoopHttp(HttpCase):
 
         def observe_submit(_connection, _route, payload, **_kwargs):
             with raw_cursor() as cr:
-                with self.assertRaises(LockNotAvailable):
-                    cr.execute(
-                        'SELECT id FROM ai_session WHERE id = %s FOR UPDATE NOWAIT',
-                        [session_id],
-                    )
+                cr.execute(
+                    'SELECT id FROM ai_session WHERE id = %s FOR UPDATE NOWAIT',
+                    [session_id],
+                )
+                self.assertEqual(cr.fetchone()[0], session_id)
+                env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
+                session = env['ai.session'].sudo().browse(session_id)
+                self.assertEqual(session.request_uuid, payload['request_uuid'])
+                self.assertEqual(session.request_phase, 'prepared')
             return None
 
         with (

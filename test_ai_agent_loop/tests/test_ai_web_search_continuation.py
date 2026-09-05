@@ -207,6 +207,7 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         self.assertEqual(child.request_round, 1)
         self.assertEqual(child.request_round_limit, 1)
         self.assertEqual(child.request_phase, 'prepared')
+        self.assertEqual(child.previous_request_uuid, self.parent_request_uuid)
         self.assertEqual(child.continuation_data, {
             'continuation_type': 'web_search',
             'parent_request_uuid': self.parent_request_uuid, 'call_id': 'search',
@@ -236,6 +237,7 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         self.assertEqual(child.request_result['message'], search_message)
         self.assertEqual(resumed['prepared']['session_id'], parent.id)
         self.assertNotEqual(parent.request_uuid, self.parent_request_uuid)
+        self.assertEqual(parent.previous_request_uuid, child.request_uuid)
         self.assertEqual(parent.request_round, 2)
         self.assertEqual(parent.request_phase, 'prepared')
         self.assertFalse(parent.pending_tool_call)
@@ -466,7 +468,9 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
         child = self._child()
         self.assertEqual(observed['payload'], {
             **observed['child_payload'], 'request_uuid': child.request_uuid,
-            'webhook_url': child.request_callback_url, 'llm_retry': False,
+            'webhook_url': child.request_callback_url,
+            'webhook_token': child.request_webhook_token,
+            'llm_retry': False,
         })
         self.assertEqual(child.request_phase, 'submitted')
         self.assertNotIn('suffix_runs', self._fresh_session().state)
@@ -539,8 +543,53 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
         parent = self._fresh_session()
         self.assertEqual(parent.loop_state, 'waiting_model')
         self.assertEqual(parent.request_phase, 'submitted')
+        self.assertEqual(parent.previous_request_uuid, child.request_uuid)
         self.assertEqual(parent.request_context, child_context)
         self.assertEqual(parent.request_user_id.id, self.actor_id)
+
+    def test_resume_replay_submits_the_existing_headless_child(self):
+        token = self._wait_for_confirmation()
+        sent_payloads = []
+
+        def fail_first_send(_connection, _route, payload, **_kwargs):
+            sent_payloads.append(copy.deepcopy(payload))
+            if len(sent_payloads) == 1:
+                raise requests.ConnectionError('fail after headless child commit')
+            return None
+
+        with (
+            mute_logger('odoo.http'),
+            patch(TRANSPORT, side_effect=fail_first_send) as transport,
+        ):
+            failed = self._resume_confirmation(token)
+            self.assertIn('error', failed.json())
+
+            parent = self._fresh_session()
+            child = self._child()
+            child_uuid = child.request_uuid
+            child_token = child.request_webhook_token
+            self.assertEqual(parent.loop_state, 'waiting_child')
+            self.assertEqual(parent.state['confirmation_runs'], 1)
+            self.assertEqual(child.parent_session_id, parent)
+            self.assertEqual(child.previous_request_uuid, self.parent_request_uuid)
+            self.assertEqual(child.request_phase, 'prepared')
+
+            replay = self._resume_confirmation(token)
+
+        self.assertNotIn('error', replay.json())
+        self.assertEqual(replay.json()['result'], {
+            'request_uuid': self.parent_request_uuid,
+            'responseState': 'running',
+        })
+        self.assertEqual(transport.call_count, 2)
+        self.assertEqual(sent_payloads[0], sent_payloads[1])
+        self.assertEqual(sent_payloads[0]['request_uuid'], child_uuid)
+        self.assertEqual(sent_payloads[0]['webhook_token'], child_token)
+        parent = self._fresh_session()
+        child = self._child()
+        self.assertEqual(parent.state['confirmation_runs'], 1)
+        self.assertEqual(child.request_uuid, child_uuid)
+        self.assertEqual(child.request_phase, 'submitted')
 
     def test_child_submission_credit_failure_returns_idle_for_parent(self):
         token = self._wait_for_confirmation()

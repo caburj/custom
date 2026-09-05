@@ -428,7 +428,9 @@ class TestAIImageGenerationContinuationHttp(ImageGenerationFixture, HttpCase):
         child = self.env['ai.session'].sudo().search([('parent_session_id', '=', self.session_id)])
         self.assertEqual(observed['payload'], {
             **observed['child_payload'], 'request_uuid': child.request_uuid,
-            'webhook_url': child.request_callback_url, 'llm_retry': False,
+            'webhook_url': child.request_callback_url,
+            'webhook_token': child.request_webhook_token,
+            'llm_retry': False,
         })
         self.assertEqual(child.request_phase, 'submitted')
         child_uuid = child.request_uuid

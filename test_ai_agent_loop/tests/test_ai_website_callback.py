@@ -1,5 +1,10 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+from unittest.mock import patch
+
+from psycopg2.errors import SerializationFailure
+
+from odoo.exceptions import ConcurrencyError
 from odoo.tests import tagged, TransactionCase
 
 from odoo.addons.ai_website.models.ai_session import WEBSITE_BUILDER_TIMEOUT
@@ -17,6 +22,15 @@ class TestAIWebsiteCallback(TransactionCase):
         return self.env['ai.session'].sudo().search([
             ('channel_id', '=', session_data['ai_channel_id']),
         ])
+
+    def test_website_reviewer_bubbles_retryable_concurrency(self):
+        for error in (SerializationFailure('retry review'), ConcurrencyError('retry review')):
+            with (
+                self.subTest(error=type(error).__name__),
+                patch.object(self.env.registry['ai.agent'], '_generate_single_response', side_effect=error),
+                self.assertRaises(type(error)),
+            ):
+                self.env['ai.tool']._call_ai_reviewer('Review this action')
 
     def test_website_builder_session_advance_stops_before_iap_when_page_is_unavailable(self):
         session = self._create_session()
