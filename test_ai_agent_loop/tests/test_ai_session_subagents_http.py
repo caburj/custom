@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import requests
 
-from odoo import Command, api
+from odoo import Command, api, http
 from odoo.tests import HttpCase, tagged
 from odoo.tools import mute_logger
 
@@ -21,7 +21,7 @@ from odoo.addons.ai.controllers.thread import AIThreadController
 @tagged('post_install', '-at_install')
 class TestAISessionSubagentsHttp(HttpCase):
     @contextmanager
-    def _physical_tree(self, child_count=1, *, confirmation=False):
+    def _physical_tree(self, child_count=1, *, confirmation=False, context_snapshot=None):
         """Use committed fixtures and real HTTP cursors, not TestCursor wrappers."""
         raw_cursor = self.registry._db.cursor
         with raw_cursor() as cr:
@@ -42,8 +42,11 @@ class TestAISessionSubagentsHttp(HttpCase):
             contact_name = f'Physical foreground confirmed {parent.id}'
             parent._prepare_model_request(
                 [{'type': 'text', 'text': 'Run independent children'}],
-                context_snapshot={'allowed_company_ids': env.companies.ids,
-                                  'active_company_ids': env.companies.ids},
+                context_snapshot={
+                    'allowed_company_ids': env.companies.ids,
+                    'active_company_ids': env.companies.ids,
+                    **(context_snapshot or {}),
+                },
             )
             parent_uuid = parent.request_uuid
             apply_iap_result(parent, parent_uuid, {
@@ -295,6 +298,198 @@ class TestAISessionSubagentsHttp(HttpCase):
                 ])
                 self.assertEqual(children.ids, [child_id])
             self.assertEqual(self._snapshot(fixture['parent_id'])['events'], prepared['events'])
+
+    def _assert_child_merge_contends_with_confirmation(self, *, first, automatic=False):
+        stored_view = {'marker': 'view-before-confirmation'}
+        browser_view = {'marker': 'current-browser-view'}
+        with self._physical_tree(confirmation=True, context_snapshot={'current_view_info': stored_view}) as fixture:
+            self.authenticate('admin', 'admin')
+            source_id = fixture['parent_id']
+            child_id, child_uuid = fixture['children'][0]
+            with self.registry._db.cursor() as cr:
+                env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
+                source = env['ai.session'].sudo().browse(source_id)
+                source.auto_confirm = automatic
+                env['ai.session'].sudo().browse(child_id)._apply_submission_acknowledgement(child_uuid)
+            waiting = self._snapshot(source_id)
+            self.assertEqual(waiting['loop_state'], 'waiting_confirmation')
+            self.assertEqual(waiting['pending']['pending_results'][0]['child_session_id'], child_id)
+            first_entered = Event()
+            release_first = Event()
+            transitions = []
+            invocations = []
+            checkpoints = {}
+            waiting_pids = []
+            session_model = self.registry['ai.session']
+            merge = session_model._merge_child_result
+            resume = session_model._resume_pending_interaction
+            run_tool = self.registry['ir.actions.server']._ai_tool_run
+
+            def enter_transition(session, kind):
+                session.env.cr.execute('SELECT pg_backend_pid(), txid_current()')
+                pid, transaction_id = session.env.cr.fetchone()
+                session.env.cr.execute("""
+                    SELECT classid, objid, objsubid FROM pg_locks
+                    WHERE pid = pg_backend_pid() AND locktype = 'advisory' AND granted
+                """)
+                self.assertEqual(session.env.cr.fetchall(), [(0x41495345, source_id, 2)])
+                transitions.append((kind, pid, transaction_id))
+                if len(transitions) == 1:
+                    self.assertEqual(kind, first)
+                    first_entered.set()
+                    self.assertTrue(release_first.wait(timeout=15), 'Competing request did not reach the source gate')
+
+            def record_checkpoint(session, kind):
+                checkpoints[kind] = {
+                    'loop_state': session.loop_state,
+                    'pending': session.pending_tool_call,
+                    'resume_token': session.resume_token,
+                }
+
+            def observe_merge(session, child):
+                if session.id != source_id:
+                    return merge(session, child)
+                enter_transition(session, 'merge')
+                outcome = merge(session, child)
+                record_checkpoint(session, 'merge')
+                return outcome
+
+            def observe_resume(session, *args, **kwargs):
+                if session.id != source_id:
+                    return resume(session, *args, **kwargs)
+                enter_transition(session, 'resume')
+                outcome = resume(session, *args, **kwargs)
+                record_checkpoint(session, 'resume')
+                return outcome
+
+            def count_confirmed_tool(tool, record, arguments, tools_context):
+                if tools_context.get('session_id') == source_id and tools_context.get('tool_request_confirmed'):
+                    # A Python-side count cannot be erased by a transaction rollback/retry.
+                    invocations.append(arguments)
+                    self.assertEqual(
+                        tool.env.context.get('current_view_info'),
+                        stored_view if automatic else browser_view,
+                    )
+                    self.assertEqual(tool.env.uid, self.env.ref('base.user_admin').id)
+                return run_tool(tool, record, arguments, tools_context)
+
+            def submit_after_unlock(_connection, _route, payload, **_kwargs):
+                http.request.env.cr.execute('SELECT pg_backend_pid()')
+                sending_pid = http.request.env.cr.fetchone()[0]
+                with self.registry._db.cursor() as cr:
+                    cr.execute("""
+                        SELECT count(*) FROM pg_locks
+                        WHERE pid = %s AND locktype = 'advisory' AND granted
+                    """, [sending_pid])
+                    self.assertEqual(cr.fetchone()[0], 0)
+                    cr.execute('SELECT id FROM ai_session WHERE id = %s FOR UPDATE NOWAIT', [source_id])
+                    self.assertEqual(cr.fetchone()[0], source_id)
+                self.assertNotEqual(payload['request_uuid'], waiting['request_uuid'])
+
+            def resume_request():
+                if automatic:
+                    # Replay reaches the normal callback's automatic-confirmation sweep.
+                    return self._callback(fixture['parent_uuid'], 'Already consumed callback', concurrent=True)
+                return requests.post(
+                    f'{self.base_url()}/ai/resume_pending_interaction',
+                    cookies=self.opener.cookies,
+                    json=self.build_rpc_payload({
+                        'channel_id': fixture['channel_id'],
+                        'session_id': source_id,
+                        'request_uuid': waiting['request_uuid'],
+                        'resume_token': waiting['resume_token'],
+                        'response': {'kind': 'confirmation', 'value': 'confirm_once'},
+                        'current_view_info': browser_view,
+                    }),
+                    timeout=25,
+                )
+
+            def merge_request():
+                return self._callback(child_uuid, 'Concurrent child answer', concurrent=True)
+
+            requests_by_transition = {'resume': resume_request, 'merge': merge_request}
+            second = 'resume' if first == 'merge' else 'merge'
+            with (
+                patch.object(session_model, '_merge_child_result', observe_merge),
+                patch.object(session_model, '_resume_pending_interaction', observe_resume),
+                patch.object(self.registry['ir.actions.server'], '_ai_tool_run', count_confirmed_tool),
+                patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport', side_effect=submit_after_unlock) as transport,
+                patch('odoo.http.retrying.MAX_TRIES_ON_CONCURRENCY_FAILURE', 1),
+                self.allow_requests(all_requests=True),
+                ThreadPoolExecutor(max_workers=2) as pool,
+            ):
+                first_request = pool.submit(requests_by_transition[first])
+                try:
+                    self.assertTrue(first_entered.wait(timeout=10), 'First transition did not enter its source gate')
+                    second_request = pool.submit(requests_by_transition[second])
+                    deadline = time.monotonic() + 10
+                    while time.monotonic() < deadline:
+                        with self.registry._db.cursor() as cr:
+                            cr.execute("""
+                                SELECT waiter.pid FROM pg_locks holder
+                                JOIN pg_locks waiter USING (locktype, database, classid, objid, objsubid)
+                                WHERE holder.locktype = 'advisory' AND holder.granted AND NOT waiter.granted
+                                  AND holder.classid = %s AND holder.objid = %s AND holder.objsubid = 2
+                                  AND holder.pid = %s AND waiter.pid != holder.pid
+                            """, [0x41495345, source_id, transitions[0][1]])
+                            waiting_pids = [row[0] for row in cr.fetchall()]
+                        if waiting_pids or second_request.done():
+                            break
+                        time.sleep(0.01)
+                    self.assertTrue(waiting_pids, 'Second transition did not wait on the same source gate')
+                finally:
+                    release_first.set()
+                for future in (first_request, second_request):
+                    response = future.result(timeout=25)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    if isinstance(response.json(), dict):
+                        self.assertNotIn('error', response.json())
+
+            self.assertEqual([kind for kind, _pid, _txid in transitions], [first, second])
+            self.assertEqual(len({pid for _kind, pid, _txid in transitions}), 2)
+            self.assertEqual(len({txid for _kind, _pid, txid in transitions}), 2)
+            self.assertIn(transitions[1][1], waiting_pids)
+            self.assertEqual(len(invocations), 1)
+            if first == 'merge':
+                self.assertEqual(checkpoints[first]['loop_state'], 'waiting_confirmation')
+                self.assertEqual(checkpoints[first]['resume_token'], waiting['resume_token'])
+                self.assertNotIn('child_session_id', checkpoints[first]['pending']['pending_results'][0])
+            else:
+                self.assertEqual(checkpoints[first]['loop_state'], 'waiting_child')
+                self.assertEqual(checkpoints[first]['pending']['pending_results'][0]['child_session_id'], child_id)
+                self.assertFalse(checkpoints[first]['resume_token'])
+            source = self._snapshot(source_id)
+            self.assertEqual(source['loop_state'], 'waiting_model')
+            self.assertEqual(source['request_phase'], 'submitted')
+            self.assertFalse(source['pending'])
+            results = self._results(source)
+            self.assertEqual([result['tool_call_id'] for result in results], ['child-0', 'confirm'])
+            self.assertTrue(all(result['success'] for result in results))
+            child_result = json.loads(results[0]['result'][0]['text'])
+            self.assertEqual(child_result['session_id'], child_id)
+            self.assertIn('Concurrent child answer', child_result['message'])
+            self.assertIn(fixture['contact_name'], str(results[1]))
+            with self.registry._db.cursor() as cr:
+                env = api.Environment(cr, self.env.uid, {})
+                self.assertEqual(env['res.partner'].search_count([
+                    ('name', '=', fixture['contact_name']),
+                ]), 1)
+            self.assertEqual(
+                [call.args[2]['request_uuid'] for call in transport.call_args_list],
+                [source['request_uuid']],
+            )
+
+    def test_child_merge_waits_for_manual_confirmation_source_gate(self):
+        self._assert_child_merge_contends_with_confirmation(first='resume')
+
+    def test_manual_confirmation_waits_for_child_merge_source_gate(self):
+        self._assert_child_merge_contends_with_confirmation(first='merge')
+
+    def test_child_merge_waits_for_automatic_confirmation_source_gate(self):
+        self._assert_child_merge_contends_with_confirmation(first='resume', automatic=True)
+
+    def test_automatic_confirmation_waits_for_child_merge_source_gate(self):
+        self._assert_child_merge_contends_with_confirmation(first='merge', automatic=True)
 
     def _contact_call(self, env, call_id, name):
         return tool_call(env.ref('ai.ir_actions_server_create_records').ai_tool_name, call_id,
