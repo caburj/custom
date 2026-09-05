@@ -331,7 +331,7 @@ class TestAISessionLoopHttp(HttpCase):
                                 raise RuntimeError('commit failed')
 
                         def run_transaction():
-                            with controller._request_actor_transaction(
+                            with controller._actor_checkpoint(
                                 user_id=actor_id, context={'lang': 'fr_FR'}, guest_id=guest_id,
                             ) as env:
                                 self.assertIs(env, http.request.env)
@@ -574,7 +574,7 @@ class TestAISessionLoopHttp(HttpCase):
             'role': 'assistant',
             'content': [self._create_contact_tool_call(label, 'ready-checkpoint-create')],
         }
-        original_submit_successor = AIThreadController._submit_request_successor
+        original_submit_successor = AIThreadController._submit_prepared_successors
         submission_attempts = []
 
         def fail_before_first_send(controller, request_uuid):
@@ -587,7 +587,7 @@ class TestAISessionLoopHttp(HttpCase):
             mute_logger('odoo.http'),
             patch.object(
                 AIThreadController,
-                '_submit_request_successor',
+                '_submit_prepared_successors',
                 autospec=True,
                 side_effect=fail_before_first_send,
             ),

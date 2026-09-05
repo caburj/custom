@@ -258,7 +258,7 @@ class TestAISessionSubagentsHttp(HttpCase):
                 self.assertEqual(filled['pending']['user_input_request'], waiting['pending']['user_input_request'])
                 self.assertEqual(filled['pending']['call_id'], waiting['pending']['call_id'])
                 transport.assert_not_called()
-                submit = AIThreadController._submit_request_successor
+                submit = AIThreadController._submit_prepared_successors
                 attempts = []
 
                 def stop_after_resume_commit(controller, request_uuid, **kwargs):
@@ -275,7 +275,7 @@ class TestAISessionSubagentsHttp(HttpCase):
                 })
                 with (
                     mute_logger('odoo.http'),
-                    patch.object(AIThreadController, '_submit_request_successor',
+                    patch.object(AIThreadController, '_submit_prepared_successors',
                                  autospec=True, side_effect=stop_after_resume_commit),
                 ):
                     failed = self.url_open('/ai/resume_pending_interaction', json=payload)
