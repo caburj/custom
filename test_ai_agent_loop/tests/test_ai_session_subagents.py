@@ -8,10 +8,9 @@ from odoo import Command
 from odoo.exceptions import UserError
 from odoo.tests import TransactionCase, new_test_user, tagged
 
+from .common import apply_iap_result
 from odoo.addons.ai.utils.ai_utils import UserInputResponse
 from odoo.addons.mail.tools.discuss import Store
-
-from .common import apply_iap_result
 
 
 def tool_call(name, call_id, **args):
@@ -352,7 +351,7 @@ class TestAISessionSubagents(TransactionCase):
         image = self.env['ai.attachment.vacuum']._create_attachments_and_mark_unused([{
             'name': 'child-result.png', 'mimetype': 'image/png',
             'raw': base64.b64decode(
-                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='
+                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=',
             ),
         }])
         image_signature = 'image-model-only-signature'
@@ -590,13 +589,13 @@ class TestAISessionSubagents(TransactionCase):
         confirmation.state = {'available_tools': self.create_tool.ids}
         self._apply(confirmation, self._create_contact('confirm', 'Formatted contact'))
         bodies = [
-            '<p onclick="alert(1)" custom-untrusted-attribute="bad" '
+            ('<p onclick="alert(1)" custom-untrusted-attribute="bad" '
             'style="position:fixed;inset:0;z-index:9999">Which <strong>option</strong>?</p>'
             '<img src="x" onerror="alert(2)"><script>alert(3)</script>'
-            '<a href="javascript:alert(4)">Unsafe link</a>',
-            '<p><strong>Create this contact?</strong></p><table><thead><tr>'
+            '<a href="javascript:alert(4)">Unsafe link</a>'),
+            ('<p><strong>Create this contact?</strong></p><table><thead><tr>'
             '<th>Field</th><th>Value</th></tr></thead><tbody><tr>'
-            '<td>Name</td><td>Formatted contact</td></tr></tbody></table>',
+            '<td>Name</td><td>Formatted contact</td></tr></tbody></table>'),
         ]
         rendered = []
         for session, body in zip((question, confirmation), bodies):

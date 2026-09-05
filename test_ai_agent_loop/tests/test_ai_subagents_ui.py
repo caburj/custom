@@ -1,5 +1,6 @@
-from odoo.addons.web.tests.test_js import HootCommon, unit_test_error_checker
 from odoo.tests import tagged
+
+from odoo.addons.web.tests.test_js import HootCommon, unit_test_error_checker
 
 
 @tagged('post_install', '-at_install')

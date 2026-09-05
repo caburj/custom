@@ -9,14 +9,13 @@ from unittest.mock import patch
 
 import requests
 
-from odoo import api, Command
+from odoo import Command, api
 from odoo.tests import HttpCase, tagged
 from odoo.tools import mute_logger
 
-from odoo.addons.ai.controllers.thread import AIThreadController
-
 from .common import apply_iap_result
 from .test_ai_session_subagents import tool_call
+from odoo.addons.ai.controllers.thread import AIThreadController
 
 
 @tagged('post_install', '-at_install')
@@ -168,7 +167,7 @@ class TestAISessionSubagentsHttp(HttpCase):
                     session.env.cr.execute('SELECT txid_current()')
                     observed['settlement_transactions'][session.id] = session.env.cr.fetchone()[0]
                     session.env.cr.execute(
-                        "SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'advisory' AND granted"
+                        "SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'advisory' AND granted",
                     )
                     self.assertEqual(session.env.cr.fetchone()[0], 0)
                     locally_settled.wait(timeout=15)
