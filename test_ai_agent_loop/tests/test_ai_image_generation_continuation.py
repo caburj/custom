@@ -81,7 +81,10 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
             'kind': 'success', 'message': {'role': 'assistant', 'content': calls},
         })
         self.assertEqual(parent.pending_tool_call['call_id'], 'image')
-        self.assertEqual([part['tool_call_id'] for part in parent.pending_tool_call['pending_results']], ['prefix'])
+        self.assertEqual([part['tool_call_id'] for part in parent.pending_tool_call['pending_results']], ['prefix', 'image'])
+        self.assertEqual(parent.pending_tool_call['pending_results'][-1], {
+            'tool_name': self.tool_names['image'], 'tool_call_id': 'image', 'child_session_id': child.id,
+        })
         self._assert_prefix_once(parent)
         self.assertNotIn('suffix_runs', parent.state)
         self.assertFalse(self._generated_attachments())
@@ -139,6 +142,7 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
         self.assertEqual(parent.request_round, 1)
         self.assertEqual(parent.request_uuid, self.parent_request_uuid)
         self.assertEqual(child.request_result, {'kind': 'success', 'message': message})
+        self.assertFalse(child.exchange_result)
         attachments = self._generated_attachments()
         self.assertEqual(len(attachments), 2)
         self.assertEqual({att.mimetype: att.raw.content for att in attachments}, {
@@ -249,7 +253,12 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
         self.assertEqual(parent.loop_state, 'waiting_child')
         self.assertEqual(second.parent_session_id, parent)
         self.assertEqual(second.continuation_data['call_id'], 'second-image')
-        self.assertEqual([part['tool_call_id'] for part in parent.pending_tool_call['pending_results']], ['prefix', 'first-image'])
+        self.assertEqual([part['tool_call_id'] for part in parent.pending_tool_call['pending_results']], [
+            'prefix', 'first-image', 'second-image',
+        ])
+        self.assertEqual(parent.pending_tool_call['pending_results'][-1], {
+            'tool_name': self.tool_names['image'], 'tool_call_id': 'second-image', 'child_session_id': second.id,
+        })
         self.assertEqual(len(self._generated_attachments()), 1)
         self._assert_prefix_once(parent)
         self.assertFalse(any(self.feedback in message.body for message in parent.channel_id.message_ids))
@@ -270,10 +279,10 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
                 child = self._session(outcome['prepared']['session_id'])
                 failure = {'kind': 'failure', 'code': code}
                 with patch.object(self.registry['iap.account'], '_send_no_credit_notification', autospec=True) as notify:
-                    finished = apply_iap_result(child, child.request_uuid, failure)
+                    finished = apply_iap_result(child, child.request_uuid, failure, deliver_child=True)
                     parent = self._session()
                     counts = (len(parent.event_ids), len(parent.channel_id.message_ids))
-                    apply_iap_result(child, child.request_uuid, failure)
+                    apply_iap_result(child, child.request_uuid, failure, deliver_child=True)
                 self.assertEqual(notify.call_count, int(code == 'insufficient_credit'))
                 self.assertEqual(finished['response'], {
                     'request_uuid': self.parent_request_uuid, 'responseState': 'idle',
@@ -283,6 +292,7 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
                 self.assertFalse(parent.pending_tool_call)
                 self.assertFalse(parent.request_phase)
                 self.assertEqual(child.request_result, failure)
+                self.assertFalse(child.exchange_result)
                 self.assertEqual([part['tool_call_id'] for part in self._results(parent)], ['prefix', 'image', 'suffix'])
                 self.assertEqual([part['success'] for part in self._results(parent)], [True, False, False])
                 self._assert_prefix_once(parent)
@@ -434,16 +444,18 @@ class TestAIImageGenerationContinuationHttp(ImageGenerationFixture, HttpCase):
         })
         self.assertEqual(child.request_phase, 'submitted')
         child_uuid = child.request_uuid
+        parent = self._session()
+        pending = copy.deepcopy(parent.pending_tool_call)
         message = assistant_image()
-        original_continue = AiSession._continue_image_generation
+        original_apply = AiSession._apply_image_generation_child
 
-        def fail_after_effect(session):
-            original_continue(session)
+        def fail_after_effect(parent, image):
+            original_apply(parent, image)
             raise RuntimeError('Roll back image attachment creation and the parent suffix')
 
         with (
             mute_logger('odoo.http'),
-            patch.object(AiSession, '_continue_image_generation', autospec=True, side_effect=fail_after_effect),
+            patch.object(AiSession, '_apply_image_generation_child', autospec=True, side_effect=fail_after_effect),
             patch(TRANSPORT) as submit,
         ):
             failed = self._post_callback(child_uuid, message)
@@ -451,12 +463,22 @@ class TestAIImageGenerationContinuationHttp(ImageGenerationFixture, HttpCase):
         submit.assert_not_called()
         self.env.invalidate_all()
         self.assertEqual(child.request_result, {'kind': 'success', 'message': message})
-        self.assertEqual(child.loop_state, 'waiting_model')
+        self.assertEqual(child.loop_state, 'ready')
+        self.assertFalse(child.request_phase)
+        self.assertFalse(child.exchange_result)
         parent = self._session()
         self.assertEqual(parent.loop_state, 'waiting_child')
+        self.assertEqual(parent.request_uuid, self.parent_request_uuid)
+        self.assertEqual(parent.pending_tool_call, pending)
+        self.assertEqual(parent.pending_tool_call['call_id'], 'image')
+        self.assertEqual(parent.pending_tool_call['pending_results'][-1], {
+            'tool_name': self.tool_names['image'], 'tool_call_id': 'image', 'child_session_id': child.id,
+        })
         self.assertNotIn('suffix_runs', parent.state)
         self.assertFalse(self._generated_attachments())
         self._assert_prefix_once(parent)
+        partner = self.env['res.partner'].browse(parent.state['prefix_partner_ids'])
+        self.assertFalse(partner.comment)
 
         with patch(TRANSPORT, return_value=None) as submit:
             completed = self._post_callback(child_uuid, message)
@@ -467,16 +489,26 @@ class TestAIImageGenerationContinuationHttp(ImageGenerationFixture, HttpCase):
         self.assertEqual(child.request_result, {'kind': 'success', 'message': message})
         self.assertEqual(parent.request_round, 2)
         self.assertEqual(parent.request_phase, 'submitted')
+        self.assertEqual(parent.previous_request_uuid, child_uuid)
+        self.assertEqual(submit.call_args.args[2]['request_uuid'], parent.request_uuid)
+        self.assertFalse(parent.pending_tool_call)
         self.assertEqual(parent.state['suffix_runs'], 1)
         self._assert_prefix_once(parent)
+        self.assertIn('Suffix executed', partner.comment)
+        self.assertEqual([part['tool_call_id'] for part in self._results(parent)], ['prefix', 'image', 'suffix'])
+        self.assertTrue(all(part['success'] for part in self._results(parent)))
         attachment = self._generated_attachments()
         self.assertEqual(len(attachment), 1)
         self.assertEqual(attachment.create_uid.id, self.actor_id)
         self.assertEqual(attachment.raw.content, PNG_RAW)
+        self.assertFalse(attachment.public)
+        counts = (len(parent.event_ids), len(parent.channel_id.message_ids))
         with patch(TRANSPORT) as submit:
             repeated = self._post_callback(child_uuid, message)
         self.assertEqual(repeated.status_code, 200)
         submit.assert_not_called()
         self.env.invalidate_all()
         self.assertEqual(self._generated_attachments(), attachment)
+        self.assertEqual((len(parent.event_ids), len(parent.channel_id.message_ids)), counts)
         self.assertEqual(parent.state['suffix_runs'], 1)
+        self.assertEqual(child.request_result, {'kind': 'success', 'message': message})

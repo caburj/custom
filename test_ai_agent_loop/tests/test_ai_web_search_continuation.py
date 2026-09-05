@@ -627,7 +627,7 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
             self.assertEqual(parent.pending_tool_call['call_id'], 'image')
             self.assertEqual(
                 [part['tool_call_id'] for part in parent.pending_tool_call['pending_results']],
-                ['prefix', 'search'],
+                ['prefix', 'search', 'image'],
             )
             self.assertNotIn('suffix_runs', parent.state)
             self._assert_prefix_once(parent)
