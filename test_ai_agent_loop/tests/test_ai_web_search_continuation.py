@@ -475,6 +475,180 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
         self.assertEqual(child.request_phase, 'submitted')
         self.assertNotIn('suffix_runs', self._fresh_session().state)
 
+    def test_search_callback_submits_image_successor_and_preserves_parent_batch(self):
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, self.actor_id, self.context_snapshot)
+            parent = self._session(env=env)
+            image_tool = env.ref('ai.ir_actions_server_ai_generate_image')
+            parent.state = {
+                **parent.state, 'available_tools': parent.state['available_tools'] + image_tool.ids,
+            }
+            image_call = {
+                'type': 'tool_call', 'call_id': 'image', 'name': image_tool.ai_tool_name,
+                'args': {
+                    'prompt': 'Illustrate the search result.', 'images_paths': [],
+                    'image_title': 'Search continuation', 'feedback': 'Here is the illustration.',
+                    'aspect_ratio': '16:9',
+                },
+            }
+        calls = [self._call('prefix'), self._call('search'), image_call, self._call('suffix')]
+        search_message = assistant_text('Grounded search result', {'abcd': SEARCH_SOURCE})
+        image_message = assistant_text('Please provide a reference image.')
+
+        with patch(TRANSPORT, return_value=None) as submit:
+            response = self._post_callback(self.parent_request_uuid, {'role': 'assistant', 'content': calls})
+            self.assertEqual(response.status_code, 200)
+            submit.assert_called_once()
+            search = self._child()
+            self.assertEqual(search.request_phase, 'submitted')
+            self.assertEqual(search.previous_request_uuid, self.parent_request_uuid)
+            submit.reset_mock()
+
+            response = self._post_callback(search.request_uuid, search_message)
+            self.assertEqual(response.status_code, 200)
+            submit.assert_called_once()
+            children = self._child()
+            image = children - search
+            self.assertEqual(len(image), 1)
+            self.assertEqual(submit.call_args.args[2]['request_uuid'], image.request_uuid)
+            self.assertEqual(image.request_phase, 'submitted')
+            self.assertEqual(image.previous_request_uuid, search.request_uuid)
+            self.assertEqual(image.continuation_data, {
+                'continuation_type': 'image_generation',
+                'parent_request_uuid': self.parent_request_uuid, 'call_id': 'image',
+            })
+            parent = self._fresh_session()
+            self.assertEqual(parent.request_uuid, self.parent_request_uuid)
+            self.assertEqual(parent.loop_state, 'waiting_child')
+            self.assertEqual(parent.pending_tool_call['call_id'], 'image')
+            self.assertEqual(
+                [part['tool_call_id'] for part in parent.pending_tool_call['pending_results']],
+                ['prefix', 'search'],
+            )
+            self.assertNotIn('suffix_runs', parent.state)
+            self._assert_prefix_once(parent)
+            pending = copy.deepcopy(parent.pending_tool_call)
+            submit.reset_mock()
+
+            replay = self._post_callback(search.request_uuid, search_message)
+            self.assertEqual(replay.status_code, 200)
+            submit.assert_not_called()
+            self.assertEqual(self._child(), children)
+            self.assertEqual(self._fresh_session().pending_tool_call, pending)
+
+            response = self._post_callback(image.request_uuid, image_message)
+            self.assertEqual(response.status_code, 200)
+            submit.assert_called_once()
+            parent = self._fresh_session()
+            self.assertEqual(parent.loop_state, 'waiting_model')
+            self.assertEqual(parent.request_phase, 'submitted')
+            self.assertEqual(parent.previous_request_uuid, image.request_uuid)
+            self.assertEqual(submit.call_args.args[2]['request_uuid'], parent.request_uuid)
+            self.assertEqual(parent.state['suffix_runs'], 1)
+            self._assert_prefix_once(parent)
+            results = self._results(parent)
+            self.assertEqual([part['tool_call_id'] for part in results], ['prefix', 'search', 'image', 'suffix'])
+            self.assertTrue(all(part['success'] for part in results))
+            counts = (len(parent.event_ids), len(parent.channel_id.message_ids))
+            submit.reset_mock()
+
+            for request_uuid, message in [(search.request_uuid, search_message), (image.request_uuid, image_message)]:
+                self.assertEqual(self._post_callback(request_uuid, message).status_code, 200)
+            submit.assert_not_called()
+            self.assertEqual(self._child(), children)
+            parent = self._fresh_session()
+            self.assertEqual((len(parent.event_ids), len(parent.channel_id.message_ids)), counts)
+            self.assertEqual(parent.state['suffix_runs'], 1)
+            self._assert_prefix_once(parent)
+
+    def test_search_callback_submits_new_and_continued_conversational_children(self):
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, self.actor_id, self.context_snapshot)
+            agent = self._session(env=env).agent_id
+            agent.allowed_agent_ids = agent
+            agent_id = agent.id
+        child_id = None
+        previous_child_uuid = None
+
+        for round_no, tool_name in enumerate(('start_session', 'continue_session'), start=1):
+            with patch(TRANSPORT, return_value=None) as submit:
+                parent_uuid = self._fresh_session().request_uuid
+                delegate_call = {
+                    'type': 'tool_call', 'call_id': tool_name, 'name': tool_name,
+                    'args': {
+                        'agent_id' if tool_name == 'start_session' else 'session_id': agent_id if child_id is None else child_id,
+                        'message': f'Delegated search follow-up {round_no}',
+                    },
+                }
+                calls = ([self._call('prefix')] if round_no == 1 else []) + [
+                    self._call('search'), delegate_call, self._call('suffix'),
+                ]
+                response = self._post_callback(parent_uuid, {'role': 'assistant', 'content': calls})
+                self.assertEqual(response.status_code, 200)
+                submit.assert_called_once()
+                search_uuid = submit.call_args.args[2]['request_uuid']
+                search = self._child().filtered(lambda session: session.request_uuid == search_uuid)
+                self.assertEqual(search.continuation_data['parent_request_uuid'], parent_uuid)
+                submit.reset_mock()
+
+                search_message = assistant_text(f'Search result {round_no}')
+                response = self._post_callback(search_uuid, search_message)
+                self.assertEqual(response.status_code, 200)
+                submit.assert_called_once()
+                children = self._child()
+                child = children.filtered('agent_id')
+                self.assertEqual(len(child), 1)
+                if child_id is not None:
+                    self.assertEqual(child.id, child_id)
+                    self.assertIn('Delegated answer 1', str(child.request_payload['messages']))
+                child_id = child.id
+                child_uuid = child.request_uuid
+                self.assertNotEqual(child_uuid, previous_child_uuid)
+                self.assertEqual(submit.call_args.args[2]['request_uuid'], child_uuid)
+                self.assertEqual(child.request_phase, 'submitted')
+                self.assertEqual(child.previous_request_uuid, search_uuid)
+                parent = self._fresh_session()
+                self.assertEqual(parent.request_uuid, parent_uuid)
+                self.assertEqual(parent.loop_state, 'waiting_child')
+                self.assertEqual(child.parent_session_id, parent)
+                self.assertEqual(
+                    [part['tool_call_id'] for part in parent.pending_tool_call['pending_results']],
+                    [call['call_id'] for call in calls],
+                )
+                self.assertEqual(parent.state['suffix_runs'], round_no)
+                self._assert_prefix_once(parent)
+                pending = copy.deepcopy(parent.pending_tool_call)
+                submit.reset_mock()
+
+                replay = self._post_callback(search_uuid, search_message)
+                self.assertEqual(replay.status_code, 200)
+                submit.assert_not_called()
+                self.assertEqual(self._child(), children)
+                self.assertEqual(self._fresh_session().pending_tool_call, pending)
+
+                child_message = assistant_text(f'Delegated answer {round_no}')
+                response = self._post_callback(child_uuid, child_message)
+                self.assertEqual(response.status_code, 200)
+                submit.assert_called_once()
+                parent = self._fresh_session()
+                self.assertEqual(submit.call_args.args[2]['request_uuid'], parent.request_uuid)
+                self.assertEqual(parent.request_phase, 'submitted')
+                self.assertEqual(parent.previous_request_uuid, child_uuid)
+                self.assertEqual(
+                    [part['tool_call_id'] for part in self._results(parent)],
+                    [call['call_id'] for call in calls],
+                )
+                self.assertTrue(all(part['success'] for part in self._results(parent)))
+                self.assertEqual(parent.state['suffix_runs'], round_no)
+                submit.reset_mock()
+
+                for request_uuid, message in [(search_uuid, search_message), (child_uuid, child_message)]:
+                    self.assertEqual(self._post_callback(request_uuid, message).status_code, 200)
+                submit.assert_not_called()
+                self.assertEqual(self._child(), children)
+                self.assertEqual(self._fresh_session().state['suffix_runs'], round_no)
+                previous_child_uuid = child_uuid
+
     def test_child_result_survives_rollback_and_resumes_without_repeating_tools(self):
         with patch(TRANSPORT, return_value=None):
             response = self._post_callback(self.parent_request_uuid, {
