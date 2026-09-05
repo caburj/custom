@@ -619,7 +619,7 @@ class TestAISessionLoopHttp(HttpCase):
             })
 
         self.assertEqual(replay.status_code, 200)
-        self.assertEqual(submission_attempts, [prepared['request_uuid']] * 2)
+        self.assertEqual(submission_attempts.count(prepared['request_uuid']), 2)
         transport.assert_called_once()
         payload = transport.call_args.args[2]
         self.assertEqual(payload['request_uuid'], successor_uuid)

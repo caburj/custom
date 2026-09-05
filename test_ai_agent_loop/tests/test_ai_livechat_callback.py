@@ -1,5 +1,7 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+import copy
+import json
 from unittest.mock import patch
 
 import requests
@@ -7,6 +9,9 @@ import requests
 from odoo import Command, http
 from odoo.addons.mail.tools.discuss import Store
 from odoo.tests import HttpCase, tagged
+from odoo.tools import mute_logger
+
+from .test_ai_session_subagents import tool_call
 
 
 def accept_submitted_request(_connection, _route, _payload, **_kwargs):
@@ -240,3 +245,172 @@ ai['result'] = {
         self.assertEqual(self.env["ai.session"].sudo().search_count([
             ("channel_id", "=", channel_id),
         ]), 1)
+
+    def _assert_guest_subagent_reply(self, interaction_kind, *, cors):
+        diagnostic = self.env['ir.actions.server'].create({
+            'name': 'Guest reply actor', 'ai_tool_name': 'guest_reply_actor',
+            'ai_tool_description': 'Report the executing guest authority.',
+            'ai_tool_schema': '{"type":"object","properties":{},"required":[]}',
+            'model_id': self.env.ref('ai.model_ai_tool').id,
+            'state': 'code', 'use_in_ai': True,
+            'code': "ai['result'] = {'user_id': env.uid, 'sudo': env.su, 'guest_id': env.context['guest'].id}",
+        })
+        forbidden_name = f'Guest forbidden contact {diagnostic.id}'
+        if interaction_kind == 'question':
+            interactive_tool = self.env.ref('ai.ir_actions_server_ask_user_question')
+            args = {'question': 'Which guest option?', 'choices': ['Guest option A', 'Guest option B'],
+                    'multi_select': False, 'allow_free_text': False}
+            response_value = ['Guest option A']
+            expected_label = 'Guest option A'
+        else:
+            interactive_tool = self.env['ir.actions.server'].create({
+                'name': 'Guest reply confirmation', 'ai_tool_name': 'guest_reply_confirmation',
+                'ai_tool_description': 'Request confirmation before attempting a restricted operation.',
+                'ai_tool_schema': '{"type":"object","properties":{},"required":[]}',
+                'model_id': self.env.ref('ai.model_ai_tool').id,
+                'state': 'code', 'use_in_ai': True,
+                'code': f"""
+if not ai['tool_request_confirmed']:
+    ai['user_input_request'] = {{
+        'type': 'confirmation', 'body': 'Approve this guest operation?',
+        'choices': [{{'label': 'Approve guest operation', 'value': 'confirm_once'}}],
+    }}
+else:
+    env['res.partner'].create({{'name': {forbidden_name!r}}})
+    ai['result'] = 'Unexpected privileged effect'
+""",
+            })
+            args = {}
+            response_value = 'confirm_once'
+            expected_label = 'Approve guest operation'
+        agent = self.env['ai.agent'].create({
+            'name': f'Guest {interaction_kind} coordinator', 'skill_ids': [Command.clear()],
+        })
+        agent.allowed_agent_ids = agent
+        channel_id, guest_token, message_id = self._create_livechat_message(agent)
+        self.env.invalidate_all()
+        channel = self.env['discuss.channel'].browse(channel_id)
+        guest = self.env['mail.message'].browse(message_id).author_guest_id
+        wrong_guest = self.env['mail.guest'].create({'name': 'Different reply guest'})
+        wrong_token = wrong_guest._format_auth_cookie()
+        cookie_name = self.env['mail.guest']._cookie_name
+        if cors:
+            # The CORS route must retain guest authority even with admin cookies.
+            self.authenticate('admin', 'admin')
+        else:
+            self.authenticate(None, None)
+            self.opener.cookies.set(cookie_name, guest_token)
+        route_prefix = '/ai/cors' if cors else '/ai'
+        guest_args = {'guest_token': guest_token} if cors else {}
+        with patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                   side_effect=accept_submitted_request):
+            started = self.url_open(f'{route_prefix}/start_session_advance', json=self.build_rpc_payload({
+                **guest_args, 'channel_id': channel_id, 'mail_message_id': message_id,
+            }))
+            self.assertNotIn('error', started.json())
+            root_uuid = started.json()['result']['request_uuid']
+            launched = self._post_completion_callback({
+                'request_uuid': root_uuid, 'llm_error': False,
+                'llm_result': {'status': 'success', 'result': {'role': 'assistant', 'content': [
+                    tool_call('start_session', f'child-{index}', agent_id=agent.id, message=f'Guest work {index}')
+                    for index in (1, 2)
+                ]}},
+            })
+            self.assertEqual(launched.status_code, 200)
+        self.env.invalidate_all()
+        root = self.env['ai.session'].sudo().search([('request_uuid', '=', root_uuid)])
+        children = self.env['ai.session'].sudo().search([('parent_session_id', '=', root.id)], order='id')
+        self.assertEqual(len(children), 2)
+        first, sibling = children
+        with self.registry.cursor() as cr:
+            self.env(cr=cr)['ai.session'].sudo().browse(children.ids).state = {
+                'available_tools': (interactive_tool | diagnostic).ids,
+            }
+        for child in children:
+            waiting = self._post_completion_callback({
+                'request_uuid': child.request_uuid, 'llm_error': False,
+                'llm_result': {'status': 'success', 'result': {'role': 'assistant', 'content': [
+                    tool_call(interactive_tool.ai_tool_name, f'interaction-{child.id}', **args),
+                    tool_call(diagnostic.ai_tool_name, f'actor-{child.id}'),
+                ]}},
+            })
+            self.assertEqual(waiting.status_code, 200)
+        self.env.invalidate_all()
+        source_uuid, source_token = first.request_uuid, first.resume_token
+        source_pending = copy.deepcopy(first.pending_tool_call)
+        sibling_pending = copy.deepcopy(sibling.pending_tool_call)
+        sibling_token, sibling_uuid = sibling.resume_token, sibling.request_uuid
+        root_pending = copy.deepcopy(root.pending_tool_call)
+        before_messages = channel.message_ids
+        observed = []
+        resume = self.registry['ai.session']._resume_pending_interaction
+
+        def observe_reply_actor(session, *args, **kwargs):
+            request_env = http.request.env
+            observed.append((session.id, request_env.uid, request_env.su, request_env.context['guest'].id))
+            return resume(session, *args, **kwargs)
+
+        payload = {
+            'channel_id': channel_id, 'request_uuid': source_uuid, 'resume_token': source_token,
+            'response': {'kind': interaction_kind, 'value': response_value},
+        }
+        if not cors:
+            payload['session_id'] = first.id
+        with (
+            mute_logger('odoo.http'),
+            patch.object(self.registry['ai.session'], '_resume_pending_interaction', observe_reply_actor),
+            patch('odoo.addons.ai.utils.session_env.call_odoo_ai_transport',
+                  side_effect=accept_submitted_request) as submit,
+        ):
+            if not cors:
+                self.opener.cookies.set(cookie_name, wrong_token)
+            denied = self.url_open(f'{route_prefix}/resume_pending_interaction', json=self.build_rpc_payload({
+                **payload, **({'guest_token': wrong_token} if cors else {}),
+            }))
+            self.assertIn('error', denied.json())
+            self.env.invalidate_all()
+            self.assertEqual(channel.message_ids, before_messages)
+            self.assertEqual(first.pending_tool_call, source_pending)
+            self.assertEqual(sibling.pending_tool_call, sibling_pending)
+            self.assertFalse(observed)
+            submit.assert_not_called()
+            if not cors:
+                self.opener.cookies.set(cookie_name, guest_token)
+            answered = self.url_open(f'{route_prefix}/resume_pending_interaction', json=self.build_rpc_payload({
+                **payload, **guest_args,
+            }))
+            self.assertNotIn('error', answered.json())
+            self.assertEqual(answered.json()['result']['responseState'], 'running')
+            submit.assert_called_once()
+        self.env.invalidate_all()
+        public = self.env.ref('base.public_user')
+        self.assertEqual(observed, [(first.id, public.id, False, guest.id)])
+        self.assertEqual(first.request_user_id, public)
+        self.assertEqual(first.request_guest_id, guest)
+        self.assertEqual(first.loop_state, 'waiting_model')
+        self.assertNotEqual(first.request_uuid, source_uuid)
+        self.assertEqual(first.previous_request_uuid, source_uuid)
+        self.assertEqual(answered.json()['result']['request_uuid'], first.request_uuid)
+        self.assertEqual(sibling.pending_tool_call, sibling_pending)
+        self.assertEqual((sibling.request_uuid, sibling.resume_token), (sibling_uuid, sibling_token))
+        self.assertEqual(root.pending_tool_call, root_pending)
+        self.assertEqual(root.request_uuid, root_uuid)
+        replies = (channel.message_ids - before_messages).filtered(lambda message: message.author_guest_id == guest)
+        self.assertEqual(len(replies), 1)
+        self.assertIn(expected_label, replies.body)
+        self.assertFalse(replies.author_id)
+        tool_results = [part for message in first.request_payload['messages'] for part in message['content']
+                        if part.get('type') == 'tool_result']
+        actor_result = json.loads(tool_results[-1]['result'][0]['text'])
+        self.assertEqual(actor_result, {'user_id': public.id, 'sudo': False, 'guest_id': guest.id})
+        if interaction_kind == 'confirmation':
+            self.assertFalse(tool_results[0]['success'])
+            self.assertFalse(self.env['res.partner'].search([('name', '=', forbidden_name)]))
+        else:
+            self.assertTrue(tool_results[0]['success'])
+
+    def test_same_origin_guest_subagent_question_reply_keeps_guest_authority(self):
+        self._assert_guest_subagent_reply('question', cors=False)
+
+    def test_cors_guest_subagent_confirmation_reply_keeps_guest_authority(self):
+        self._assert_guest_subagent_reply('confirmation', cors=True)
