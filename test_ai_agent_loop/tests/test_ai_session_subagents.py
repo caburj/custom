@@ -83,10 +83,10 @@ class TestAISessionSubagents(TransactionCase):
         )
 
     def _complete(self, child, text):
-        self._apply(child, {'type': 'text', 'text': text})
+        outcome = self._apply(child, {'type': 'text', 'text': text})
         self.assertEqual(child.loop_state, 'ready')
-        self.assertEqual(child.exchange_result['status'], 'completed')
-        return child.parent_session_id._merge_child_result(child)
+        self.assertEqual(outcome['child_result']['status'], 'completed')
+        return child.parent_session_id._merge_child_result(child, outcome['child_result'])
 
     def _child_result(self, result):
         return json.loads(result['result'][0]['text'])
@@ -124,7 +124,6 @@ class TestAISessionSubagents(TransactionCase):
         self.assertNotIn('Parent-only conversation', str(child._get_history()))
         self.assertIn('Delegated work child', str(child._get_history()))
         self.assertIn('Explicitly delegated attachment contents.', str(child.request_payload['messages']))
-        self.assertFalse(child.exchange_result)
         self.assertEqual(self.session.pending_tool_call['pending_results'], [{
             'tool_name': 'start_session', 'tool_call_id': 'child',
             'child_session_id': child.id,
@@ -160,8 +159,8 @@ class TestAISessionSubagents(TransactionCase):
         self.assertIn('First finished last', self._child_result(results[0])['message'])
         self.assertIn('Second finished first', self._child_result(results[1])['message'])
         events = self.session.event_ids
-        self.session._merge_child_result(first)
-        self.session._merge_child_result(second)
+        self.session._merge_child_result(first, self._child_result(results[0]))
+        self.session._merge_child_result(second, self._child_result(results[1]))
         self.assertEqual(self.session.request_uuid, next_uuid)
         self.assertEqual(self.session.event_ids, events)
         self.assertEqual(self.channel.message_ids, visible_messages)
@@ -232,17 +231,17 @@ class TestAISessionSubagents(TransactionCase):
             self._create_contact('decline', 'Foreground declined contact'), self._start('B'),
         )
         child = self._children()
-        self.session._resume_pending_interaction(
+        outcome = self.session._resume_pending_interaction(
             self.session.resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.DECLINE},
         )
+        self.assertNotIn('child_result', outcome)
         self.assertEqual(self.session.loop_state, 'waiting_child')
         self.assertEqual(self._children(), child)
-        self.assertFalse(self.session.exchange_result)
-        self._complete(child, 'Already launched work completed')
+        outcome = self._complete(child, 'Already launched work completed')
         self.assertEqual(self.session.loop_state, 'ready')
-        self.assertEqual(self.session.exchange_result['status'], 'declined')
-        root._merge_child_result(self.session)
+        self.assertEqual(outcome['child_result']['status'], 'declined')
+        root._merge_child_result(self.session, outcome['child_result'])
         self.assertEqual(self._child_result(self._results(root)[0])['status'], 'declined')
         self.assertEqual(self.session.request_uuid, request_uuid)
         self.assertFalse(self.env['res.partner'].search([
@@ -323,7 +322,6 @@ class TestAISessionSubagents(TransactionCase):
         ))
         self.assertEqual(self._children(), child)
         self.assertEqual(child.parent_session_id, self.session)
-        self.assertFalse(child.exchange_result)
         self.assertEqual(child.loop_state, 'waiting_model')
         new_uuid = child.request_uuid
         self.assertNotEqual(new_uuid, old_uuid)
@@ -338,7 +336,6 @@ class TestAISessionSubagents(TransactionCase):
         })
         self.assertEqual(child.request_uuid, new_uuid)
         self.assertEqual(child._get_history(), history)
-        self.assertFalse(child.exchange_result)
         self._complete(child, 'Follow-up answer')
         result = self._results()[-1]
         self.assertEqual(result['tool_name'], 'continue_session')
@@ -376,12 +373,12 @@ class TestAISessionSubagents(TransactionCase):
         self._prepare()
         self._apply(self.session, self._start('failure'), self._start('success'))
         failed, sibling = self._children()
-        apply_iap_result(failed, failed.request_uuid, {
+        outcome = apply_iap_result(failed, failed.request_uuid, {
             'kind': 'failure', 'code': 'request_failed',
         })
         self.assertEqual(failed.loop_state, 'ready')
-        self.assertEqual(failed.exchange_result['status'], 'failed')
-        self.session._merge_child_result(failed)
+        self.assertEqual(outcome['child_result']['status'], 'failed')
+        self.session._merge_child_result(failed, outcome['child_result'])
         self.assertEqual(self.session.loop_state, 'waiting_child')
         self.assertEqual(sibling.loop_state, 'waiting_model')
         self._complete(sibling, 'Sibling still completed')
@@ -418,9 +415,9 @@ class TestAISessionSubagents(TransactionCase):
         sources = {'1': {'title': 'Reference', 'url': 'https://example.com/reference'}}
         child.state = {'available_tools': final_tool.ids, 'web_sources': sources}
         before = self.channel.message_ids
-        self._apply(child, {'type': 'text', 'text': 'Raw model preamble'},
-                    tool_call(final_tool.ai_tool_name, 'final'))
-        result = child.exchange_result
+        outcome = self._apply(child, {'type': 'text', 'text': 'Raw model preamble'},
+                              tool_call(final_tool.ai_tool_name, 'final'))
+        result = outcome['child_result']
         self.assertEqual(child.loop_state, 'ready')
         self.assertIn('Actual final tool answer', result['message'])
         self.assertNotIn('Raw model preamble', result['message'])
@@ -437,7 +434,7 @@ class TestAISessionSubagents(TransactionCase):
         self.assertIn('Actual final tool answer', str(retained_result['result']))
         self.assertTrue(any(part.get('type') == 'inline_data' for part in retained_result['result']))
         self.assertNotIn(image_signature, str([message for message in history if message['role'] == 'assistant']))
-        self.session._merge_child_result(child)
+        self.session._merge_child_result(child, result)
         self.assertEqual(self._child_result(self._results()[0])['attachment_ids'], image.ids)
         self.assertTrue(any(
             part.get('type') == 'inline_data'
@@ -533,7 +530,6 @@ class TestAISessionSubagents(TransactionCase):
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
         self.assertNotEqual(child.request_uuid, child_uuid)
-        self.assertFalse(child.exchange_result)
         self.assertEqual(self.session.pending_tool_call['pending_results'][2]['child_session_id'], child.id)
         self._complete(child, 'Third exchange')
         self.assertEqual(self.session.loop_state, 'waiting_model')
@@ -560,8 +556,6 @@ class TestAISessionSubagents(TransactionCase):
         self._apply(browser, tool_call(client_tool.ai_tool_name, 'browser'))
         self.assertEqual(question.loop_state, 'waiting_answer')
         self.assertEqual(browser.loop_state, 'waiting_client_result')
-        self.assertFalse(question.exchange_result)
-        self.assertFalse(browser.exchange_result)
         self.assertEqual(self.session.pending_tool_call, pending)
         self.assertEqual(self.session.loop_state, 'waiting_child')
         browser._resume_pending_interaction(
@@ -589,7 +583,6 @@ class TestAISessionSubagents(TransactionCase):
         self._apply(child, self._create_contact('website-confirm', 'Foreground website contact'))
         pending = copy.deepcopy(child.pending_tool_call)
         token = child.resume_token
-        self.assertFalse(child.exchange_result)
         with self.assertRaises(UserError):
             child.with_context(current_view_info={})._resume_pending_interaction(
                 token,
@@ -599,7 +592,6 @@ class TestAISessionSubagents(TransactionCase):
         self.assertEqual(child.loop_state, 'waiting_confirmation')
         self.assertEqual(child.resume_token, token)
         self.assertEqual(child.pending_tool_call, pending)
-        self.assertFalse(child.exchange_result)
 
     def test_declined_child_without_descendants_returns_refusal_information(self):
         self._prepare()
@@ -607,14 +599,14 @@ class TestAISessionSubagents(TransactionCase):
         child = self._children()
         child.state = {'available_tools': self.create_tool.ids}
         self._apply(child, self._create_contact('decline', 'Foreground immediately declined'))
-        child._resume_pending_interaction(
+        outcome = child._resume_pending_interaction(
             child.resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.DECLINE},
         )
         self.assertEqual(child.loop_state, 'ready')
-        self.assertEqual(child.exchange_result['status'], 'declined')
-        self.assertTrue(child.exchange_result['message'])
-        self.session._merge_child_result(child)
+        self.assertEqual(outcome['child_result']['status'], 'declined')
+        self.assertTrue(outcome['child_result']['message'])
+        self.session._merge_child_result(child, outcome['child_result'])
         result = self._child_result(self._results()[0])
         self.assertEqual(result['status'], 'declined')
         self.assertTrue(result['message'])

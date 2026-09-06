@@ -236,7 +236,6 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         self.assertEqual(child.loop_state, 'ready')
         self.assertFalse(child.request_phase)
         self.assertEqual(child.request_result['message'], search_message)
-        self.assertFalse(child.exchange_result)
         self.assertEqual(resumed["prepared_requests"], [{
             'session_id': parent.id, 'request_uuid': parent.request_uuid,
         }])
@@ -346,7 +345,6 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         self.assertFalse(parent.pending_tool_call)
         self.assertFalse(parent.request_phase)
         self.assertEqual(child.request_result, failure)
-        self.assertFalse(child.exchange_result)
         results = self._results(parent)
         self.assertEqual([part['tool_call_id'] for part in results], ['prefix', 'search', 'suffix'])
         self.assertEqual([part['success'] for part in results], [True, False, False])
@@ -363,16 +361,12 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         result = {
             'kind': 'success', 'message': assistant_text('Stored search result'),
         }
-        apply_iap_result(child, child.request_uuid, result)
-        self.assertEqual(child.loop_state, 'ready')
-        self.assertEqual(child.request_result, result)
-        self.assertFalse(child.exchange_result)
         pending = copy.deepcopy(parent.pending_tool_call)
         parent.pending_tool_call = {**pending, 'call_id': 'different-call'}
         with self.assertRaises(UserError), self.env.cr.savepoint():
             apply_iap_result(child, child.request_uuid, result, deliver_child=True)
-        self.assertEqual(child.loop_state, 'ready')
-        self.assertEqual(child.request_result, result)
+        self.assertEqual(child.loop_state, 'waiting_model')
+        self.assertFalse(child.request_result)
         self.assertEqual(parent.loop_state, 'waiting_child')
         self.assertEqual(parent.pending_tool_call['pending_results'], pending['pending_results'])
         self.assertNotIn('suffix_runs', parent.state)
@@ -380,30 +374,6 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         apply_iap_result(child, child.request_uuid, result, deliver_child=True)
         self._assert_prefix_once(parent)
         self.assertEqual(parent.state['suffix_runs'], 1)
-
-    def test_mismatched_child_continuation_rolls_back_pending_marker(self):
-        outcome = self._apply_calls([
-            self._call('prefix'), self._call('search'), self._call('suffix'),
-        ])
-        parent = self._session()
-        child = self._session(outcome['prepared_requests'][0]['session_id'])
-        apply_iap_result(child, child.request_uuid, {
-            'kind': 'success', 'message': assistant_text('Stored search result'),
-        })
-        self.assertEqual(child.loop_state, 'ready')
-        parent.pending_tool_call = {
-            **parent.pending_tool_call, 'call_id': 'different-call',
-        }
-        pending = copy.deepcopy(parent.pending_tool_call)
-        self.assertEqual(pending['pending_results'][-1]['child_session_id'], child.id)
-        # A rejected continuation rolls back with its enclosing business block.
-        with self.assertRaises(UserError):
-            parent._apply_tool_child(child)
-        parent.flush_recordset(['pending_tool_call'])
-        parent.invalidate_recordset(['pending_tool_call'])
-        self.assertEqual(parent.pending_tool_call, pending)
-        self.assertEqual(parent.loop_state, 'waiting_child')
-        self.assertNotIn('suffix_runs', parent.state)
 
     def test_completed_conversational_child_does_not_bypass_pending_search(self):
         parent = self._session()
@@ -473,7 +443,6 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
 
         self.assertEqual(search.loop_state, 'ready')
         self.assertEqual(search.request_result, failure)
-        self.assertFalse(search.exchange_result)
         self.assertEqual(child.loop_state, 'waiting_model')
         self.assertFalse(child.request_result)
         self.assertEqual(parent.loop_state, 'waiting_child')
@@ -789,15 +758,15 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
         self.assertEqual(response.status_code, 200)
         child = self._child()
         message = assistant_text('Retained search result', {'abcd': SEARCH_SOURCE})
-        original_apply = AiSession._apply_web_search_child
+        original_apply = AiSession._continue_web_search
 
-        def fail_after_effect(parent, search):
-            original_apply(parent, search)
+        def fail_after_effect(search):
+            original_apply(search)
             raise RuntimeError('roll back the search continuation')
 
         with (
             mute_logger('odoo.http'),
-            patch.object(AiSession, '_apply_web_search_child', autospec=True, side_effect=fail_after_effect),
+            patch.object(AiSession, '_continue_web_search', autospec=True, side_effect=fail_after_effect),
             patch(TRANSPORT) as submit,
         ):
             failed = self._post_callback(child.request_uuid, message)
@@ -807,7 +776,6 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
         self.assertFalse(child.request_result)
         self.assertEqual(child.loop_state, 'waiting_model')
         self.assertEqual(child.request_phase, 'submitted')
-        self.assertFalse(child.exchange_result)
         parent = self._fresh_session()
         self.assertEqual(parent.loop_state, 'waiting_child')
         self.assertEqual(parent.pending_tool_call['call_id'], 'search')
@@ -851,8 +819,25 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
         self.assertEqual(child.request_user_id.id, self.actor_id)
         self.assertEqual(self._fresh_session().loop_state, 'waiting_child')
         child_context = copy.deepcopy(child.request_context)
-        with patch(TRANSPORT, return_value=None) as submit:
+        owner_context = copy.deepcopy(self._fresh_session().request_context)
+        observed = []
+        run_tool = self.registry['ir.actions.server']._run_action_code_multi
+
+        def observe_tool(action, eval_context=None):
+            if action.id == self.tool_ids['suffix']:
+                actor_env = eval_context['env']
+                observed.append((actor_env.uid, actor_env.su,
+                                 copy.deepcopy(actor_env.context.get('current_view_info')),
+                                 eval_context['ai']['session_id']))
+            return run_tool(action, eval_context=eval_context)
+
+        with (
+            patch(TRANSPORT, return_value=None) as submit,
+            patch.object(self.registry['ir.actions.server'], '_run_action_code_multi', observe_tool),
+        ):
             completed = self._post_callback(child.request_uuid, assistant_text('Search complete'))
+        self.assertEqual(owner_context['current_view_info']['view_type'], 'list')
+        self.assertEqual(observed, [(self.actor_id, False, child_context['current_view_info'], self.session_id)])
         self.assertEqual(completed.status_code, 200)
         submit.assert_called_once()
         parent = self._fresh_session()

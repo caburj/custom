@@ -1029,7 +1029,7 @@ class TestAISessionLoopHttp(HttpCase):
         with self.registry.cursor() as cr:
             env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
             session = env['ai.session'].sudo().browse(prepared['session_id'])
-            self.assertFalse(session._apply_submission_acknowledgement(
+            self.assertFalse(session._submit_prepared_request(
                 prepared['request_uuid'],
             ))
 

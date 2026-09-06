@@ -141,7 +141,6 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
         self.assertEqual(parent.request_round, 1)
         self.assertEqual(parent.request_uuid, self.parent_request_uuid)
         self.assertEqual(child.request_result, {'kind': 'success', 'message': message})
-        self.assertFalse(child.exchange_result)
         attachments = self._generated_attachments()
         self.assertEqual(len(attachments), 2)
         self.assertEqual({att.mimetype: att.raw.content for att in attachments}, {
@@ -291,7 +290,6 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
                 self.assertFalse(parent.pending_tool_call)
                 self.assertFalse(parent.request_phase)
                 self.assertEqual(child.request_result, failure)
-                self.assertFalse(child.exchange_result)
                 self.assertEqual([part['tool_call_id'] for part in self._results(parent)], ['prefix', 'image', 'suffix'])
                 self.assertEqual([part['success'] for part in self._results(parent)], [True, False, False])
                 self._assert_prefix_once(parent)
@@ -446,15 +444,15 @@ class TestAIImageGenerationContinuationHttp(ImageGenerationFixture, HttpCase):
         parent = self._session()
         pending = copy.deepcopy(parent.pending_tool_call)
         message = assistant_image()
-        original_apply = AiSession._apply_image_generation_child
+        original_apply = AiSession._continue_image_generation
 
-        def fail_after_effect(parent, image):
-            original_apply(parent, image)
+        def fail_after_effect(image):
+            original_apply(image)
             raise RuntimeError('Roll back image attachment creation and the parent suffix')
 
         with (
             mute_logger('odoo.http'),
-            patch.object(AiSession, '_apply_image_generation_child', autospec=True, side_effect=fail_after_effect),
+            patch.object(AiSession, '_continue_image_generation', autospec=True, side_effect=fail_after_effect),
             patch(TRANSPORT) as submit,
         ):
             failed = self._post_callback(child_uuid, message)
@@ -464,7 +462,6 @@ class TestAIImageGenerationContinuationHttp(ImageGenerationFixture, HttpCase):
         self.assertFalse(child.request_result)
         self.assertEqual(child.loop_state, 'waiting_model')
         self.assertEqual(child.request_phase, 'submitted')
-        self.assertFalse(child.exchange_result)
         parent = self._session()
         self.assertEqual(parent.loop_state, 'waiting_child')
         self.assertEqual(parent.request_uuid, self.parent_request_uuid)

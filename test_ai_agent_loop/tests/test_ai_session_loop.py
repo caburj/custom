@@ -168,15 +168,12 @@ class TestAISessionLoop(TransactionCase):
         self.assertEqual(len(self.session.event_ids), 1)
         self.assertNotIn('<odoo_current_context>', str(self.session.event_ids.metadata))
         self.assertIn('<odoo_current_context>', str(session.request_payload['messages']))
-        with patch.object(
-            AiSession,
-            'get_base_url',
-            autospec=True,
-            return_value='https://changed.example',
-        ) as get_base_url:
-            submission_payload = session._get_prepared_submission_payload(
-                session.request_uuid,
-            )
+        with (
+            patch.object(AiSession, 'get_base_url', autospec=True, return_value='https://changed.example') as get_base_url,
+            patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None) as transport,
+        ):
+            session._submit_prepared_request(session.request_uuid)
+        submission_payload = transport.call_args.args[2]
         get_base_url.assert_not_called()
         self.assertEqual(
             submission_payload['webhook_url'],
@@ -186,6 +183,19 @@ class TestAISessionLoop(TransactionCase):
         self.assertNotIn('callback_url', submission_payload)
         with self.assertRaises(UserError):
             session.write({'request_payload': {}})
+
+    def test_submission_acknowledgement_cannot_overwrite_a_completed_callback(self):
+        session = self._prepare_model_request()
+        request_uuid = session.request_uuid
+
+        def complete_before_acknowledgement(*args, **kwargs):
+            session._continue(request_uuid, {'kind': 'success', 'message': assistant_text('Already completed')})
+
+        with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', side_effect=complete_before_acknowledgement):
+            session._submit_prepared_request(request_uuid)
+        self.assertEqual(session.loop_state, 'ready')
+        self.assertFalse(session.request_phase)
+        self.assertEqual(session.request_result['message'], assistant_text('Already completed'))
 
     def test_active_model_round_requires_non_null_bounds(self):
         session = self._prepare_model_request()

@@ -8,12 +8,15 @@ import logging
 from contextlib import contextmanager
 from unittest.mock import patch
 
+from psycopg2.errors import LockNotAvailable
+
 from odoo import api, http
 from odoo.exceptions import ConcurrencyError
 from odoo.sql_db import Cursor
 from odoo.tests import HttpCase, tagged
 
 from .common import apply_iap_result
+from .test_ai_image_generation_continuation import assistant_image
 from .test_ai_session_subagents import tool_call
 from .test_ai_session_subagents_http import TestAISessionSubagentsHttp
 from odoo.addons.ai.controllers.thread import AIThreadController
@@ -86,6 +89,58 @@ class TestAISessionAtomicEndpoint(HttpCase):
         return snapshot
 
 
+    def test_helper_callback_locks_terminal_parent_delivery(self):
+        with self._physical_tree() as fixture:
+            owner_id, owner_uuid = fixture['children'][0]
+            with self.registry._db.cursor() as cr:
+                env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
+                owner = env['ai.session'].sudo().browse(owner_id)
+                tool = env.ref('ai.ir_actions_server_ai_generate_image')
+                owner.state = {'available_tools': tool.ids}
+                outcome = apply_iap_result(owner, owner_uuid, {
+                    'kind': 'success', 'message': {'role': 'assistant', 'content': [
+                        tool_call(tool.ai_tool_name, 'image', prompt='A lighthouse', images_paths=[],
+                                  image_title='Atomic helper lock', feedback='Here is the lighthouse.', aspect_ratio='16:9'),
+                    ]},
+                })
+                helper_id = outcome['prepared_requests'][0]['session_id']
+                helper_uuid = outcome['prepared_requests'][0]['request_uuid']
+            merges = []
+            original_merge = self.registry['ai.session']._merge_child_result
+
+            def observe_merge(parent, child, result):
+                if parent.id == fixture['parent_id']:
+                    self.assertEqual(child.id, owner_id)
+                    # Probe before the merge can acquire the row through a write.
+                    with self.assertRaises(LockNotAvailable):
+                        with self.registry._db.cursor() as probe:
+                            probe.execute('SELECT id FROM ai_session WHERE id = %s FOR UPDATE NOWAIT', [parent.id])
+                    merges.append((parent.id, child.id))
+                return original_merge(parent, child, result)
+
+            def submit(*args, **kwargs):
+                self.assertEqual(self._snapshot(helper_id)['loop_state'], 'ready')
+                self.assertEqual(self._snapshot(owner_id)['loop_state'], 'ready')
+
+            with (
+                observe_transactions() as observations,
+                patch.object(self.registry['ai.session'], '_merge_child_result', observe_merge),
+                patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', side_effect=submit) as transport,
+            ):
+                response = self._callback(helper_uuid, assistant_image()['content'])
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(merges, [(fixture['parent_id'], owner_id)])
+            self.assertEqual([o['commits'] for o in observations], [1])
+            self.assertEqual(self._snapshot(owner_id)['loop_state'], 'ready')
+            root = self._snapshot(fixture['parent_id'])
+            result = json.loads(self._results(root)[-1]['result'][0]['text'])
+            self.assertEqual(result['session_id'], owner_id)
+            self.assertEqual(result['status'], 'completed')
+            self.assertEqual(len(result['attachment_ids']), 1)
+            self.assertEqual(root['request_phase'], 'submitted')
+            self.assertTrue(self._results(root)[-1]['success'])
+            transport.assert_called_once()
+
     def test_nested_callback_rolls_back_every_parent_edge(self):
         with self._physical_tree() as fixture:
             parent_id, parent_uuid = fixture['children'][0]
@@ -107,10 +162,10 @@ class TestAISessionAtomicEndpoint(HttpCase):
             merges = []
             merge = self.registry['ai.session']._merge_child_result
 
-            def observe_merge(parent, child):
+            def observe_merge(parent, child, result):
                 parent.env.cr.execute('SELECT txid_current()')
                 merges.append((parent.id, parent.env.cr.fetchone()[0]))
-                return merge(parent, child)
+                return merge(parent, child, result)
 
             attempts = []
 

@@ -124,7 +124,7 @@ class TestAISessionAtomicScope(HttpCase):
                     child = env['ai.session'].sudo().search([('parent_session_id', '=', branch_id)])
                     child_id, child_uuid = child.id, child.request_uuid
                     child.state = {'available_tools': env.ref('ai.ir_actions_server_create_records').ids}
-                    child._apply_submission_acknowledgement(child_uuid)
+                    child.write({'request_phase': 'submitted'})
                     contact_call = self._contact_call(env, 'deep-confirm', fixture['contact_name'] + ' B')
                     later_call = self._contact_call(env, 'fresh-policy', fixture['contact_name'] + ' C')
                 waiting = self._snapshot(fixture['parent_id'])
@@ -190,7 +190,7 @@ class TestAISessionAtomicScope(HttpCase):
                     })
                     leaf = env['ai.session'].sudo().search([('parent_session_id', '=', parent_id)])
                     leaves.append((leaf.id, leaf.request_uuid))
-                    leaf._apply_submission_acknowledgement(leaf.request_uuid)
+                    leaf.write({'request_phase': 'submitted'})
                     parent._resume_pending_interaction(parent.resume_token, {'kind': 'confirmation', 'value': 'decline'})
                     self.assertEqual(parent.loop_state, 'waiting_child')
             result = self._concurrent(
@@ -206,7 +206,6 @@ class TestAISessionAtomicScope(HttpCase):
             for index, (parent_id, _) in enumerate(fixture['children']):
                 parent = self._snapshot(parent_id)
                 self.assertEqual(parent['loop_state'], 'ready')
-                self.assertEqual(parent['exchange_result']['status'], 'declined')
                 self.assertEqual(self._snapshot(leaves[index][0])['loop_state'], 'ready')
             self.assertGreater(result['attempts']['second'], 1)
 
@@ -223,7 +222,7 @@ class TestAISessionAtomicScope(HttpCase):
                 })
                 leaf = env['ai.session'].sudo().search([('parent_session_id', '=', branch_id)])
                 leaf.state = {'available_tools': env.ref('ai.ir_actions_server_create_records').ids}
-                leaf._apply_submission_acknowledgement(leaf.request_uuid)
+                leaf.write({'request_phase': 'submitted'})
                 call = self._contact_call(env, 'confirm', fixture['contact_name'] + (' A' if index == 0 else ' B'))
                 if waiting:
                     apply_iap_result(leaf, leaf.request_uuid, {'kind': 'success', 'message': {'role': 'assistant', 'content': [call]}})

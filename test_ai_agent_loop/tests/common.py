@@ -15,6 +15,7 @@ def normalize_iap_result(result):
 def apply_iap_result(session, request_uuid, result, *, deliver_child=False):
     """Exercise the durable receipt and continuation boundaries in model tests."""
     result = normalize_iap_result(result)
+    owner = session._get_continuation_owner()
     outcome = session._continue(request_uuid, result)
     if outcome is None:
         outcome = {
@@ -24,6 +25,6 @@ def apply_iap_result(session, request_uuid, result, *, deliver_child=False):
                 "responseState": session._get_response_state(),
             },
         }
-    if deliver_child and session.request_uuid == request_uuid and session.loop_state == 'ready' and session.parent_session_id:
-        return session.parent_session_id._merge_child_result(session) or outcome
+    if deliver_child and (child_result := outcome.get('child_result')):
+        return owner.parent_session_id._merge_child_result(owner, child_result) or outcome
     return outcome

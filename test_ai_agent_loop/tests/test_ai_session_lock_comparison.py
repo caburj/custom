@@ -39,7 +39,7 @@ class TestAISessionLockComparison(HttpCase):
             with self.registry._db.cursor() as cr:
                 env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
                 for child_id, child_uuid in fixture['children']:
-                    env['ai.session'].sudo().browse(child_id)._apply_submission_acknowledgement(child_uuid)
+                    env['ai.session'].sudo().browse(child_id).write({'request_phase': 'submitted'})
             waiting = self._snapshot(source_id)
             paused = Event()
             release = Event()
@@ -87,9 +87,9 @@ class TestAISessionLockComparison(HttpCase):
                     paused.set()
                     self.assertTrue(release.wait(timeout=45), 'Coordinator did not release the first transition')
 
-            def merge(session, child):
+            def merge(session, child, result):
                 enter_transition(session, 'merge')
-                return original_merge(session, child)
+                return original_merge(session, child, result)
 
             def resume(session, *args, **kwargs):
                 enter_transition(session, 'resume')

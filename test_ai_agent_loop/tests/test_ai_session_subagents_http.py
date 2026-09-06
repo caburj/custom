@@ -120,7 +120,6 @@ class TestAISessionSubagentsHttp(HttpCase):
                 'request_phase': session.request_phase,
                 'resume_token': session.resume_token,
                 'pending': session.pending_tool_call,
-                'exchange_result': session.exchange_result,
                 'payload': session.request_payload,
                 'events': session.event_ids.ids,
             }
@@ -366,7 +365,10 @@ class TestAISessionSubagentsHttp(HttpCase):
                 child = self._snapshot(child_id)
                 parent = self._snapshot(session.id)
                 self.assertEqual(child['loop_state'], 'ready')
-                self.assertEqual(child['exchange_result']['status'], 'failed')
+                result = next(json.loads(item['result'][0]['text']) for item in self._results(parent)
+                              if item['tool_name'] == 'start_session'
+                              and json.loads(item['result'][0]['text'])['session_id'] == child_id)
+                self.assertEqual(result['status'], 'failed')
                 self.assertEqual(self._snapshot(callback_id)['loop_state'], 'ready')
                 self.assertEqual(parent['request_uuid'], request_uuid)
                 self.assertEqual(parent['request_phase'], 'prepared')
