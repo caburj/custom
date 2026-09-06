@@ -17,7 +17,6 @@ from odoo.addons.ai.controllers.thread import AIThreadController
 from odoo.addons.ai.models.ai_session import AiSession
 from odoo.addons.ai.utils.ai_utils import call_odoo_ai_transport
 from odoo.addons.ai.utils.ai_utils import UserInputResponse
-from odoo.addons.ai_website_sale.controllers.thread import AIWebsiteSaleThreadController
 from odoo.addons.mail.tools.discuss import Store
 
 from .common import apply_iap_result
@@ -1239,16 +1238,8 @@ class TestAISessionLoop(TransactionCase):
             'fiscal_position_id': 13,
             'unrelated_key': 'not persisted',
         }
-        snapshot = AIThreadController()._get_session_request_context_snapshot(self.env, context)
+        snapshot = AiSession._get_request_context_snapshot(self.env['ai.session'], context)
 
-        self.assertEqual(AIThreadController._session_request_context_keys, frozenset({
-            'allowed_company_ids',
-            'active_company_ids',
-            'current_view_info',
-            'HTTP_HOST',
-            'lang',
-            'tz',
-        }))
         self.assertEqual(snapshot, {
             'allowed_company_ids': company_ids,
             'active_company_ids': company_ids,
@@ -1259,8 +1250,7 @@ class TestAISessionLoop(TransactionCase):
         })
 
     def test_website_sale_session_request_context_accepts_absent_optional_keys(self):
-        snapshot = AIWebsiteSaleThreadController()._get_session_request_context_snapshot(
-            self.env,
+        snapshot = self.env['ai.session']._get_request_context_snapshot(
             {'lang': 'en_US'},
         )
 
@@ -1272,23 +1262,16 @@ class TestAISessionLoop(TransactionCase):
             'pricelist_id': 11,
             'fiscal_position_id': 13,
         }
-        snapshot = AIWebsiteSaleThreadController()._get_session_request_context_snapshot(
-            self.env,
+        snapshot = self.env['ai.session']._get_request_context_snapshot(
             context,
         )
 
-        self.assertEqual(
-            AIWebsiteSaleThreadController._session_request_context_keys
-            - AIThreadController._session_request_context_keys,
-            frozenset({'website_id', 'pricelist_id', 'fiscal_position_id'}),
-        )
         self.assertEqual(snapshot, context)
 
     def test_session_request_context_is_bounded_to_accessible_companies(self):
         accessible_company_id = self.env.company.id
         inaccessible_company_id = max(self.env['res.company'].sudo().search([]).ids) + 1
-        snapshot = AIThreadController()._get_session_request_context_snapshot(
-            self.env,
+        snapshot = self.env['ai.session']._get_request_context_snapshot(
             {
                 'allowed_company_ids': [accessible_company_id, inaccessible_company_id],
                 'active_company_ids': [inaccessible_company_id, accessible_company_id],

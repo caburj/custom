@@ -56,6 +56,8 @@ class TestAISessionSubagents(TransactionCase):
         return session
 
     def _apply(self, session, *content):
+        # Model tests establish the same saved event context as the callback entry.
+        session = session.with_context(**(session.request_context or {}))
         return apply_iap_result(session, session.request_uuid, {
             'kind': 'success',
             'message': {'role': 'assistant', 'content': list(content)},

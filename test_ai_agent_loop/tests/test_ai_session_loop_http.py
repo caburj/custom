@@ -63,7 +63,7 @@ class TestAISessionLoopHttp(HttpCase):
             other_user = new_test_user(
                 env,
                 login='callback_confirmation_other',
-                groups='base.group_user',
+                groups='base.group_user,base.group_partner_manager',
             )
             cls.agent_id = agent.id
             cls.channel_id = channel.id
@@ -297,11 +297,15 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(session.loop_state, 'waiting_model')
         self.assertFalse(session.request_result)
 
-    def test_actor_env_restores_caller_without_ending_transaction(self):
+    def test_callback_transaction_keeps_actor_after_commit_and_rolls_back_errors(self):
         cr = self.env.cr
         actor_id = self.env.ref('base.user_admin').id
         caller_id = self.env.ref('base.public_user').id
         guest_id = self.env['mail.guest'].create({'name': 'Actor transaction guest'}).id
+        session = self.env['ai.session'].sudo().create({
+            'request_user_id': actor_id, 'request_guest_id': guest_id,
+            'request_context': {'lang': 'fr_FR'},
+        })
         previous_default_env = cr.transaction.default_env
         builder = EnvironBuilder(path='/ai/completion_result_ready', method='POST')
         incoming_request = HttpRequest(WerkzeugRequest(builder.get_environ()))
@@ -313,14 +317,12 @@ class TestAISessionLoopHttp(HttpCase):
         try:
             with patch.object(current_thread(), 'uid', caller_id, create=True):
                 incoming_request.update_env()
-                caller_env = incoming_request.env
                 for exit_kind in ('success', 'early_return', 'body_error'):
                     with self.subTest(exit_kind=exit_kind):
                         def run_transaction():
-                            with controller._actor_env(
-                                user_id=actor_id, context={'lang': 'fr_FR'}, guest_id=guest_id,
-                            ) as env:
-                                self.assertIs(env, http.request.env)
+                            with controller._session_transaction(session, restore_actor=True) as bound_session:
+                                env = http.request.env
+                                self.assertIs(bound_session.env.cr, env.cr)
                                 self.assertIs(env.transaction.default_env, env)
                                 self.assertIs(env.cr, cr)
                                 self.assertEqual(env.uid, actor_id)
@@ -342,11 +344,11 @@ class TestAISessionLoopHttp(HttpCase):
                         ):
                             self.assertEqual(run_transaction(), exit_kind == 'early_return')
 
-                        commit.assert_not_called()
-                        rollback.assert_not_called()
-                        self.assertIs(http.request.env, caller_env)
-                        self.assertIs(cr.transaction.default_env, caller_env)
-                        self.assertEqual(current_thread().uid, caller_id)
+                        self.assertEqual(commit.call_count, int(exit_kind != 'body_error'))
+                        self.assertEqual(rollback.call_count, int(exit_kind == 'body_error'))
+                        self.assertEqual(http.request.env.uid, actor_id)
+                        self.assertIs(cr.transaction.default_env, http.request.env)
+                        self.assertEqual(current_thread().uid, actor_id)
         finally:
             cr.transaction.default_env = previous_default_env
             http.request_var.reset(request_token)
@@ -821,10 +823,10 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertFalse(observed['sudo'])
         self.assertEqual(observed['actor_uid'], actor_id)
         self.assertEqual(observed['activation_commit_context'], observed['activation_context'])
-        self.assertNotIn('ai_automation_run', observed['activation_commit_context'])
-        self.assertEqual(observed['context'], session.request_context)
+        self.assertTrue(observed['activation_commit_context']['ai_automation_run'])
+        self.assertEqual({key: observed['context'][key] for key in session.request_context}, session.request_context)
         self.assertTrue(observed['context']['ai_automation_run'])
-        self.assertEqual(observed['company_ids'], [company_id])
+        self.assertCountEqual(observed['company_ids'], self.env.ref('base.user_admin').company_ids.ids)
         self.assertEqual(session.request_phase, 'submitted')
         partner = self.env['res.partner'].search([('name', '=', confirmation['label'])])
         self.assertEqual(partner.write_uid.id, actor_id)
@@ -897,7 +899,7 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(session.channel_id.message_ids, messages)
         self.assertFalse(self.env['res.partner'].search_count([('name', '=', 'HTTP New Token Contact')]))
 
-    def test_confirmation_resume_rejects_another_channel_member(self):
+    def test_confirmation_resume_uses_another_authorized_members_identity(self):
         confirmation = self._create_committed_confirmation(
             'HTTP Foreign Actor Contact',
         )
@@ -911,16 +913,27 @@ class TestAISessionLoopHttp(HttpCase):
             'callback_confirmation_other',
             'callback_confirmation_other',
         )
-        response = self._resume_pending_confirmation(confirmation)
-
-        self.assertIn('error', response.json())
+        with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None):
+            response = self._resume_pending_confirmation(confirmation)
+        self.assertNotIn('error', response.json())
         self.env.invalidate_all()
         session = self._get_session(confirmation['session_id'])
-        self.assertEqual(session.loop_state, 'waiting_confirmation')
+        self.assertEqual(session.loop_state, 'waiting_model')
+        self.assertEqual(session.request_user_id.id, self.other_user_id)
+        partner = self.env['res.partner'].search([('name', '=', confirmation['label'])])
+        self.assertEqual(len(partner), 1)
+        self.assertEqual(partner.create_uid.id, self.other_user_id)
+
+    def test_confirmation_resume_rejects_a_user_without_channel_access(self):
+        confirmation = self._create_committed_confirmation('HTTP Inaccessible Channel Contact')
+        self.authenticate('callback_confirmation_other', 'callback_confirmation_other')
+        with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport') as submit:
+            response = self._resume_pending_confirmation(confirmation)
+        self.assertIn('error', response.json())
+        submit.assert_not_called()
+        session = self._get_session(confirmation['session_id'])
         self.assertEqual(session.resume_token, confirmation['resume_token'])
-        self.assertFalse(self.env['res.partner'].search([
-            ('name', '=', confirmation['label']),
-        ]))
+        self.assertFalse(self.env['res.partner'].search_count([('name', '=', confirmation['label'])]))
 
     def test_confirmation_decline_settles_without_submission_or_mutation(self):
         self.authenticate('admin', 'admin')

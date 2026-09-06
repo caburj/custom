@@ -51,6 +51,7 @@ class TestAISessionSubagentsHttp(HttpCase):
                     },
                 )
                 parent_uuid = parent.request_uuid
+                parent = parent.with_context(parent.request_context)
                 prepare_request = type(parent)._prepare_request
                 round_limits = iter(child_round_limits or ())
 
@@ -516,3 +517,91 @@ class TestAISessionSubagentsHttp(HttpCase):
                     self.assertEqual(env['res.partner'].search_count([
                         ('name', '=', fixture['contact_name'] + suffix),
                     ]), 1)
+
+
+    def test_allow_all_and_parent_delivery_keep_the_resuming_company_and_view(self):
+        self.authenticate('admin', 'admin')
+        original_cids = self.opener.cookies.get('cids')
+        with self.registry._db.cursor() as cr:
+            env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
+            company = env['res.company'].create({'name': 'Event context company'})
+            env.user.company_ids = [Command.link(company.id)]
+            company_id = company.id
+        try:
+            with self._physical_tree(child_count=2, context_snapshot={
+                'current_view_info': {'marker': 'before-resume'},
+            }) as fixture:
+                with self.registry._db.cursor() as cr:
+                    env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
+                    children = env['ai.session'].sudo().browse([sid for sid, _uuid in fixture['children']])
+                    for child, suffix in zip(children, (' A', ' B')):
+                        child.state = {'available_tools': env.ref('ai.ir_actions_server_create_records').ids}
+                        apply_iap_result(child, child.request_uuid, {
+                            'kind': 'success', 'message': {'role': 'assistant', 'content': [
+                                self._contact_call(env, f'confirm-{child.id}', fixture['contact_name'] + suffix),
+                            ]},
+                        })
+                    token = children[0].resume_token
+                self.opener.cookies['cids'] = str(company_id)
+                observed = []
+                resume = self.registry['ai.session']._resume_pending_interaction
+                submit = self.registry['ai.session']._submit_prepared_request
+                merge = self.registry['ai.session']._merge_child_result
+
+                def observe(kind, session):
+                    from odoo.http import request
+                    observed.append((kind, session.id))
+                    self.assertEqual(session.env.company.id, company_id)
+                    self.assertEqual(session.env.context['current_view_info'], {'marker': 'after-resume'})
+                    self.assertEqual(request.env.company.id, company_id)
+                    self.assertIs(request.env.transaction.default_env, request.env)
+
+                def observe_resume(session, *args, **kwargs):
+                    observe('resume', session)
+                    return resume(session, *args, **kwargs)
+
+                def observe_submit(session, *args, **kwargs):
+                    observe('submit', session)
+                    self.assertFalse(session.env.su)
+                    return submit(session, *args, **kwargs)
+
+                def observe_merge(session, *args, **kwargs):
+                    observe('merge', session)
+                    return merge(session, *args, **kwargs)
+
+                with (
+                    patch.object(self.registry['ai.session'], '_resume_pending_interaction', observe_resume),
+                    patch.object(self.registry['ai.session'], '_submit_prepared_request', observe_submit),
+                    patch.object(self.registry['ai.session'], '_merge_child_result', observe_merge),
+                    patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None),
+                ):
+                    response = self.url_open('/ai/resume_pending_interaction', json=self.build_rpc_payload({
+                        'channel_id': fixture['channel_id'], 'session_id': fixture['children'][0][0],
+                        'resume_token': token, 'response': {'kind': 'confirmation', 'value': 'auto_confirm'},
+                        'current_view_info': {'marker': 'after-resume'},
+                    }))
+                    self.assertNotIn('error', response.json())
+                    self.assertEqual(sum(kind == 'resume' for kind, _sid in observed), 2)
+                    for sid, _uuid in fixture['children']:
+                        child = self._snapshot(sid)
+                        self.assertEqual(self._callback(child['request_uuid'], 'Child complete').status_code, 200)
+                with self.registry._db.cursor() as cr:
+                    env = api.Environment(cr, self.env.uid, {})
+                    parent = env['ai.session'].sudo().browse(fixture['parent_id'])
+                    self.assertEqual(parent.loop_state, 'waiting_model')
+                    self.assertEqual(parent.request_context['allowed_company_ids'], [company_id])
+                    self.assertEqual(parent.request_context['current_view_info'], {'marker': 'after-resume'})
+                    self.assertIn('after-resume', str(parent.request_payload['messages']))
+                    self.assertEqual(env['res.partner'].search_count([
+                        ('name', 'in', [fixture['contact_name'] + ' A', fixture['contact_name'] + ' B']),
+                    ]), 2)
+        finally:
+            if original_cids is None:
+                self.opener.cookies.pop('cids', None)
+            else:
+                self.opener.cookies['cids'] = original_cids
+            with self.registry._db.cursor() as cr:
+                env = api.Environment(cr, self.env.uid, {})
+                env.ref('base.user_admin').company_ids = [Command.unlink(company_id)]
+                env['payment.provider'].search([('company_id', '=', company_id)]).unlink()
+                env['res.company'].browse(company_id).unlink()
