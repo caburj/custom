@@ -8,8 +8,6 @@ import logging
 from contextlib import contextmanager
 from unittest.mock import patch
 
-from psycopg2.errors import LockNotAvailable
-
 from odoo import api, http
 from odoo.exceptions import ConcurrencyError
 from odoo.sql_db import Cursor
@@ -29,7 +27,7 @@ def observe_transactions(*, before_commit=None, on_attempt=None):
     """Observe production transactions and inject failures without replacing work."""
     router = importlib.import_module('odoo.http.router')
     original_serve = router.serve_ir_http
-    original_transaction = AIThreadController._lock_and_commit
+    original_transaction = AIThreadController._session_transaction
     original_commit = Cursor.commit
     observations = []
 
@@ -68,7 +66,7 @@ def observe_transactions(*, before_commit=None, on_attempt=None):
 
     with (
         patch.object(router, 'serve_ir_http', serve),
-        patch.object(AIThreadController, '_lock_and_commit', transaction),
+        patch.object(AIThreadController, '_session_transaction', transaction),
         patch.object(Cursor, 'commit', commit),
     ):
         yield observations
@@ -89,7 +87,7 @@ class TestAISessionAtomicEndpoint(HttpCase):
         return snapshot
 
 
-    def test_helper_callback_locks_terminal_parent_delivery(self):
+    def test_helper_callback_commits_terminal_parent_delivery_atomically(self):
         with self._physical_tree() as fixture:
             owner_id, owner_uuid = fixture['children'][0]
             with self.registry._db.cursor() as cr:
@@ -100,21 +98,20 @@ class TestAISessionAtomicEndpoint(HttpCase):
                 outcome = apply_iap_result(owner, owner_uuid, {
                     'kind': 'success', 'message': {'role': 'assistant', 'content': [
                         tool_call(tool.ai_tool_name, 'image', prompt='A lighthouse', images_paths=[],
-                                  image_title='Atomic helper lock', feedback='Here is the lighthouse.', aspect_ratio='16:9'),
+                                  image_title='Atomic helper delivery', feedback='Here is the lighthouse.', aspect_ratio='16:9'),
                     ]},
                 })
                 helper_id = outcome['prepared_requests'][0]['session_id']
                 helper_uuid = outcome['prepared_requests'][0]['request_uuid']
+            before = {sid: self._snapshot(sid) for sid in (fixture['parent_id'], owner_id, helper_id)}
             merges = []
             original_merge = self.registry['ai.session']._merge_child_result
 
             def observe_merge(parent, child, result):
                 if parent.id == fixture['parent_id']:
                     self.assertEqual(child.id, owner_id)
-                    # Probe before the merge can acquire the row through a write.
-                    with self.assertRaises(LockNotAvailable):
-                        with self.registry._db.cursor() as probe:
-                            probe.execute('SELECT id FROM ai_session WHERE id = %s FOR UPDATE NOWAIT', [parent.id])
+                    # Helper completion and owner settlement are still uncommitted.
+                    self.assertEqual({sid: self._snapshot(sid) for sid in before}, before)
                     merges.append((parent.id, child.id))
                 return original_merge(parent, child, result)
 

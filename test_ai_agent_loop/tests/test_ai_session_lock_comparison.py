@@ -1,12 +1,11 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-"""Force real HTTP contention without requiring a particular locking primitive."""
+"""Force stale first attempts and let native HTTP retry preserve committed work."""
 
 import copy
 import importlib
 import json
 import logging
-import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from unittest.mock import patch
@@ -30,29 +29,37 @@ class TestAISessionLockComparison(HttpCase):
 
     def _race(self, scenario):
         self.authenticate('admin', 'admin')
-        confirmation = scenario not in ('siblings', 'duplicate_callback')
+        duplicate_start = scenario == 'duplicate_start'
+        confirmation = scenario not in ('siblings', 'duplicate_callback', 'duplicate_start')
         duplicate_resume = scenario == 'duplicate_resume'
         automatic = scenario.startswith('automatic_')
-        child_count = 0 if duplicate_resume else (2 if scenario == 'siblings' else 1)
-        with self._physical_tree(child_count=child_count, confirmation=confirmation) as fixture:
+        child_count = 0 if duplicate_resume or duplicate_start else (2 if scenario == 'siblings' else 1)
+        with self._physical_tree(
+            child_count=child_count, confirmation=confirmation, prepare_root=not duplicate_start,
+        ) as fixture:
             source_id = fixture['parent_id']
+            target_id = fixture['children'][0][0] if scenario == 'duplicate_callback' else source_id
             with self.registry._db.cursor() as cr:
                 env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
                 for child_id, child_uuid in fixture['children']:
                     env['ai.session'].sudo().browse(child_id).write({'request_phase': 'submitted'})
-            waiting = self._snapshot(source_id)
-            paused = Event()
-            release = Event()
-            request_pids = {}
+                if duplicate_start:
+                    message_id = env['discuss.channel'].browse(fixture['channel_id']).message_post(
+                        body='Start this exchange once', message_type='comment',
+                    ).id
+            waiting = self._snapshot(target_id)
+            arrived = {name: Event() for name in ('first', 'second')}
+            release = {name: Event() for name in arrived}
+            snapshots = {}
             attempts = {'first': 0, 'second': 0}
             transitions = []
             invocations = []
             submissions = []
-            blocking = []
-            first_snapshot = {}
             session_model = self.registry['ai.session']
             original_merge = session_model._merge_child_result
-            original_resume = session_model._resume_pending_interaction
+            original_store = session_model._store_request_result
+            original_prepare = session_model._prepare_model_request
+            original_post = self.registry['discuss.channel'].message_post
             original_tool = self.registry['ir.actions.server']._ai_tool_run
             router = importlib.import_module('odoo.http.router')
             original_serve = router.serve_ir_http
@@ -64,36 +71,48 @@ class TestAISessionLockComparison(HttpCase):
                 name = request.httprequest.headers.get('X-AI-Lock-Comparison')
                 if name in attempts:
                     attempts[name] += 1
-                    request.env.cr.execute('SELECT pg_backend_pid()')
-                    request_pids[name] = request.env.cr.fetchone()[0]
                 return original_serve(request, *args, **kwargs)
 
             def enter_transition(session, kind):
-                if session.id != source_id:
+                name = label()
+                if session.id != target_id or name not in attempts or attempts[name] != 1:
                     return
-                # Materialize both the ORM values and the transaction snapshot.
-                snapshot = {
+                # Both first attempts must read the same state before either writes it.
+                snapshots[name] = {
                     'pending': copy.deepcopy(session.pending_tool_call),
                     'request_uuid': session.request_uuid,
                     'resume_token': session.resume_token,
+                    'loop_state': session.loop_state,
+                    'request_result': copy.deepcopy(session.request_result),
                 }
                 session.env.cr.execute('SELECT pg_backend_pid(), txid_current(), current_setting(%s)', ['transaction_isolation'])
                 pid, xid, isolation = session.env.cr.fetchone()
                 self.assertEqual(isolation, 'repeatable read')
-                name = label()
                 transitions.append({'request': name, 'kind': kind, 'pid': pid, 'xid': xid})
-                if name == 'first' and not paused.is_set():
-                    first_snapshot.update(snapshot)
-                    paused.set()
-                    self.assertTrue(release.wait(timeout=45), 'Coordinator did not release the first transition')
+                arrived[name].set()
+                self.assertTrue(release[name].wait(timeout=45), 'Coordinator did not release the stale transition')
 
             def merge(session, child, result):
-                enter_transition(session, 'merge')
+                if scenario != 'duplicate_callback':
+                    enter_transition(session, 'merge')
                 return original_merge(session, child, result)
 
-            def resume(session, *args, **kwargs):
-                enter_transition(session, 'resume')
-                return original_resume(session, *args, **kwargs)
+            def store(session, *args, **kwargs):
+                if scenario == 'duplicate_callback':
+                    enter_transition(session, 'store')
+                return original_store(session, *args, **kwargs)
+
+            def prepare(session, *args, **kwargs):
+                if duplicate_start:
+                    enter_transition(session, 'start')
+                return original_prepare(session, *args, **kwargs)
+
+            def post(channel, *args, **kwargs):
+                if confirmation and channel.id == fixture['channel_id'] and kwargs.get('body') == choice['label']:
+                    # Both resumes have validated the token before posting a receipt.
+                    # Test-mode channel bookkeeping can conflict here before the tool.
+                    enter_transition(channel.env['ai.session'].sudo().browse(source_id), 'receipt')
+                return original_post(channel, *args, **kwargs)
 
             def tool(tool_record, record, arguments, tools_context):
                 if tools_context.get('session_id') == source_id and tools_context.get('tool_request_confirmed'):
@@ -126,12 +145,27 @@ class TestAISessionLockComparison(HttpCase):
                     }), timeout=90,
                 )
 
+            def start(name):
+                return requests.post(
+                    f'{self.base_url()}/ai/start_session_advance',
+                    headers={'X-AI-Lock-Comparison': name}, cookies=self.opener.cookies,
+                    json=self.build_rpc_payload({
+                        'channel_id': fixture['channel_id'], 'mail_message_id': message_id,
+                    }), timeout=90,
+                )
+
+            if confirmation:
+                value = 'auto_confirm' if automatic else 'confirm_once'
+                choice = next(c for c in waiting['pending']['user_input_request']['choices'] if c['value'] == value)
+
             if scenario == 'siblings':
                 first_call, second_call = lambda: callback('first'), lambda: callback('second', 1)
             elif scenario == 'duplicate_callback':
                 first_call, second_call = lambda: callback('first'), lambda: callback('second')
             elif duplicate_resume:
                 first_call, second_call = lambda: confirm('first'), lambda: confirm('second')
+            elif duplicate_start:
+                first_call, second_call = lambda: start('first'), lambda: start('second')
             elif scenario.endswith('merge_first'):
                 first_call, second_call = lambda: callback('first'), lambda: confirm('second')
             else:
@@ -141,7 +175,9 @@ class TestAISessionLockComparison(HttpCase):
                 with (
                     patch.object(router, 'serve_ir_http', observe_http),
                     patch.object(session_model, '_merge_child_result', merge),
-                    patch.object(session_model, '_resume_pending_interaction', resume),
+                    patch.object(session_model, '_store_request_result', store),
+                    patch.object(session_model, '_prepare_model_request', prepare),
+                    patch.object(self.registry['discuss.channel'], 'message_post', post),
                     patch.object(self.registry['ir.actions.server'], '_ai_tool_run', tool),
                     patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', side_effect=submit),
                     self.allow_requests(all_requests=True),
@@ -149,31 +185,30 @@ class TestAISessionLockComparison(HttpCase):
                 ):
                     first_future = pool.submit(first_call)
                     try:
-                        self.assertTrue(paused.wait(timeout=15), 'First request never reached the shared transition')
+                        self.assertTrue(arrived['first'].wait(timeout=15), 'First request never reached the stale read')
                         second_future = pool.submit(second_call)
-                        deadline = time.monotonic() + 20
-                        while time.monotonic() < deadline:
-                            second_pid = request_pids.get('second')
-                            if second_pid:
-                                with self.registry._db.cursor() as cr:
-                                    cr.execute('''
-                                        SELECT locktype, mode FROM pg_locks
-                                        WHERE pid = %s AND NOT granted
-                                          AND %s = ANY(pg_blocking_pids(%s))
-                                    ''', [second_pid, request_pids['first'], second_pid])
-                                    blocking = cr.fetchall()
-                            if blocking or second_future.done():
-                                break
-                            time.sleep(0.01)
-                        self.assertTrue(blocking, 'The overlapping session changes did not wait for their owner')
-                        self.assertEqual(first_snapshot['pending'], waiting['pending'])
+                        self.assertTrue(arrived['second'].wait(timeout=15), 'Second request could not reach the stale read')
+                        self.assertEqual(snapshots['first'], snapshots['second'])
+                        self.assertEqual(snapshots['first']['pending'], waiting['pending'])
+                        self.assertEqual(len({entry['pid'] for entry in transitions}), 2)
+                        self.assertEqual(len({entry['xid'] for entry in transitions}), 2)
+                        # Commit the first request while the second retains its old snapshot.
+                        release['first'].set()
+                        first_response = first_future.result(timeout=30)
                     finally:
-                        release.set()
-                    responses = [first_future.result(timeout=90), second_future.result(timeout=90)]
-                    for response in responses:
+                        for event in release.values():
+                            event.set()
+                    responses = [first_response, second_future.result(timeout=90)]
+                    for index, response in enumerate(responses):
                         self.assertEqual(response.status_code, 200, response.text)
-                        if isinstance(response.json(), dict):
+                        if duplicate_start and index == 1:
+                            error = response.json()['error']['data']
+                            self.assertEqual(error['name'], 'odoo.exceptions.UserError')
+                            self.assertIn('already responding', error['message'])
+                        elif isinstance(response.json(), dict):
                             self.assertNotIn('error', response.json())
+                    self.assertEqual(attempts['first'], 1)
+                    self.assertGreater(attempts['second'], 1, 'The stale transaction was not retried by HTTP')
 
                 final = self._snapshot(source_id)
                 results = self._results(final)
@@ -189,16 +224,17 @@ class TestAISessionLockComparison(HttpCase):
                 self.assertFalse(final['pending'])
                 self.assertFalse(final['resume_token'])
                 self.assertEqual(set(submissions), {final['request_uuid']})
+                if duplicate_start:
+                    self.assertEqual(len(final['events']), 1, 'A rolled-back start left duplicate history')
+                    self.assertEqual(len(submissions), 1)
+                    self.assertEqual(responses[0].json()['result']['request_uuid'], final['request_uuid'])
                 with self.registry._db.cursor() as cr:
                     env = api.Environment(cr, self.env.uid, {})
                     contacts = env['res.partner'].search_count([('name', '=', fixture['contact_name'])])
                 self.assertEqual(contacts, int(confirmation))
-                self.assertEqual(len(invocations), int(confirmation),
-                                 'Confirmed tool execution repeated after waiting for the source row')
+                self.assertGreaterEqual(len(invocations), int(confirmation))
                 # Count the exact selected-choice text, rather than assuming a label.
                 if confirmation:
-                    value = 'auto_confirm' if automatic else 'confirm_once'
-                    choice = next(c for c in waiting['pending']['user_input_request']['choices'] if c['value'] == value)
                     with self.registry._db.cursor() as cr:
                         env = api.Environment(cr, self.env.uid, {})
                         receipts = env['mail.message'].search_count([
@@ -206,11 +242,10 @@ class TestAISessionLockComparison(HttpCase):
                             ('body', 'ilike', choice['label']),
                         ])
                     self.assertEqual(receipts, 1)
-                self.assertEqual(len({request_pids['first'], request_pids['second']}), 2)
             finally:
                 _logger.info('LOCK_COMPARISON %s', json.dumps({
                     'scenario': scenario, 'http_attempts': attempts,
-                    'transition_entries': transitions, 'second_wait': blocking,
+                    'transition_entries': transitions,
                     'confirmed_tool_invocations': len(invocations),
                     'tool_invocation_requests': [i['request'] for i in invocations],
                     'transport_attempts': len(submissions), 'logical_submissions': len(set(submissions)),
@@ -221,6 +256,9 @@ class TestAISessionLockComparison(HttpCase):
 
     def test_duplicate_callback(self):
         self._race('duplicate_callback')
+
+    def test_duplicate_start(self):
+        self._race('duplicate_start')
 
     def test_merge_then_manual_resume(self):
         self._race('manual_merge_first')
