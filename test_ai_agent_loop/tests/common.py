@@ -15,9 +15,8 @@ def normalize_iap_result(result):
 def apply_iap_result(session, request_uuid, result, *, deliver_child=False):
     """Exercise the durable receipt and continuation boundaries in model tests."""
     result = normalize_iap_result(result)
-    if session._store_request_result(request_uuid, result):
-        outcome = session._continue(request_uuid)
-    else:
+    outcome = session._continue(request_uuid, result)
+    if outcome is None:
         outcome = {
             "prepared_requests": [],
             "response": {

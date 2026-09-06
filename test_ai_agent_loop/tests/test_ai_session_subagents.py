@@ -511,7 +511,7 @@ class TestAISessionSubagents(TransactionCase):
         self.assertFalse(result['sudo'])
         self.assertEqual(self.env['res.partner'].browse(result['partner_id']).create_uid, actor)
 
-    def test_continue_does_not_clear_a_terminal_result_before_its_marker_is_merged(self):
+    def test_continue_reuses_a_child_after_its_result_is_merged(self):
         self._prepare()
         self._apply(self.session, self._start('start'))
         child = self._children()
@@ -520,24 +520,23 @@ class TestAISessionSubagents(TransactionCase):
         self._apply(self.session,
             tool_call('continue_session', 'second', session_id=child.id, message='Second exchange'),
             self._create_contact('pause', 'Foreground unmerged contact'),
-            tool_call('continue_session', 'too-early', session_id=child.id, message='Third exchange'),
+            tool_call('continue_session', 'third', session_id=child.id, message='Third exchange'),
         )
-        self._apply(child, {'type': 'text', 'text': 'Undelivered second answer'})
+        self._complete(child, 'Second exchange')
         child_uuid = child.request_uuid
-        result = copy.deepcopy(child.exchange_result)
         self.assertEqual(child.loop_state, 'ready')
+        pending = self.session.pending_tool_call['pending_results']
+        self.assertNotIn('child_session_id', pending[0])
+        self.assertEqual(self._child_result(pending[0])['message'], '<p>Second exchange</p>')
         self.session._resume_pending_interaction(
             self.session.resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
-        self.assertEqual(child.request_uuid, child_uuid)
-        self.assertEqual(child.exchange_result, result)
-        pending = self.session.pending_tool_call['pending_results']
-        self.assertEqual(pending[0]['child_session_id'], child.id)
-        self.assertFalse(pending[2]['success'])
-        self.session._merge_child_result(child)
+        self.assertNotEqual(child.request_uuid, child_uuid)
+        self.assertFalse(child.exchange_result)
+        self.assertEqual(self.session.pending_tool_call['pending_results'][2]['child_session_id'], child.id)
+        self._complete(child, 'Third exchange')
         self.assertEqual(self.session.loop_state, 'waiting_model')
-        self.assertIn('Undelivered second answer', self._child_result(self._results()[1])['message'])
 
     def test_source_owned_question_and_client_wait_do_not_settle_children(self):
         client_tool = self.env['ir.actions.server'].create({

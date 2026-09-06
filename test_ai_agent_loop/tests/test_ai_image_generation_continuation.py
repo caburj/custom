@@ -104,7 +104,6 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
         self.assertEqual(child.request_phase, 'prepared')
         self.assertEqual(child.continuation_data, {
             'continuation_type': 'image_generation',
-            'parent_request_uuid': self.parent_request_uuid, 'call_id': 'image',
         })
         payload = child.request_payload
         self.assertEqual(set(payload), {
@@ -252,7 +251,7 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
         self.assertNotEqual(first, second)
         self.assertEqual(parent.loop_state, 'waiting_child')
         self.assertEqual(second.parent_session_id, parent)
-        self.assertEqual(second.continuation_data['call_id'], 'second-image')
+        self.assertEqual(parent.pending_tool_call['call_id'], 'second-image')
         self.assertEqual([part['tool_call_id'] for part in parent.pending_tool_call['pending_results']], [
             'prefix', 'first-image', 'second-image',
         ])

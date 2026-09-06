@@ -10,7 +10,7 @@ from psycopg2.errors import DeadlockDetected, SerializationFailure
 
 from odoo import Command
 from odoo.tests import new_test_user, tagged, TransactionCase
-from odoo.exceptions import AccessError, ConcurrencyError, MissingError, UserError
+from odoo.exceptions import AccessError, ConcurrencyError, UserError
 from odoo.tools import mute_logger
 
 from odoo.addons.ai.controllers.thread import AIThreadController
@@ -227,21 +227,19 @@ class TestAISessionLoop(TransactionCase):
         })
 
         with self.assertRaises(KeyError):
-            session._continue(request_uuid)
+            session._continue(request_uuid, session.request_result)
 
         self.assertTrue(session.exists())
         self.assertEqual(session.loop_state, 'waiting_model')
         self.assertTrue(session.request_result)
 
-    def test_stored_result_survives_failed_continuation(self):
+    def test_failed_continuation_rolls_back_its_callback_result(self):
         session = self._prepare_model_request()
         request_uuid = session.request_uuid
         result = {
             'kind': 'success',
             'message': assistant_text('Continue from the stored result'),
         }
-        session._store_request_result(request_uuid, result)
-
         with (
             self.assertRaisesRegex(RuntimeError, 'continuation failed'),
             self.env.cr.savepoint(),
@@ -251,17 +249,17 @@ class TestAISessionLoop(TransactionCase):
                 side_effect=RuntimeError('continuation failed'),
             ),
         ):
-            session._continue(request_uuid)
+            session._continue(request_uuid, result)
 
         session.invalidate_recordset()
         self.assertEqual(session.loop_state, 'waiting_model')
         self.assertEqual(session.request_uuid, request_uuid)
-        self.assertEqual(session.request_result, result)
+        self.assertFalse(session.request_result)
         self.assertEqual(session.continuation_data, {
             'continuation_type': 'agent_loop',
         })
 
-        session._continue(request_uuid)
+        session._continue(request_uuid, result)
         self.assertEqual(session.loop_state, 'ready')
         self.assertIn(
             'Continue from the stored result',
@@ -290,10 +288,9 @@ class TestAISessionLoop(TransactionCase):
         }
         session._store_request_result(current_request_uuid, current_result)
 
-        outcome = session._continue(stale_request_uuid)
+        outcome = session._continue(stale_request_uuid, session.request_result)
 
-        self.assertEqual(outcome['response']['request_uuid'], stale_request_uuid)
-        self.assertEqual(outcome['response']['responseState'], 'running')
+        self.assertIsNone(outcome)
         self.assertEqual(session.loop_state, 'waiting_model')
         self.assertEqual(session.request_uuid, current_request_uuid)
         self.assertEqual(session.request_result, current_result)
@@ -323,8 +320,9 @@ class TestAISessionLoop(TransactionCase):
             'message': assistant_text('Already received'),
         })
 
-        with self.assertRaises(MissingError):
-            session._get_prepared_submission_payload(request_uuid)
+        with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport') as submit:
+            self.assertIsNone(session._submit_prepared_request(request_uuid))
+        submit.assert_not_called()
 
     def test_prepare_returns_only_the_committed_request_reference(self):
         message = self._post_prompt()

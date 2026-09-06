@@ -38,8 +38,6 @@ class TestAISessionLockComparison(HttpCase):
             source_id = fixture['parent_id']
             with self.registry._db.cursor() as cr:
                 env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
-                source = env['ai.session'].sudo().browse(source_id)
-                source.auto_confirm = automatic
                 for child_id, child_uuid in fixture['children']:
                     env['ai.session'].sudo().browse(child_id)._apply_submission_acknowledgement(child_uuid)
             waiting = self._snapshot(source_id)
@@ -118,15 +116,13 @@ class TestAISessionLockComparison(HttpCase):
                 )
 
             def confirm(name):
-                if automatic:
-                    return callback(name, parent=True)
                 return requests.post(
                     f'{self.base_url()}/ai/resume_pending_interaction',
                     headers={'X-AI-Lock-Comparison': name}, cookies=self.opener.cookies,
                     json=self.build_rpc_payload({
                         'channel_id': fixture['channel_id'], 'session_id': source_id,
                         'resume_token': waiting['resume_token'],
-                        'response': {'kind': 'confirmation', 'value': 'confirm_once'},
+                        'response': {'kind': 'confirmation', 'value': 'auto_confirm' if automatic else 'confirm_once'},
                     }), timeout=90,
                 )
 
@@ -201,7 +197,8 @@ class TestAISessionLockComparison(HttpCase):
                                  'Confirmed tool execution repeated after waiting for the source row')
                 # Count the exact selected-choice text, rather than assuming a label.
                 if confirmation:
-                    choice = next(c for c in waiting['pending']['user_input_request']['choices'] if c['value'] == 'confirm_once')
+                    value = 'auto_confirm' if automatic else 'confirm_once'
+                    choice = next(c for c in waiting['pending']['user_input_request']['choices'] if c['value'] == value)
                     with self.registry._db.cursor() as cr:
                         env = api.Environment(cr, self.env.uid, {})
                         receipts = env['mail.message'].search_count([

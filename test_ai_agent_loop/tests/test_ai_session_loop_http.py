@@ -10,7 +10,6 @@ from werkzeug.test import EnvironBuilder
 from werkzeug.wrappers import Request as WerkzeugRequest
 
 from odoo import api, Command, http
-from odoo.exceptions import MissingError
 from odoo.http.requestlib import Request as HttpRequest
 from odoo.tests import HttpCase, new_test_user, tagged
 from odoo.tools import mute_logger
@@ -234,7 +233,7 @@ class TestAISessionLoopHttp(HttpCase):
         original_continue = self.registry['ai.session']._continue
         observed = {}
 
-        def observe_callback_environment(session, request_uuid):
+        def observe_callback_environment(session, request_uuid, result):
             request_env = http.request.env
             observed.update({
                 'same_cursor': session.env.cr is request_env.cr,
@@ -243,7 +242,7 @@ class TestAISessionLoopHttp(HttpCase):
                 'sudo': request_env.su,
                 'context': dict(request_env.context),
             })
-            return original_continue(session, request_uuid)
+            return original_continue(session, request_uuid, result)
 
         with patch.object(
             self.registry['ai.session'], '_continue',
@@ -954,16 +953,11 @@ class TestAISessionLoopHttp(HttpCase):
             'Exact UUID submission fence',
         )
 
-        with (
-            patch(
-                'odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
-            ) as transport,
-            self.assertRaises(MissingError),
-        ):
-            self._submit_prepared({
+        with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport') as transport:
+            self.assertIsNone(self._submit_prepared({
                 'session_id': prepared['session_id'],
                 'request_uuid': '00000000-0000-4000-8000-ffffffffffff',
-            })
+            }))
 
         transport.assert_not_called()
         session = self._get_session(prepared['session_id'])

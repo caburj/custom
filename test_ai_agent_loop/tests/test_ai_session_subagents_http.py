@@ -258,6 +258,7 @@ class TestAISessionSubagentsHttp(HttpCase):
 
 
     def test_autoapproval_commits_child_effects_before_submission(self):
+        self.authenticate('admin', 'admin')
         for web_search in (False, True):
             with self.subTest(web_search=web_search), self._physical_tree() as fixture:
                 child_id, child_uuid = fixture['children'][0]
@@ -280,7 +281,7 @@ class TestAISessionSubagentsHttp(HttpCase):
                         'kind': 'success', 'message': {'role': 'assistant', 'content': calls},
                     })
                     self.assertEqual(child.loop_state, 'waiting_confirmation')
-                    child._root_session().auto_confirm = True
+                    resume_token = child.resume_token
                 run_tool = self.registry['ir.actions.server']._ai_tool_run
                 invocations, submissions = [], []
 
@@ -316,10 +317,14 @@ class TestAISessionSubagentsHttp(HttpCase):
                     patch.object(self.registry['ir.actions.server'], '_ai_tool_run', count_confirmed_tool),
                     patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', side_effect=observe_submission),
                 ):
-                    response = self._callback(fixture['parent_uuid'], 'Already consumed callback')
+                    response = self.url_open('/ai/resume_pending_interaction', json=self.build_rpc_payload({
+                        'channel_id': fixture['channel_id'], 'session_id': child_id,
+                        'resume_token': resume_token,
+                        'response': {'kind': 'confirmation', 'value': 'auto_confirm'},
+                    }))
 
                 self.assertEqual(response.status_code, 200, response.text)
-                self.assertIsNone(response.json())
+                self.assertNotIn('error', response.json())
                 self.assertEqual(invocations, tool_ids)
                 self.assertEqual(len(submissions), 1)
                 submitted_id, submitted_uuid = submissions[0]
@@ -329,6 +334,7 @@ class TestAISessionSubagentsHttp(HttpCase):
                 self.assertEqual(submitted['request_phase'], 'submitted')
 
     def test_autoapproval_delivers_terminal_child_before_parent_submission(self):
+        self.authenticate('admin', 'admin')
         # Approval exhausts the child's original budget without another child request.
         with self._physical_tree(child_count=2, child_round_limits=(1, 20)) as fixture:
             child_id, child_uuid = fixture['children'][0]
@@ -344,7 +350,8 @@ class TestAISessionSubagentsHttp(HttpCase):
                     ]},
                 })
                 self.assertEqual(child.loop_state, 'waiting_confirmation')
-                child._root_session().auto_confirm = True
+                resume_token = child.resume_token
+            self.assertEqual(self._callback(callback_uuid, 'Sibling completed').status_code, 200)
             submit = self.registry['ai.session']._submit_prepared_request
             run_tool = self.registry['ir.actions.server']._ai_tool_run
             attempts, invocations = [], []
@@ -373,7 +380,11 @@ class TestAISessionSubagentsHttp(HttpCase):
                 patch.object(self.registry['ir.actions.server'], '_ai_tool_run', count_confirmed_tool),
                 patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None) as transport,
             ):
-                response = self._callback(callback_uuid, 'Sibling completed')
+                response = self.url_open('/ai/resume_pending_interaction', json=self.build_rpc_payload({
+                    'channel_id': fixture['channel_id'], 'session_id': child_id,
+                    'resume_token': resume_token,
+                    'response': {'kind': 'confirmation', 'value': 'auto_confirm'},
+                }))
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(len(attempts), 1)
             self.assertEqual(invocations, create_tool.ids)
@@ -388,6 +399,58 @@ class TestAISessionSubagentsHttp(HttpCase):
                 env = api.Environment(cr, self.env.uid, {})
                 self.assertEqual(env['res.partner'].search_count([('name', '=', fixture['contact_name'])]), 1)
 
+
+    def test_only_accepted_allow_all_resumes_other_confirmations(self):
+        self.authenticate('admin', 'admin')
+        with self._physical_tree(child_count=3, confirmation=True, child_round_limits=(1, 20, 1)) as fixture:
+            first_id, first_uuid = fixture['children'][0]
+            sibling_id, sibling_uuid = fixture['children'][1]
+            last_id, last_uuid = fixture['children'][2]
+            with self.registry._db.cursor() as cr:
+                env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
+                root = env['ai.session'].sudo().browse(fixture['parent_id'])
+                root_token = root.resume_token
+                for session_id, request_uuid, suffix in (
+                    (first_id, first_uuid, ' A'), (last_id, last_uuid, ' C'),
+                ):
+                    child = env['ai.session'].sudo().browse(session_id)
+                    child.state = {'available_tools': env.ref('ai.ir_actions_server_create_records').ids}
+                    apply_iap_result(child, request_uuid, {
+                        'kind': 'success', 'message': {'role': 'assistant', 'content': [
+                            self._contact_call(env, f'confirm-{session_id}', fixture['contact_name'] + suffix),
+                        ]},
+                    })
+                # These prompts represent accepted late arrivals after allow-all.
+                root.auto_confirm = True
+            pending = {sid: self._snapshot(sid) for sid in (first_id, last_id)}
+
+            def resume(session_id, token, value):
+                response = self.url_open('/ai/resume_pending_interaction', json=self.build_rpc_payload({
+                    'channel_id': fixture['channel_id'], 'session_id': session_id,
+                    'resume_token': token, 'response': {'kind': 'confirmation', 'value': value},
+                }))
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertNotIn('error', response.json())
+
+            with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None) as submit:
+                for label in ('Sibling completed', 'Duplicate callback'):
+                    self.assertEqual(self._callback(sibling_uuid, label).status_code, 200)
+                    self.assertEqual({sid: self._snapshot(sid) for sid in pending}, pending)
+                resume(fixture['parent_id'], root_token, 'confirm_once')
+                self.assertEqual({sid: self._snapshot(sid) for sid in pending}, pending)
+                resume(fixture['parent_id'], root_token, 'auto_confirm')
+                self.assertEqual({sid: self._snapshot(sid) for sid in pending}, pending)
+                submit.assert_not_called()
+
+                resume(first_id, pending[first_id]['resume_token'], 'auto_confirm')
+                self.assertTrue(all(self._snapshot(sid)['loop_state'] == 'ready' for sid in pending))
+                submit.assert_called_once()
+            with self.registry._db.cursor() as cr:
+                env = api.Environment(cr, self.env.uid, {})
+                for suffix in ('', ' A', ' C'):
+                    self.assertEqual(env['res.partner'].search_count([
+                        ('name', '=', fixture['contact_name'] + suffix),
+                    ]), 1)
 
     def test_autoapproval_sweep_failure_rolls_back_all_pending_descendants(self):
         with self._physical_tree(child_count=3) as fixture:

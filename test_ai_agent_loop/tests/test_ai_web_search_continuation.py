@@ -212,7 +212,6 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         self.assertEqual(child.request_phase, 'prepared')
         self.assertEqual(child.continuation_data, {
             'continuation_type': 'web_search',
-            'parent_request_uuid': self.parent_request_uuid, 'call_id': 'search',
         })
         payload = child.request_payload
         self.assertEqual(set(payload), {'messages', 'instructions', 'tools', 'usage', 'web_grounding'})
@@ -276,7 +275,7 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
 
         self.assertNotEqual(first, second)
         self.assertEqual(second.parent_session_id, parent)
-        self.assertEqual(second.continuation_data['call_id'], 'second-search')
+        self.assertEqual(parent.pending_tool_call['call_id'], 'second-search')
         self.assertEqual(parent.request_uuid, self.parent_request_uuid)
         self.assertEqual(parent.request_round, 1)
         self.assertEqual(len(parent.event_ids), 2)
@@ -651,7 +650,6 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
             self.assertEqual(image.request_phase, 'submitted')
             self.assertEqual(image.continuation_data, {
                 'continuation_type': 'image_generation',
-                'parent_request_uuid': self.parent_request_uuid, 'call_id': 'image',
             })
             parent = self._fresh_session()
             self.assertEqual(parent.request_uuid, self.parent_request_uuid)
@@ -723,7 +721,7 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
                 submit.assert_called_once()
                 search_uuid = submit.call_args.args[2]['request_uuid']
                 search = self._child().filtered(lambda session: session.request_uuid == search_uuid)
-                self.assertEqual(search.continuation_data['parent_request_uuid'], parent_uuid)
+                self.assertEqual(search.parent_session_id, self._fresh_session())
                 submit.reset_mock()
 
                 search_message = assistant_text(f'Search result {round_no}')

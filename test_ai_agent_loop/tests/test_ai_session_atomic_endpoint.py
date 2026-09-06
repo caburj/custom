@@ -139,6 +139,14 @@ class TestAISessionAtomicEndpoint(HttpCase):
             self.assertEqual(self._snapshot(parent_id)['loop_state'], 'ready')
             self.assertEqual(self._snapshot(fixture['parent_id'])['request_phase'], 'submitted')
             transport.assert_called_once()
+            with (
+                patch.object(self.registry['ai.session'], '_merge_child_result', observe_merge),
+                patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport') as repeated_submit,
+            ):
+                merges.clear()
+                self.assertEqual(self._callback(child_uuid, 'Duplicate nested answer').status_code, 200)
+                self.assertFalse(merges)
+                repeated_submit.assert_not_called()
             _logger.info('ATOMIC_ENDPOINT nested %s', json.dumps(observations))
 
     def test_resume_rollback_preserves_work_before_confirmation(self):

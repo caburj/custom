@@ -136,7 +136,7 @@ ai['result'] = {
         original_continue = self.registry['ai.session']._continue
         observed = {}
 
-        def observe_guest_environment(session, request_uuid):
+        def observe_guest_environment(session, request_uuid, result):
             request_env = http.request.env
             observed.update({
                 'actor_uid': request_env.uid,
@@ -144,7 +144,7 @@ ai['result'] = {
                 'default_environment': request_env.transaction.default_env is request_env,
                 'sudo': request_env.su,
             })
-            return original_continue(session, request_uuid)
+            return original_continue(session, request_uuid, result)
 
         with patch.object(
             self.registry['ai.session'], '_continue',
