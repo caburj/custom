@@ -25,6 +25,10 @@ test("an embedded guest answers a source-owned descendant prompt while the root 
         author_guest_id: guestId, body: "Help me choose.", model: "discuss.channel",
         res_id: channelId, message_type: "comment",
     });
+    const agentMessageId = pyEnv["mail.message"].create({
+        author_id: serverState.partnerId, body: "I have a question for you.",
+        model: "discuss.channel", res_id: channelId, message_type: "comment",
+    });
     expirableStorage.setItem("im_livechat.saved_state", JSON.stringify({
         store: { "discuss.channel": [{ id: channelId }] },
         persisted: true, livechatUserId: serverState.publicUserId,
@@ -62,12 +66,14 @@ test("an embedded guest answers a source-owned descendant prompt while the root 
     });
     await contains(".o_ai_user_input_request", { count: 1, text: "Colour Assistant" });
     await contains(".o_ai_user_input_request p", { text: "Choose a colour." });
+    expect(store["mail.message"].get(agentMessageId).hasActions).toBe(false);
     await insertText(".o-mail-Composer-input", "Another root request");
     await contains(".o-mail-Composer button[name='send-message']:disabled");
     await press("Enter");
     await click(".o_ai_user_input_request button:contains('Red')");
     await expect.waitForSteps(["guest answered child"]);
     await contains(".o_ai_user_input_request", { count: 0 });
+    expect(store["mail.message"].get(agentMessageId).hasActions).toBe(true);
     expect(store["ai.session"].get(100).responseState).toBe("running");
     await contains(".o-mail-Composer button[name='send-message']:disabled");
 });
