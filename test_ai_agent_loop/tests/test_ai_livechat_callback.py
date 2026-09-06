@@ -199,7 +199,7 @@ ai['result'] = {
                 json=self.build_rpc_payload({
                     "guest_token": guest_token,
                     "channel_id": channel_id,
-                    "request_uuid": request_uuid,
+                    "session_id": session.id,
                     "resume_token": resume_token,
                     "response": {
                         "kind": "client_error",
@@ -351,11 +351,10 @@ else:
             return resume(session, *args, **kwargs)
 
         payload = {
-            'channel_id': channel_id, 'request_uuid': source_uuid, 'resume_token': source_token,
+            'channel_id': channel_id, 'session_id': first.id,
+            'resume_token': source_token,
             'response': {'kind': interaction_kind, 'value': response_value},
         }
-        if not cors:
-            payload['session_id'] = first.id
         with (
             mute_logger('odoo.http'),
             patch.object(self.registry['ai.session'], '_resume_pending_interaction', observe_reply_actor),
@@ -389,7 +388,6 @@ else:
         self.assertEqual(first.request_guest_id, guest)
         self.assertEqual(first.loop_state, 'waiting_model')
         self.assertNotEqual(first.request_uuid, source_uuid)
-        self.assertEqual(first.previous_request_uuid, source_uuid)
         self.assertEqual(answered.json()['result']['request_uuid'], first.request_uuid)
         self.assertEqual(sibling.pending_tool_call, sibling_pending)
         self.assertEqual((sibling.request_uuid, sibling.resume_token), (sibling_uuid, sibling_token))
@@ -408,6 +406,36 @@ else:
             self.assertFalse(self.env['res.partner'].search([('name', '=', forbidden_name)]))
         else:
             self.assertTrue(tool_results[0]['success'])
+
+        # Another model round makes a consumed interaction older than one predecessor.
+        with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport',
+                   side_effect=accept_submitted_request) as submit:
+            progressed = self._post_completion_callback({
+                'request_uuid': first.request_uuid, 'llm_error': False,
+                'llm_result': {'status': 'success', 'result': {'role': 'assistant', 'content': [
+                    tool_call(diagnostic.ai_tool_name, f'later-actor-{first.id}'),
+                ]}},
+            })
+            self.assertEqual(progressed.status_code, 200)
+            submit.assert_called_once()
+        self.env.invalidate_all()
+        current_uuid = first.request_uuid
+        before_events, before_messages = first.event_ids, channel.message_ids
+        with (
+            patch.object(self.registry['ai.session'], '_resume_pending_interaction') as resume,
+            patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport') as submit,
+        ):
+            replay = self.url_open(f'{route_prefix}/resume_pending_interaction',
+                                   json=self.build_rpc_payload({**payload, **guest_args}))
+        self.assertEqual(replay.json().get('result'), {
+            'request_uuid': current_uuid, 'responseState': 'running',
+        }, replay.text)
+        resume.assert_not_called()
+        submit.assert_not_called()
+        self.env.invalidate_all()
+        self.assertEqual(first.event_ids, before_events)
+        self.assertEqual(channel.message_ids, before_messages)
+        self.assertEqual(sibling.pending_tool_call, sibling_pending)
 
     def test_same_origin_guest_subagent_question_reply_keeps_guest_authority(self):
         self._assert_guest_subagent_reply('question', cors=False)

@@ -19,12 +19,12 @@ def apply_iap_result(session, request_uuid, result, *, deliver_child=False):
         outcome = session._continue(request_uuid)
     else:
         outcome = {
-            'kind': 'stable',
-            'response': {
-                'request_uuid': request_uuid,
-                'responseState': session._get_response_state(),
+            "prepared_requests": [],
+            "response": {
+                "request_uuid": request_uuid,
+                "responseState": session._get_response_state(),
             },
         }
     if deliver_child and session.request_uuid == request_uuid and session.loop_state == 'ready' and session.parent_session_id:
-        return session.parent_session_id.with_context(ai_previous_request_uuid=request_uuid)._merge_child_result(session) or outcome
+        return session.parent_session_id._merge_child_result(session) or outcome
     return outcome

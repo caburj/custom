@@ -174,7 +174,7 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         parent_payload = copy.deepcopy(parent.request_payload)
         calls = [self._call('prefix'), self._call('search'), self._call('suffix')]
         outcome = self._apply_calls(calls)
-        child = self._session(outcome['prepared']['session_id'])
+        child = self._session(outcome["prepared_requests"][0]["session_id"])
 
         self.assertEqual(outcome['response'], {
             'request_uuid': self.parent_request_uuid, 'responseState': 'running',
@@ -210,7 +210,6 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         self.assertEqual(child.request_round, 1)
         self.assertEqual(child.request_round_limit, 1)
         self.assertEqual(child.request_phase, 'prepared')
-        self.assertEqual(child.previous_request_uuid, self.parent_request_uuid)
         self.assertEqual(child.continuation_data, {
             'continuation_type': 'web_search',
             'parent_request_uuid': self.parent_request_uuid, 'call_id': 'search',
@@ -230,7 +229,7 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
 
     def test_child_success_merges_sources_then_resumes_once_with_citations(self):
         outcome = self._apply_calls([self._call('prefix'), self._call('search'), self._call('suffix')])
-        child = self._session(outcome['prepared']['session_id'])
+        child = self._session(outcome["prepared_requests"][0]["session_id"])
         search_message = assistant_text('Grounded finding.[WEB_SOURCE:abcd]', {'abcd': SEARCH_SOURCE})
         resumed = self._apply(child, search_message)
         parent = self._session()
@@ -239,9 +238,10 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         self.assertFalse(child.request_phase)
         self.assertEqual(child.request_result['message'], search_message)
         self.assertFalse(child.exchange_result)
-        self.assertEqual(resumed['prepared']['session_id'], parent.id)
+        self.assertEqual(resumed["prepared_requests"], [{
+            'session_id': parent.id, 'request_uuid': parent.request_uuid,
+        }])
         self.assertNotEqual(parent.request_uuid, self.parent_request_uuid)
-        self.assertEqual(parent.previous_request_uuid, child.request_uuid)
         self.assertEqual(parent.request_round, 2)
         self.assertEqual(parent.request_phase, 'prepared')
         self.assertFalse(parent.pending_tool_call)
@@ -269,9 +269,9 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
             self._call('prefix'), self._call('search', 'first-search'),
             self._call('search', 'second-search'), self._call('suffix'),
         ])
-        first = self._session(outcome['prepared']['session_id'])
+        first = self._session(outcome["prepared_requests"][0]["session_id"])
         next_search = self._apply(first, assistant_text('First finding', {'abcd': SEARCH_SOURCE}))
-        second = self._session(next_search['prepared']['session_id'])
+        second = self._session(next_search["prepared_requests"][0]["session_id"])
         parent = self._session()
 
         self.assertNotEqual(first, second)
@@ -302,26 +302,26 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
     def test_search_preserves_confirmation_client_and_question_suffix(self):
         names = ['search', 'confirmation', 'client', 'question', 'suffix']
         outcome = self._apply_calls([self._call(name) for name in names])
-        child = self._session(outcome['prepared']['session_id'])
+        child = self._session(outcome["prepared_requests"][0]["session_id"])
         waiting = self._apply(child, assistant_text('Search complete'))
         parent = self._session()
         self.assertEqual(waiting['response']['responseState'], 'waiting_user')
         self.assertEqual(parent.loop_state, 'waiting_confirmation')
         first_token = parent.resume_token
         parent._resume_pending_interaction(
-            self.parent_request_uuid, first_token,
+            first_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
         self.assertEqual(parent.loop_state, 'waiting_client_result')
         self.assertNotEqual(parent.resume_token, first_token)
         client_token = parent.resume_token
         parent._resume_pending_interaction(
-            self.parent_request_uuid, client_token, {'kind': 'client_result', 'value': False},
+            client_token, {'kind': 'client_result', 'value': False},
         )
         self.assertEqual(parent.loop_state, 'waiting_answer')
         self.assertNotEqual(parent.resume_token, client_token)
         parent._resume_pending_interaction(
-            self.parent_request_uuid, parent.resume_token, {'kind': 'question', 'value': ['Continue']},
+            parent.resume_token, {'kind': 'question', 'value': ['Continue']},
         )
         results = self._results(parent)
         self.assertEqual([part['tool_call_id'] for part in results], names)
@@ -334,7 +334,7 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
 
     def test_search_failure_balances_unexecuted_calls_and_finishes_both_sessions(self):
         outcome = self._apply_calls([self._call('prefix'), self._call('search'), self._call('suffix')])
-        child = self._session(outcome['prepared']['session_id'])
+        child = self._session(outcome["prepared_requests"][0]["session_id"])
         failure = {'kind': 'failure', 'code': 'request_failed'}
         finished = apply_iap_result(child, child.request_uuid, failure, deliver_child=True)
         parent = self._session()
@@ -360,7 +360,7 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
     def test_search_continuation_matches_the_pending_parent_call(self):
         outcome = self._apply_calls([self._call('prefix'), self._call('search'), self._call('suffix')])
         parent = self._session()
-        child = self._session(outcome['prepared']['session_id'])
+        child = self._session(outcome["prepared_requests"][0]["session_id"])
         result = {
             'kind': 'success', 'message': assistant_text('Stored search result'),
         }
@@ -382,6 +382,30 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
         self._assert_prefix_once(parent)
         self.assertEqual(parent.state['suffix_runs'], 1)
 
+    def test_mismatched_child_continuation_rolls_back_pending_marker(self):
+        outcome = self._apply_calls([
+            self._call('prefix'), self._call('search'), self._call('suffix'),
+        ])
+        parent = self._session()
+        child = self._session(outcome['prepared_requests'][0]['session_id'])
+        apply_iap_result(child, child.request_uuid, {
+            'kind': 'success', 'message': assistant_text('Stored search result'),
+        })
+        self.assertEqual(child.loop_state, 'ready')
+        parent.pending_tool_call = {
+            **parent.pending_tool_call, 'call_id': 'different-call',
+        }
+        pending = copy.deepcopy(parent.pending_tool_call)
+        self.assertEqual(pending['pending_results'][-1]['child_session_id'], child.id)
+        # A rejected continuation rolls back with its enclosing business block.
+        with self.assertRaises(UserError):
+            parent._apply_tool_child(child)
+        parent.flush_recordset(['pending_tool_call'])
+        parent.invalidate_recordset(['pending_tool_call'])
+        self.assertEqual(parent.pending_tool_call, pending)
+        self.assertEqual(parent.loop_state, 'waiting_child')
+        self.assertNotIn('suffix_runs', parent.state)
+
     def test_completed_conversational_child_does_not_bypass_pending_search(self):
         parent = self._session()
         parent.agent_id.allowed_agent_ids = parent.agent_id
@@ -391,8 +415,13 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
                 'args': {'agent_id': parent.agent_id.id, 'message': 'Complete the earlier work.'},
             }, self._call('search'), self._call('suffix'),
         ])
-        search = self._session(outcome['prepared']['session_id'])
+        self.assertEqual(len(outcome["prepared_requests"]), 2)
+        search = self._session(outcome["prepared_requests"][1]["session_id"])
         child = parent.search([('parent_session_id', '=', parent.id), ('agent_id', '!=', False)])
+        self.assertEqual(outcome['prepared_requests'], [
+            {'session_id': item.id, 'request_uuid': item.request_uuid}
+            for item in (child, search)
+        ])
         child_message = assistant_text('Earlier work complete')
         self._apply(child, child_message)
 
@@ -433,8 +462,13 @@ class TestAIWebSearchContinuation(WebSearchFixture, TransactionCase):
                 'args': {'agent_id': parent.agent_id.id, 'message': 'Complete the earlier work.'},
             }, self._call('search'), self._call('suffix'),
         ])
-        search = self._session(outcome['prepared']['session_id'])
+        self.assertEqual(len(outcome["prepared_requests"]), 2)
+        search = self._session(outcome["prepared_requests"][1]["session_id"])
         child = parent.search([('parent_session_id', '=', parent.id), ('agent_id', '!=', False)])
+        self.assertEqual(outcome['prepared_requests'], [
+            {'session_id': item.id, 'request_uuid': item.request_uuid}
+            for item in (child, search)
+        ])
         failure = {'kind': 'failure', 'code': 'request_failed'}
         apply_iap_result(search, search.request_uuid, failure, deliver_child=True)
 
@@ -528,7 +562,7 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
         ) as direct:
             response = self.url_open('/ai/resume_pending_interaction', json=self.build_rpc_payload({
                 'channel_id': self.channel_id,
-                'request_uuid': self.parent_request_uuid,
+                'session_id': self.session_id,
                 'resume_token': token,
                 'response': {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
                 'current_view_info': {'res_model': 'res.partner', 'view_type': 'form'},
@@ -605,7 +639,6 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
             submit.assert_called_once()
             search = self._child()
             self.assertEqual(search.request_phase, 'submitted')
-            self.assertEqual(search.previous_request_uuid, self.parent_request_uuid)
             submit.reset_mock()
 
             response = self._post_callback(search.request_uuid, search_message)
@@ -616,7 +649,6 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
             self.assertEqual(len(image), 1)
             self.assertEqual(submit.call_args.args[2]['request_uuid'], image.request_uuid)
             self.assertEqual(image.request_phase, 'submitted')
-            self.assertEqual(image.previous_request_uuid, search.request_uuid)
             self.assertEqual(image.continuation_data, {
                 'continuation_type': 'image_generation',
                 'parent_request_uuid': self.parent_request_uuid, 'call_id': 'image',
@@ -646,7 +678,6 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
             parent = self._fresh_session()
             self.assertEqual(parent.loop_state, 'waiting_model')
             self.assertEqual(parent.request_phase, 'submitted')
-            self.assertEqual(parent.previous_request_uuid, image.request_uuid)
             self.assertEqual(submit.call_args.args[2]['request_uuid'], parent.request_uuid)
             self.assertEqual(parent.state['suffix_runs'], 1)
             self._assert_prefix_once(parent)
@@ -710,7 +741,6 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
                 self.assertNotEqual(child_uuid, previous_child_uuid)
                 self.assertEqual(submit.call_args.args[2]['request_uuid'], child_uuid)
                 self.assertEqual(child.request_phase, 'submitted')
-                self.assertEqual(child.previous_request_uuid, search_uuid)
                 parent = self._fresh_session()
                 self.assertEqual(parent.request_uuid, parent_uuid)
                 self.assertEqual(parent.loop_state, 'waiting_child')
@@ -737,7 +767,6 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
                 parent = self._fresh_session()
                 self.assertEqual(submit.call_args.args[2]['request_uuid'], parent.request_uuid)
                 self.assertEqual(parent.request_phase, 'submitted')
-                self.assertEqual(parent.previous_request_uuid, child_uuid)
                 self.assertEqual(
                     [part['tool_call_id'] for part in self._results(parent)],
                     [call['call_id'] for call in calls],
@@ -753,7 +782,7 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
                 self.assertEqual(self._fresh_session().state['suffix_runs'], round_no)
                 previous_child_uuid = child_uuid
 
-    def test_child_result_survives_rollback_and_resumes_without_repeating_tools(self):
+    def test_search_callback_rolls_back_result_and_effects_then_replays_once(self):
         with patch(TRANSPORT, return_value=None):
             response = self._post_callback(self.parent_request_uuid, {
                 'role': 'assistant',
@@ -777,9 +806,9 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
         self.assertEqual(failed.status_code, 500)
         submit.assert_not_called()
         child = self._fresh_session(child.id)
-        self.assertEqual(child.request_result, {'kind': 'success', 'message': message})
-        self.assertEqual(child.loop_state, 'ready')
-        self.assertFalse(child.request_phase)
+        self.assertFalse(child.request_result)
+        self.assertEqual(child.loop_state, 'waiting_model')
+        self.assertEqual(child.request_phase, 'submitted')
         self.assertFalse(child.exchange_result)
         parent = self._fresh_session()
         self.assertEqual(parent.loop_state, 'waiting_child')
@@ -831,55 +860,11 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
         parent = self._fresh_session()
         self.assertEqual(parent.loop_state, 'waiting_model')
         self.assertEqual(parent.request_phase, 'submitted')
-        self.assertEqual(parent.previous_request_uuid, child.request_uuid)
         self.assertEqual(parent.request_context, child_context)
         self.assertEqual(parent.request_user_id.id, self.actor_id)
 
-    def test_resume_replay_submits_the_existing_headless_child(self):
-        token = self._wait_for_confirmation()
-        sent_payloads = []
 
-        def fail_first_send(_connection, _route, payload, **_kwargs):
-            sent_payloads.append(copy.deepcopy(payload))
-            if len(sent_payloads) == 1:
-                raise requests.ConnectionError('fail after headless child commit')
-            return None
-
-        with (
-            mute_logger('odoo.http'),
-            patch(TRANSPORT, side_effect=fail_first_send) as transport,
-        ):
-            failed = self._resume_confirmation(token)
-            self.assertIn('error', failed.json())
-
-            parent = self._fresh_session()
-            child = self._child()
-            child_uuid = child.request_uuid
-            child_token = child.request_webhook_token
-            self.assertEqual(parent.loop_state, 'waiting_child')
-            self.assertEqual(parent.state['confirmation_runs'], 1)
-            self.assertEqual(child.parent_session_id, parent)
-            self.assertEqual(child.previous_request_uuid, self.parent_request_uuid)
-            self.assertEqual(child.request_phase, 'prepared')
-
-            replay = self._resume_confirmation(token)
-
-        self.assertNotIn('error', replay.json())
-        self.assertEqual(replay.json()['result'], {
-            'request_uuid': self.parent_request_uuid,
-            'responseState': 'running',
-        })
-        self.assertEqual(transport.call_count, 2)
-        self.assertEqual(sent_payloads[0], sent_payloads[1])
-        self.assertEqual(sent_payloads[0]['request_uuid'], child_uuid)
-        self.assertEqual(sent_payloads[0]['webhook_token'], child_token)
-        parent = self._fresh_session()
-        child = self._child()
-        self.assertEqual(parent.state['confirmation_runs'], 1)
-        self.assertEqual(child.request_uuid, child_uuid)
-        self.assertEqual(child.request_phase, 'submitted')
-
-    def test_child_submission_credit_failure_returns_idle_for_parent(self):
+    def test_child_submission_credit_failure_is_stored_without_advancing_parent(self):
         token = self._wait_for_confirmation()
         with (
             patch(TRANSPORT, side_effect=InsufficientCreditError) as submit,
@@ -887,16 +872,21 @@ class TestAIWebSearchContinuationHttp(WebSearchFixture, HttpCase):
         ):
             response = self._resume_confirmation(token)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()['result'], {
-            'request_uuid': self.parent_request_uuid, 'responseState': 'idle',
-        })
+        self.assertEqual(
+            response.json()["result"],
+            {
+                "request_uuid": self.parent_request_uuid,
+                "responseState": "running",
+            },
+        )
         submit.assert_called_once()
-        notify.assert_called_once()
+        notify.assert_not_called()
         parent = self._fresh_session()
         child = self._child()
-        self.assertEqual(parent.loop_state, 'ready')
-        self.assertEqual(child.loop_state, 'ready')
+        self.assertEqual(parent.loop_state, "waiting_child")
+        self.assertEqual(child.loop_state, "waiting_model")
         self.assertEqual(child.request_result, {'kind': 'failure', 'code': 'insufficient_credit'})
-        self.assertEqual([part['success'] for part in self._results(parent)], [True, False, False])
+        self.assertEqual(parent.pending_tool_call["call_id"], "search")
+        self.assertEqual(child.request_phase, "prepared")
         self.assertEqual(parent.state['confirmation_runs'], 1)
         self.assertNotIn('suffix_runs', parent.state)

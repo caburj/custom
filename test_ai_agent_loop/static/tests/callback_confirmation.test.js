@@ -51,7 +51,6 @@ async function startPendingConfirmation() {
                 { label: "No, I want something else", value: "decline" },
             ],
             multiSelect: false,
-            requestUuid: REQUEST_UUID,
             resumeToken: RESUME_TOKEN,
             type: "confirmation",
         },
@@ -74,7 +73,7 @@ test("server-hydrated durable confirmation submits only its token and choice onc
     onRpc("/ai/resume_pending_interaction", async (request) => {
         const { params: body } = await request.json();
         expect(body.channel_id).toBeOfType("number");
-        expect(body.request_uuid).toBe(REQUEST_UUID);
+        expect(body.request_uuid).toBe(undefined);
         expect(body.resume_token).toBe(RESUME_TOKEN);
         expect(body.response).toEqual({ kind: "confirmation", value: "confirm_once" });
         expect("response_value" in body).toBe(false);
@@ -103,7 +102,7 @@ test("server-hydrated durable confirmation submits only its token and choice onc
 test("declining a durable confirmation uses the tokenized resume route", async () => {
     onRpc("/ai/resume_pending_interaction", async (request) => {
         const { params: body } = await request.json();
-        expect(body.request_uuid).toBe(REQUEST_UUID);
+        expect(body.request_uuid).toBe(undefined);
         expect(body.resume_token).toBe(RESUME_TOKEN);
         expect(body.response).toEqual({ kind: "confirmation", value: "decline" });
         expect.step("decline resumed");
@@ -182,7 +181,6 @@ test("a rotated sequential confirmation survives the stale resume acknowledgemen
             { label: "Decline second tool", value: "decline" },
         ],
         multiSelect: false,
-        requestUuid: REQUEST_UUID,
         resumeToken: "rotated-resume-token",
         type: "confirmation",
     };

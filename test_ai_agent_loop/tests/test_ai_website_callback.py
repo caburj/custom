@@ -126,7 +126,6 @@ else:
         message_count = len(session.channel_id.message_ids)
 
         unavailable = session.with_context(current_view_info={})._resume_pending_interaction(
-            request_uuid,
             resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
             context_snapshot={'current_view_info': {}},
@@ -145,7 +144,6 @@ else:
         )
 
         resumed = session._resume_pending_interaction(
-            request_uuid,
             resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
             context_snapshot=snapshot,

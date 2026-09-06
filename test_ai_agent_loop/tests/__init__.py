@@ -12,3 +12,6 @@ from . import test_ai_image_generation_continuation
 from . import test_ai_session_subagents
 from . import test_ai_session_subagents_http
 from . import test_ai_subagents_ui
+from . import test_ai_session_lock_comparison
+from . import test_ai_session_atomic_endpoint
+from . import test_ai_session_atomic_scope

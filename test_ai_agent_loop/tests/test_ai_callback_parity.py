@@ -181,7 +181,7 @@ else:
         self.assertEqual(len(session.event_ids), event_count + 1)
 
         client_wait = session._resume_pending_interaction(
-            request_uuid, first_token,
+            first_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
         client_token = session.resume_token
@@ -191,7 +191,7 @@ else:
         self.assertEqual(len(session.event_ids), event_count + 1)
 
         second_wait = session._resume_pending_interaction(
-            request_uuid, client_token, {'kind': 'client_result', 'value': False},
+            client_token, {'kind': 'client_result', 'value': False},
         )
         second_token = session.resume_token
         self.assertEqual(second_wait['response']['responseState'], 'waiting_user')
@@ -200,7 +200,7 @@ else:
         self.assertEqual(len(session.event_ids), event_count + 1)
 
         completed = session._resume_pending_interaction(
-            request_uuid, second_token,
+            second_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
         results = self._tool_results(session.request_payload)
@@ -216,8 +216,10 @@ else:
         self.assertEqual(session.state['client_runs'], 1)
         self.assertEqual(session.state['second_confirmation_runs'], 1)
         self.assertEqual(session.state['last_runs'], 1)
-        self.assertEqual(completed['prepared']['session_id'], session.id)
-        self.assertEqual(completed['prepared']['request_uuid'], session.request_uuid)
+        self.assertEqual(completed["prepared_requests"][0]["session_id"], session.id)
+        self.assertEqual(
+            completed["prepared_requests"][0]["request_uuid"], session.request_uuid,
+        )
         self.assertNotEqual(session.request_uuid, request_uuid)
         self.assertEqual(session.request_round, 2)
 
@@ -262,7 +264,7 @@ else:
         ])
 
         completed = session._resume_pending_interaction(
-            request_uuid, session.resume_token,
+            session.resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
         results = self._tool_results(session.request_payload)
@@ -331,8 +333,10 @@ else:
         ])
         self.assertEqual(self._context_part(session.request_payload), first_context)
         self.assertEqual(session.request_context, initial_snapshot)
-        self.assertEqual(automatic['prepared']['session_id'], session.id)
-        self.assertEqual(automatic['prepared']['request_uuid'], session.request_uuid)
+        self.assertEqual(automatic["prepared_requests"][0]["session_id"], session.id)
+        self.assertEqual(
+            automatic["prepared_requests"][0]["request_uuid"], session.request_uuid,
+        )
 
         channel, paused_session = self._new_session('Callback Fresh Context')
         confirmation = self._create_tool(
@@ -371,13 +375,14 @@ else:
         }
         fresh_session = paused_session.with_context(**fresh_snapshot)
         resumed = fresh_session._resume_pending_interaction(
-            paused_request_uuid,
             fresh_session.resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
             context_snapshot=fresh_snapshot,
         )
 
-        self.assertEqual(resumed['prepared']['session_id'], paused_session.id)
+        self.assertEqual(
+            resumed["prepared_requests"][0]["session_id"], paused_session.id,
+        )
         self.assertEqual(fresh_session.request_context, fresh_snapshot)
         self.assertIn('resumed', str(self._context_part(fresh_session.request_payload)))
 
@@ -456,7 +461,9 @@ else:
                 self.assertTrue(results[0]['success'])
                 self.assertFalse(results[1]['success'])
                 self.assertEqual(session.state['successful_runs'], 1)
-                self.assertEqual(outcome['prepared']['request_uuid'], followup_uuid)
+                self.assertEqual(
+                    outcome["prepared_requests"][0]["request_uuid"], followup_uuid,
+                )
                 apply_iap_result(session, followup_uuid, {
                     'request_uuid': followup_uuid,
                     'status': 'success',
@@ -505,7 +512,6 @@ else:
         self.assertEqual(waiting['response']['responseState'], 'waiting_user')
 
         finished = session._resume_pending_interaction(
-            request_uuid,
             session.resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
@@ -513,7 +519,7 @@ else:
         self.assertEqual(finished['response']['responseState'], 'running')
         self.assertEqual(session.loop_state, 'waiting_model')
         self.assertEqual(session.request_phase, 'prepared')
-        self.assertEqual(finished['prepared']['session_id'], session.id)
+        self.assertEqual(finished["prepared_requests"][0]["session_id"], session.id)
         self.assertNotEqual(session.request_uuid, request_uuid)
         self.assertFalse(any(
             'Owned final response' in str(message.body)
@@ -569,7 +575,9 @@ ai['result'] = 'continue'
             self._tool_call(suffix_tool, 'suffix'),
         ])
         followup_uuid = suffix_session.request_uuid
-        self.assertEqual(suffix_outcome['prepared']['request_uuid'], followup_uuid)
+        self.assertEqual(
+            suffix_outcome["prepared_requests"][0]["request_uuid"], followup_uuid,
+        )
         self.assertIn(
             'callback-round-suffix', suffix_session.request_message_body_suffix,
         )

@@ -16,7 +16,6 @@ function question(label, token) {
         body: ["markup", `<p>${label}</p>`],
         choices: [{ label: "Use the suggestion", value: "suggestion" }],
         allowFreeText: true,
-        requestUuid: `request-${token}`,
         resumeToken: token,
     };
 }
@@ -76,7 +75,7 @@ test("a visible descendant question survives a sibling arrival and answers the e
         const { params } = await request.json();
         expect(params.channel_id).toBe(channel.id);
         expect(params.session_id).toBe(first.id);
-        expect(params.request_uuid).toBe("request-first");
+        expect(params.request_uuid).toBe(undefined);
         expect(params.resume_token).toBe("first");
         expect(params.response).toEqual({ kind: "question", value: ["Keep this draft"] });
         expect.step("first child answered");
@@ -128,7 +127,7 @@ test("a descendant client effect uses the root browser and updates only its sour
     onRpc("/ai/resume_pending_interaction", async (request) => {
         const { params } = await request.json();
         expect(params.session_id).toBe(child.id);
-        expect(params.request_uuid).toBe("client-request");
+        expect(params.request_uuid).toBe(undefined);
         expect(params.resume_token).toBe("client-token");
         expect(params.response).toEqual({ kind: "client_result", value: false });
         expect.step("child result submitted");
@@ -136,7 +135,7 @@ test("a descendant client effect uses the root browser and updates only its sour
     });
     child.clientToolRequest = {
         name: "foreground_client_effect", params: {},
-        requestUuid: "client-request", resumeToken: "client-token",
+        resumeToken: "client-token",
     };
     await expect.waitForSteps(["root browser effect", "child result submitted"]);
     await animationFrame();

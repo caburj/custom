@@ -3,6 +3,7 @@
 import base64
 import copy
 import json
+from unittest.mock import patch
 
 from odoo import Command
 from odoo.exceptions import UserError
@@ -132,8 +133,15 @@ class TestAISessionSubagents(TransactionCase):
     def test_parallel_children_merge_in_call_order_once(self):
         self._prepare()
         parent_uuid = self.session.request_uuid
-        self._apply(self.session, self._start('A'), self._start('B'))
+        outcome = self._apply(self.session, self._start("A"), self._start("B"))
         first, second = self._children()
+        self.assertEqual(
+            outcome["prepared_requests"],
+            [
+                {"session_id": child.id, "request_uuid": child.request_uuid}
+                for child in (first, second)
+            ],
+        )
         self.assertEqual(self.session.loop_state, 'waiting_child')
         visible_messages = self.channel.message_ids
         self._complete(second, 'Second finished first')
@@ -170,12 +178,17 @@ class TestAISessionSubagents(TransactionCase):
         self.env['ir.config_parameter'].sudo().set_int('ai.max_tool_calls_per_call', 2)
         self.session.state = {'available_tools': [counter.id, self.create_tool.id]}
         self._prepare()
-        self._apply(self.session,
+        outcome = self._apply(self.session,
             self._start('A'), tool_call(counter.ai_tool_name, 'count-before'),
             self._start('B'), self._create_contact('create', 'Foreground budget contact'),
             tool_call(counter.ai_tool_name, 'over-budget'), self._start('C'),
         )
         first, second = self._children()
+        self.assertEqual(outcome['prepared_requests'], [
+            {'session_id': child.id, 'request_uuid': child.request_uuid}
+            for child in (first, second)
+        ])
+        self.assertEqual(outcome['response']['responseState'], 'waiting_user')
         self.assertEqual(self.session.loop_state, 'waiting_confirmation')
         self.assertEqual(self.session.state['runs'], 1)
         pending = copy.deepcopy(self.session.pending_tool_call)
@@ -185,11 +198,16 @@ class TestAISessionSubagents(TransactionCase):
         self.assertEqual(self.session.pending_tool_call['call_id'], pending['call_id'])
         self.assertEqual(self.session.pending_tool_call['user_input_request'], pending['user_input_request'])
         self.assertEqual(self.session.loop_state, 'waiting_confirmation')
-        self.session._resume_pending_interaction(
-            self.session.request_uuid, token,
+        resumed = self.session._resume_pending_interaction(
+            token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
-        self.assertEqual(len(self._children()), 3)
+        children = self._children()
+        self.assertEqual(len(children), 3)
+        third = children - first - second
+        self.assertEqual(resumed['prepared_requests'], [
+            {'session_id': third.id, 'request_uuid': third.request_uuid},
+        ])
         self.assertEqual(self.session.loop_state, 'waiting_child')
         self.assertEqual(self.session.state['runs'], 1)
         results = self.session.pending_tool_call['pending_results']
@@ -215,7 +233,7 @@ class TestAISessionSubagents(TransactionCase):
         )
         child = self._children()
         self.session._resume_pending_interaction(
-            request_uuid, self.session.resume_token,
+            self.session.resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.DECLINE},
         )
         self.assertEqual(self.session.loop_state, 'waiting_child')
@@ -230,6 +248,31 @@ class TestAISessionSubagents(TransactionCase):
         self.assertFalse(self.env['res.partner'].search([
             ('name', '=', 'Foreground declined contact'),
         ]))
+
+    def test_failed_child_preparation_does_not_return_rolled_back_request(self):
+        self._prepare()
+        prepare = type(self.session)._prepare_subagent_session
+
+        def fail_after_preparation(session, call):
+            prepare(session, call)
+            error = "Child preparation rolled back"
+            raise UserError(error)
+
+        with patch.object(
+            type(self.session), "_prepare_subagent_session", fail_after_preparation,
+        ):
+            outcome = self._apply(self.session, self._start("rolled-back-child"))
+        self.assertFalse(self._children())
+        self.assertEqual(
+            outcome["prepared_requests"],
+            [
+                {
+                    "session_id": self.session.id,
+                    "request_uuid": self.session.request_uuid,
+                },
+            ],
+        )
+        self.assertFalse(self._results()[0]["success"])
 
     def test_allowlist_and_public_argument_validation(self):
         self._prepare()
@@ -484,7 +527,7 @@ class TestAISessionSubagents(TransactionCase):
         result = copy.deepcopy(child.exchange_result)
         self.assertEqual(child.loop_state, 'ready')
         self.session._resume_pending_interaction(
-            self.session.request_uuid, self.session.resume_token,
+            self.session.resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
         )
         self.assertEqual(child.request_uuid, child_uuid)
@@ -523,7 +566,7 @@ class TestAISessionSubagents(TransactionCase):
         self.assertEqual(self.session.pending_tool_call, pending)
         self.assertEqual(self.session.loop_state, 'waiting_child')
         browser._resume_pending_interaction(
-            browser.request_uuid, browser.resume_token,
+            browser.resume_token,
             {'kind': 'client_result', 'value': {'view': 'browser result'}},
         )
         self.assertEqual(browser.loop_state, 'waiting_model')
@@ -550,7 +593,7 @@ class TestAISessionSubagents(TransactionCase):
         self.assertFalse(child.exchange_result)
         with self.assertRaises(UserError):
             child.with_context(current_view_info={})._resume_pending_interaction(
-                child.request_uuid, token,
+                token,
                 {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
                 context_snapshot={'current_view_info': {}},
             )
@@ -566,7 +609,7 @@ class TestAISessionSubagents(TransactionCase):
         child.state = {'available_tools': self.create_tool.ids}
         self._apply(child, self._create_contact('decline', 'Foreground immediately declined'))
         child._resume_pending_interaction(
-            child.request_uuid, child.resume_token,
+            child.resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.DECLINE},
         )
         self.assertEqual(child.loop_state, 'ready')
@@ -605,7 +648,6 @@ class TestAISessionSubagents(TransactionCase):
             data = Store().add(session, '_store_session_fields')._build_result()
             request = next(item for item in data['ai.session'] if item['id'] == session.id)['userInputRequest']
             self.assertEqual(request['body'][0], 'markup')
-            self.assertEqual(request['requestUuid'], session.request_uuid)
             self.assertEqual(request['resumeToken'], session.resume_token)
             rendered.append(str(request['body'][1]))
         for unsafe in ('<script', 'onclick', 'onerror', 'javascript:',

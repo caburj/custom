@@ -46,7 +46,6 @@ async function startPendingQuestion(overrides = {}) {
                 { label: "Send", value: "Send" },
             ],
             multiSelect: false,
-            requestUuid: REQUEST_UUID,
             resumeToken: RESUME_TOKEN,
             type: "question",
             ...overrides,
@@ -70,7 +69,7 @@ function expectPendingInteractionResume(expectedResponse, step) {
     });
     onRpc("/ai/resume_pending_interaction", async (request) => {
         const { params } = await request.json();
-        expect(params.request_uuid).toBe(REQUEST_UUID);
+        expect(params.request_uuid).toBe(undefined);
         expect(params.resume_token).toBe(RESUME_TOKEN);
         expect(params.response).toEqual(expectedResponse);
         expect.step(step);

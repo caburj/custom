@@ -109,7 +109,6 @@ test("Persisted blocking client command resumes a falsy result once", async () =
     session.clientToolRequest = {
         name: "callback_falsy_value",
         params: {},
-        requestUuid: "00000000-0000-4000-8000-000000000061",
         resumeToken: "blocking-client-token",
     };
     session.responseState = "waiting_client";
@@ -143,7 +142,6 @@ test("Non-consumed blocking client acknowledgement keeps the command for retry",
     session.clientToolRequest = {
         name: "callback_retry",
         params: {},
-        requestUuid: "00000000-0000-4000-8000-000000000064",
         resumeToken: "blocking-client-retry-token",
     };
 
@@ -178,7 +176,6 @@ test("Persisted blocking client command resumes an execution error", async () =>
     session.clientToolRequest = {
         name: "callback_client_failure",
         params: {},
-        requestUuid: "00000000-0000-4000-8000-000000000062",
         resumeToken: "blocking-client-error-token",
     };
 
@@ -202,7 +199,6 @@ test("Unavailable blocking client command resumes an error instead of waiting fo
     session.clientToolRequest = {
         name: "unavailable_livechat_tool",
         params: {},
-        requestUuid: "00000000-0000-4000-8000-000000000063",
         resumeToken: "unavailable-client-tool-token",
     };
 

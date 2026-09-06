@@ -43,7 +43,7 @@ test("an embedded guest answers a source-owned descendant prompt while the root 
                 responseState: "waiting_user", userInputRequest: {
                     type: "question", body: ["markup", "<p>Choose a colour.</p>"],
                     choices: [{ label: "Red", value: "red" }],
-                    requestUuid: "guest-child-request", resumeToken: "guest-child-token",
+                    resumeToken: "guest-child-token",
                 } },
         ],
     });
@@ -51,7 +51,7 @@ test("an embedded guest answers a source-owned descendant prompt while the root 
         const { params } = await request.json();
         expect(params.channel_id).toBe(channelId);
         expect(params.session_id).toBe(101);
-        expect(params.request_uuid).toBe("guest-child-request");
+        expect(params.request_uuid).toBe(undefined);
         expect(params.resume_token).toBe("guest-child-token");
         expect(params.response).toEqual({ kind: "question", value: ["red"] });
         expect.step("guest answered child");

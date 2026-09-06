@@ -201,10 +201,10 @@ class TestAIChannelNameContinuationHttp(HttpCase):
             ('channel_id', '=', False),
         ])
         return sessions.filtered(
-            lambda session: session.continuation_data == {
-                'continuation_type': 'channel_name',
-                'channel_id': channel_id,
-            }
+            lambda session: (
+                session.continuation_data.get('continuation_type') == 'channel_name'
+                and session.continuation_data.get('channel_id') == channel_id
+            )
         )
 
     def test_start_commits_both_sessions_before_submission(self):
