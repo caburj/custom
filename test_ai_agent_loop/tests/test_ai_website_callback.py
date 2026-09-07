@@ -66,7 +66,7 @@ class TestAIWebsiteCallback(TransactionCase):
         self.assertEqual(prepared['session_id'], session.id)
         self.assertEqual(prepared['request_uuid'], session.request_uuid)
         self.assertEqual(session.request_payload['timeout'], WEBSITE_BUILDER_TIMEOUT)
-        self.assertEqual(tools_context['ai_session_id'], session.id)
+        self.assertEqual(tools_context['session_id'], session.id)
         self.assertIn('## AI JavaScript', str(session.request_payload['messages']))
         self.assertEqual(session.request_context, snapshot)
 

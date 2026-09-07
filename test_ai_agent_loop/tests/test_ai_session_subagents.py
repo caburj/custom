@@ -253,8 +253,8 @@ class TestAISessionSubagents(TransactionCase):
         self._prepare()
         prepare = type(self.session)._prepare_subagent_session
 
-        def fail_after_preparation(session, call):
-            prepare(session, call)
+        def fail_after_preparation(session, call, schema):
+            prepare(session, call, schema)
             error = "Child preparation rolled back"
             raise UserError(error)
 

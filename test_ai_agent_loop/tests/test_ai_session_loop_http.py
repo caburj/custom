@@ -356,20 +356,21 @@ class TestAISessionLoopHttp(HttpCase):
         message = self.env['mail.message'].browse(self._post_committed_prompt(
             'Caller environment message',
         ))
-        original_get_channel = AIThreadController._get_ai_channel_from_id
+        original_get_session = AIThreadController._get_channel_ai_session
         observed = {}
 
-        def observe_caller_environment(controller, env, channel_id):
+        def observe_caller_environment(controller, channel):
+            env = channel.env
             observed['caller_environment'] = env is http.request.env
             observed['request_cursor'] = env.cr is http.request.env.cr
             observed['default_environment'] = env.transaction.default_env is env
             observed['sudo'] = env.su
-            return original_get_channel(controller, env, channel_id)
+            return original_get_session(controller, channel)
 
         with (
             patch.object(
                 AIThreadController,
-                '_get_ai_channel_from_id',
+                '_get_channel_ai_session',
                 autospec=True,
                 side_effect=observe_caller_environment,
             ),

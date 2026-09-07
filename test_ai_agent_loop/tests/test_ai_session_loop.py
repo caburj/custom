@@ -90,7 +90,8 @@ class TestAISessionLoop(TransactionCase):
                 self.assertRaises(type(error)),
             ):
                 list(self.session._handle_tool_calls(
-                    [tool_call], {tool.ai_tool_name: tool}, {'auto_confirm': True, 'state': {}}, None,
+                    [tool_call], {tool.ai_tool_name: tool},
+                    {**self.session._build_tools_context(), 'auto_confirm': True}, None,
                 ))
 
     def _apply_iap_tool_call(self, session, request_uuid, tool, call_id, args):
@@ -182,18 +183,38 @@ class TestAISessionLoop(TransactionCase):
         with self.assertRaises(UserError):
             session.write({'request_payload': {}})
 
-    def test_submission_acknowledgement_cannot_overwrite_a_completed_callback(self):
-        session = self._prepare_agent_request()
-        request_uuid = session.request_uuid
+    def test_request_preparation_keeps_history_and_working_state_independent(self):
+        message = self._post_prompt('Keep the original prompt')
+        parts = message._convert_to_parts()
+        original_parts = copy.deepcopy(parts)
+        state = {'available_tools': [], 'web_sources': {'source': {'url': 'https://example.com'}}}
+        self.session.state = state
+        session = self.session.with_context(
+            active_company_ids=self.env.companies.ids,
+            allowed_company_ids=self.env.companies.ids,
+        )
+        session._prepare_agent_request(parts)
+        expected_payload = session.request_payload
+        expected_state = session.state
+        expected_history = session._get_history()
 
-        def complete_before_acknowledgement(*args, **kwargs):
-            session._continue(request_uuid, {'kind': 'success', 'message': assistant_text('Already completed')})
+        self.assertEqual(parts, original_parts)
+        self.assertEqual(expected_history[0]['content'], original_parts)
+        self.assertIn('<odoo_current_context>', str(expected_payload['messages']))
+        self.assertNotIn('<odoo_current_context>', str(expected_history))
 
-        with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', side_effect=complete_before_acknowledgement):
-            session._submit_prepared_request(request_uuid)
-        self.assertEqual(session.loop_state, 'ready')
-        self.assertFalse(session.request_phase)
-        self.assertEqual(session.request_result['message'], assistant_text('Already completed'))
+        parts[0]['text'] = 'Changed caller input'
+        state['web_sources']['source']['url'] = 'https://changed.example.com'
+        payload = session.request_payload
+        payload['messages'][0]['content'][0]['text'] = 'Changed request read'
+        history = session._get_history()
+        history[0]['content'][0]['text'] = 'Changed history read'
+        tools_context = session._build_tools_context()
+        tools_context['state']['web_sources']['source']['url'] = 'https://working.example.com'
+
+        self.assertEqual(session.request_payload, expected_payload)
+        self.assertEqual(session.state, expected_state)
+        self.assertEqual(session._get_history(), expected_history)
 
     def test_active_model_round_requires_non_null_bounds(self):
         session = self._prepare_agent_request()
@@ -609,7 +630,17 @@ class TestAISessionLoop(TransactionCase):
         stored_session = Store().add(
             session, '_store_session_fields',
         )._build_result()['ai.session'][0]
-        self.assertEqual(stored_session['userInputRequest']['resumeToken'], resume_token)
+        self.assertEqual({
+            key: value for key, value in stored_session['userInputRequest'].items()
+            if key != 'body'
+        }, {
+            'type': 'question',
+            'choices': [{'label': choice, 'value': choice} for choice in ['Draft', 'Send']],
+            'multiSelect': False,
+            'allowFreeText': False,
+            'resumeToken': resume_token,
+        })
+        self.assertFalse(stored_session['clientToolRequest'])
         invalid_responses = (
             {'kind': 'question', 'value': ['Invented']},
             {'kind': 'question', 'value': []},
@@ -629,6 +660,9 @@ class TestAISessionLoop(TransactionCase):
         self.assertEqual(resumed["prepared_requests"][0]["session_id"], session.id)
         self.assertFalse(session.pending_tool_call)
         self.assertNotEqual(session.request_uuid, request_uuid)
+        resumed_store = Store().add(session, '_store_session_fields')._build_result()['ai.session'][0]
+        self.assertFalse(resumed_store['userInputRequest'])
+        self.assertFalse(resumed_store['clientToolRequest'])
         result = session.request_payload['messages'][-1]['content'][0]
         self.assertEqual(result['tool_call_id'], 'callback-question')
         self.assertIn('USER ANSWER: Draft', str(result['result']))
@@ -642,6 +676,10 @@ class TestAISessionLoop(TransactionCase):
         session, request_uuid, _waiting = self._prepare_question(
             ['Brussels', 'Ghent'], allow_free_text=True,
         )
+
+        stored_session = Store().add(session, '_store_session_fields')._build_result()['ai.session'][0]
+        self.assertTrue(stored_session['userInputRequest']['allowFreeText'])
+        self.assertFalse(stored_session['userInputRequest']['multiSelect'])
 
         resumed = session._resume_pending_interaction(
             session.resume_token,
@@ -657,6 +695,10 @@ class TestAISessionLoop(TransactionCase):
         session, request_uuid, _waiting = self._prepare_question(
             ['Red', 'Green', 'Blue'], multi_select=True,
         )
+
+        stored_session = Store().add(session, '_store_session_fields')._build_result()['ai.session'][0]
+        self.assertTrue(stored_session['userInputRequest']['multiSelect'])
+        self.assertFalse(stored_session['userInputRequest']['allowFreeText'])
 
         resumed = session._resume_pending_interaction(
             session.resume_token,
@@ -861,6 +903,12 @@ class TestAISessionLoop(TransactionCase):
             'confirmation',
         )
         resume_token = session.resume_token
+        stored_session = Store().add(session, '_store_session_fields')._build_result()['ai.session'][0]
+        self.assertEqual(stored_session['userInputRequest']['type'], 'confirmation')
+        self.assertEqual(stored_session['userInputRequest']['resumeToken'], resume_token)
+        self.assertFalse(stored_session['userInputRequest']['multiSelect'])
+        self.assertFalse(stored_session['userInputRequest']['allowFreeText'])
+        self.assertFalse(stored_session['clientToolRequest'])
 
         resumed = session._resume_pending_interaction(
             resume_token,
