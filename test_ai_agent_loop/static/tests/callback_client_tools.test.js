@@ -182,15 +182,9 @@ test("Persisted blocking client command resumes an execution error", async () =>
     await expect.waitForSteps(["client tool failed", "error resumed"]);
 });
 
-test("Unavailable blocking client command resumes an error instead of waiting forever", async () => {
-    onRpc("/ai/resume_pending_interaction", async (request) => {
-        const { params } = await request.json();
-        expect(params.response).toEqual({
-            kind: "client_error",
-            value: "Unknown AI client tool: unavailable_livechat_tool",
-        });
-        expect.step("unavailable tool resumed");
-        return { responseState: "running" };
+test("A client without the handler leaves the blocking command pending", async () => {
+    onRpc("/ai/resume_pending_interaction", () => {
+        expect.step("unexpected resume");
     });
     setupChatHub({ opened: [channelId] });
     await start();
@@ -202,5 +196,9 @@ test("Unavailable blocking client command resumes an error instead of waiting fo
         resumeToken: "unavailable-client-tool-token",
     };
 
-    await expect.waitForSteps(["unavailable tool resumed"]);
+    expect(Boolean(session.channel_id.thread)).toBe(true);
+    await session.processPendingClientTool();
+    expect(session._runningClientToolToken).toBe(undefined);
+    expect(session.clientToolRequest.resumeToken).toBe("unavailable-client-tool-token");
+    expect.verifySteps([]);
 });
