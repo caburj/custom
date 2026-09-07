@@ -6,6 +6,7 @@
         <div class="ai-detail-header">
             <span class="ai-detail-type-badge">Iteration</span>
             <span class="ai-detail-name">Iteration <t t-out="this.props.iteration.iteration_index"/></span>
+            <span t-if="this.props.iteration.phase" class="ai-detail-meta" t-out="this.props.iteration.phase.replaceAll('_', ' ')"/>
             <span t-if="this.props.iteration.is_final" class="ai-detail-meta">Final</span>
             <span t-if="this.props.iteration.has_error" class="ai-detail-meta error">Error</span>
             <span t-if="this.props.iteration.duration_ms !== null and this.props.iteration.duration_ms !== undefined"

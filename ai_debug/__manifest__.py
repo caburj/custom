@@ -46,6 +46,7 @@
         ],
         'web.assets_unit_tests': [
             'ai_debug/static/src/app/event_payload.js',
+            'ai_debug/static/src/app/trace_store.js',
             'ai_debug/static/src/app/db.js',
             'ai_debug/static/tests/**/*.test.js',
         ],

@@ -114,7 +114,7 @@
                                 </t>
                                 <t t-set="totals" t-value="this.getTraceTotals(node.trace)"/>
                                 <span class="ai-tree-meta-line">
-                                    <t t-out="node.trace.agent_name or (node.trace.trace_kind ? 'Direct' : 'Agent')"/>
+                                    <t t-out="node.trace.agent_name or (node.trace.trace_kind === 'direct' ? 'Direct' : node.trace.trace_kind ? 'Helper' : 'Agent')"/>
                                     <t t-if="node.trace.ai_provider"> &#xB7; <t t-out="node.trace.ai_provider"/></t>
                                     <t t-if="node.trace.model_name"> &#xB7; <t t-out="node.trace.model_name"/></t>
                                     <t t-if="totals.has_duration_metrics">
@@ -128,7 +128,9 @@
                                     </t>
                                 </span>
                             </span>
-                            <span t-if="node.trace.hydrated" class="ai-tree-hydrated-badge" title="Loaded from storage">archived</span>
+                            <span t-if="node.trace.partial" class="ai-tree-hydrated-badge">partial</span>
+                            <span t-if="node.trace.hydrated" class="ai-tree-hydrated-badge" title="Loaded from browser storage; shows the last captured state">saved</span>
+                            <span t-if="node.trace.phase" class="ai-tree-label-dim" t-out="(node.trace.status === 'running' and node.trace.request_state or node.trace.phase).replaceAll('_', ' ')"/>
                             <span t-if="node.trace.status === 'running'" class="ai-debug-pulse-dot small"/>
                             <span t-elif="node.trace.status === 'success'" class="ai-tree-status success">&#x2713;</span>
                             <span t-elif="node.trace.status === 'error'" class="ai-tree-status error">&#x2717;</span>
@@ -188,6 +190,7 @@
                                 <t t-out="node.tc.tool_name"/>
                             </span>
                             <span t-if="node.tc.status === 'running'" class="ai-debug-pulse-dot tiny"/>
+                            <span t-elif="node.tc.status === 'waiting_confirmation'" class="ai-tree-label-dim">confirmation</span>
                             <span t-elif="node.tc.success" class="ai-tree-status success">&#x2714;</span>
                             <span t-elif="node.tc.success === false" class="ai-tree-status error">&#x2717;</span>
                         </div>

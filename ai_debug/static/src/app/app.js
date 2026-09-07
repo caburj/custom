@@ -9,63 +9,9 @@ import { probeIDB, writeTrace, deleteTraces, loadAllTraces, serializeTrace } fro
 import { ImportPreviewDialog } from "./import_dialog";
 import { TextPopupDialog } from "./detail/text_popup";
 import { formatTokens, formatDuration } from "./format_metrics";
-import {
-    callbackCorrelation,
-    iterationMessages,
-    iterationTools,
-    normalizeTokens,
-} from "./event_payload";
+import { reduceTraceEvent, collectSidebarNodes, parentTool, hydrateTrace } from "./trace_store";
 
 const AI_DEBUG_CHANNEL = "ai_debug";
-
-/**
- * Reconstruct a reactive trace object from a plain IDB-stored record.
- *
- * IDB stores iterations and toolCalls as [id, record] pair arrays (from
- * serializeTrace's .entries() serialization). Dates are ISO strings from
- * the JSON round-trip in writeTrace(). This function reverses both
- * transformations and wraps nested Maps in reactive() so that bus event
- * handlers (.set() calls) trigger OWL re-renders after hydration.
- *
- * hydrated: true is a permanent marker — never removed — used by the
- * template to display the "archived" badge.
- */
-function hydrateTrace(plain) {
-    const iterations = proxy(new Map());
-    for (const [iterId, iter] of plain.iterations ?? []) {
-        const toolCalls = proxy(new Map());
-        for (const [tcId, tc] of iter.toolCalls ?? []) {
-            toolCalls.set(tcId, { ...tc, expanded: tc.expanded !== false });
-        }
-        iterations.set(iterId, {
-            ...iter,
-            expanded: true,
-            toolCalls,
-            // Stored token objects were normalized at ingestion. Missing values
-            // stay null so "unavailable" is not confused with a measured zero.
-            tokens: iter.tokens ?? null,
-            duration_ms: iter.duration_ms ?? null,
-            ai_provider: iter.ai_provider ?? null,
-            model_name: iter.model_name ?? null,
-            provider_api: iter.provider_api ?? null,
-            duration_kind: iter.duration_kind ?? null,
-            request_label: iter.request_label ?? null,
-            response_label: iter.response_label ?? null,
-            tools: iter.tools ?? [],
-        });
-    }
-    return {
-        ...plain,
-        created_ts: plain.created_ts || plain.storedAt || 0,
-        ai_provider: plain.ai_provider ?? null,
-        model_name: plain.model_name ?? "",
-        duration_ms: plain.duration_ms ?? null,
-        duration_kind: plain.duration_kind ?? null,
-        expanded: false,
-        hydrated: true,
-        iterations,
-    };
-}
 
 export class AiDebugApp extends Component {
     static template = "ai_debug.App";
@@ -112,194 +58,21 @@ export class AiDebugApp extends Component {
         this._needsScroll = false;
         this._flashId = null;
         this._lastArrivedId = null;
-        // Pending-child buffer for out-of-order subagent traces (TREE-05).
-        // Keyed by parent_tool_call_id (= LLM call_id). Each entry holds
-        // the child trace payload and a 30s promotion timer.
-        this._pendingChildren = {};
-
-        // ----------------------------------------------------------------
-        // Bus event handlers — NEVER touch this.state.selectedId (SIDE-05)
-        // ----------------------------------------------------------------
-
-        this._onNewTrace = (payload) => {
-            if (this.traces.has(payload.trace_id)) return;
-            const { parent_trace_id, parent_tool_call_id } = payload;
-
-            // --- Child trace: check for parent before placing ---
-            if (parent_trace_id && parent_tool_call_id) {
-                const parentTrace = this.traces.get(parent_trace_id);
-                if (parentTrace) {
-                    // Parent trace exists — check if the tool call node exists
-                    let parentTcFound = false;
-                    for (const iter of parentTrace.iterations.values()) {
-                        if (iter.toolCalls.has(parent_tool_call_id)) {
-                            parentTcFound = true;
-                            break;
-                        }
-                        // Also check by call_id field (tool_call_started uses our UUID as key,
-                        // but parent_tool_call_id is the LLM call_id stored in the call_id field)
-                        for (const tc of iter.toolCalls.values()) {
-                            if (tc.call_id === parent_tool_call_id) {
-                                parentTcFound = true;
-                                break;
-                            }
-                        }
-                        if (parentTcFound) break;
-                    }
-                    if (parentTcFound) {
-                        // Parent tool call exists — place the child trace immediately
-                        this._placeTrace(payload);
-                        return;
-                    }
-                }
-
-                // Parent not found — buffer with 30s timeout
-                const timer = setTimeout(() => {
-                    // Promote orphan to root — place as a root trace but retain parent references
-                    this._placeTrace(payload);
-                    delete this._pendingChildren[parent_tool_call_id];
-                }, 30000);
-                this._pendingChildren[parent_tool_call_id] = { payload, timer };
-                return;
-            }
-
-            // --- Root trace: place directly ---
-            this._placeTrace(payload);
-        };
-
-        this._onIteration = (payload) => {
-            const trace = this.traces.get(payload.trace_id);
+        // Every captured event is immediately inspectable and persisted, including
+        // partial children whose parent has not reached this browser yet.
+        this._onTraceEvent = (payload) => {
+            const isNew = !this.traces.has(payload.trace_id);
+            const trace = reduceTraceEvent(this.traces, payload, () => proxy(new Map()));
             if (!trace) return;
-            // Only create if not already present (avoid blowing away existing toolCalls)
-            if (!trace.iterations.has(payload.iteration_id)) {
-                const toolCalls = proxy(new Map());
-                trace.iterations.set(payload.iteration_id, {
-                    iteration_id: payload.iteration_id,
-                    trace_id: payload.trace_id,
-                    iteration_index: payload.iteration_index,
-                    has_error: !!payload.error,
-                    expanded: true,
-                    toolCalls,
-                    // Phase 7: full payload for detail panel
-                    messages_sent: iterationMessages(payload),
-                    raw_response: payload.raw_response ?? payload.response_summary ?? null,
-                    is_final: payload.is_final || false,
-                    error: payload.error || null,
-                    request_body: payload.request_body ?? null,
-                    request_label: payload.request_label ?? null,
-                    response_label: payload.response_label ?? null,
-                    tools: iterationTools(payload),
-                    // Phase 17: token/timing/provider fields
-                    tokens: normalizeTokens(payload.tokens),
-                    duration_ms: payload.duration_ms ?? null,
-                    duration_kind: payload.duration_kind ?? null,
-                    ai_provider: payload.provider ?? null,
-                    model_name: payload.model_name ?? null,
-                    provider_api: payload.provider_api ?? null,
-                    _payload_excluded: payload._payload_excluded ?? false,
-                    ...callbackCorrelation(payload),
-                });
-                this._lastArrivedId = payload.iteration_id;
+            if (isNew || payload.type === "iteration") {
+                this._lastArrivedId = payload.iteration_id ?? payload.trace_id;
                 this._needsScroll = true;
             }
-            trace.ai_provider = payload.provider ?? trace.ai_provider;
-            trace.model_name = payload.model_name ?? trace.model_name;
-            // NEVER touch this.state.selectedId here — SIDE-05
-        };
-
-        this._onRequestState = (payload) => {
-            const trace = this.traces.get(payload.trace_id);
-            if (!trace) return;
-            trace.request_state = payload.state ?? trace.request_state;
-            trace.request_uuid = payload.request_uuid ?? trace.request_uuid;
-            trace.round_no = payload.round_no ?? trace.round_no;
-        };
-
-        this._onToolCallStarted = (payload) => {
-            const trace = this.traces.get(payload.trace_id);
-            if (!trace) return;
-            const iteration = trace.iterations.get(payload.iteration_id);
-            if (!iteration) return;
-            iteration.toolCalls.set(payload.tool_call_id, {
-                tool_call_id: payload.tool_call_id,
-                iteration_id: payload.iteration_id,
-                tool_name: payload.tool_name,
-                call_id: payload.call_id || null,
-                args: payload.args || {},
-                // Result fields are null until tool_call_completed arrives
-                result: null,
-                success: null,
-                error: null,
-                state_before: {},
-                state_after: {},
-                triggered_confirmation: false,
-                confirmation_message: null,
-                status: "running",  // Visual indicator that tool is in progress
-                expanded: true,
-            });
-            // Check if any buffered child trace is waiting for this tool call
-            const buffered = this._pendingChildren[payload.call_id];
-            if (buffered) {
-                clearTimeout(buffered.timer);
-                delete this._pendingChildren[payload.call_id];
-                // Place the child trace — parent tool call now exists
-                this._placeTrace(buffered.payload);
+            if (isNew) this._flashId = payload.trace_id;
+            if (this.state.selectedId === null) {
+                this.state.selectedId = trace.trace_id;
+                this.state.selectedType = "trace";
             }
-            // NEVER touch this.state.selectedId here — SIDE-05
-        };
-
-        this._onToolCallCompleted = (payload) => {
-            const trace = this.traces.get(payload.trace_id);
-            if (!trace) return;
-            const iteration = trace.iterations.get(payload.iteration_id);
-            if (!iteration) return;
-            const tc = iteration.toolCalls.get(payload.tool_call_id);
-            if (!tc) {
-                // tool_call_completed arrived before tool_call_started (shouldn't happen
-                // but be defensive) — create the entry directly
-                iteration.toolCalls.set(payload.tool_call_id, {
-                    tool_call_id: payload.tool_call_id,
-                    iteration_id: payload.iteration_id,
-                    tool_name: payload.tool_name,
-                    call_id: payload.call_id || null,
-                    args: payload.args || {},
-                    result: payload.result,
-                    success: payload.success,
-                    error: payload.error || null,
-                    state_before: {},
-                    state_after: {},
-                    triggered_confirmation: payload.triggered_confirmation || false,
-                    confirmation_message: payload.confirmation_message || null,
-                    status: "completed",
-                    expanded: true,
-                });
-                return;
-            }
-            // Update existing entry with result data
-            tc.result = payload.result;
-            tc.success = payload.success;
-            tc.error = payload.error || null;
-            tc.triggered_confirmation = payload.triggered_confirmation || false;
-            tc.confirmation_message = payload.confirmation_message || null;
-            tc.status = "completed";
-            // NEVER touch this.state.selectedId here — SIDE-05
-        };
-
-        this._onLoopEnd = (payload) => {
-            const trace = this.traces.get(payload.trace_id);
-            if (!trace) return;
-            if (trace.status !== "running") return;
-            trace.status =
-                payload.termination_reason === "success"
-                    ? "success"
-                    : payload.termination_reason === "max_iterations"
-                    ? "max_iterations"
-                    : "error";
-            trace.duration_ms = payload.duration_ms ?? trace.duration_ms;
-            trace.duration_kind = payload.duration_kind ?? trace.duration_kind;
-            // NEVER touch this.state.selectedId here — SIDE-05
-
-            // Fire-and-forget IDB write — do NOT await
             if (!this.state.ephemeralMode) {
                 writeTrace(trace).catch((err) => {
                     console.warn("[ai_debug] IDB write failed — switching to ephemeral mode:", err);
@@ -327,18 +100,7 @@ export class AiDebugApp extends Component {
                 (b.created_ts || b.storedAt || 0)
             );
             for (const plain of stored) {
-                this.traces.set(plain.trace_id, hydrateTrace(plain));
-            }
-            // Second pass: validate parent pointers, promote orphans to root.
-            // A trace is an orphan when its parent_trace_id points to a trace
-            // that is no longer in IDB (e.g. was deleted externally). Nulling
-            // both parent fields makes sidebarNodes treat it as a root trace,
-            // consistent with the !t.parent_trace_id root-detection rule.
-            for (const trace of this.traces.values()) {
-                if (trace.parent_trace_id && !this.traces.has(trace.parent_trace_id)) {
-                    trace.parent_trace_id = null;
-                    trace.parent_tool_call_id = null;
-                }
+                this.traces.set(plain.trace_id, hydrateTrace(plain, () => proxy(new Map())));
             }
             // Auto-select newest root trace if nothing is selected (SESS-03).
             // Must filter to root traces only — never auto-select a subagent
@@ -346,7 +108,7 @@ export class AiDebugApp extends Component {
             if (this.state.selectedId === null && this.traces.size > 0) {
                 let bestTrace = null;
                 for (const trace of this.traces.values()) {
-                    if (!trace.parent_trace_id) {
+                    if (!parentTool(this.traces, trace)) {
                         if (!bestTrace || (trace.created_ts || 0) > (bestTrace.created_ts || 0)) {
                             bestTrace = trace;
                         }
@@ -363,28 +125,23 @@ export class AiDebugApp extends Component {
         // Bus lifecycle
         // ----------------------------------------------------------------
         onMounted(async () => {
-            this.busService.subscribe("new_trace", this._onNewTrace);
-            this.busService.subscribe("request_state", this._onRequestState);
-            this.busService.subscribe("iteration", this._onIteration);
-            this.busService.subscribe("tool_call_started", this._onToolCallStarted);
-            this.busService.subscribe("tool_call_completed", this._onToolCallCompleted);
-            this.busService.subscribe("loop_end", this._onLoopEnd);
+            this.busService.subscribe("new_trace", this._onTraceEvent);
+            this.busService.subscribe("request_state", this._onTraceEvent);
+            this.busService.subscribe("iteration", this._onTraceEvent);
+            this.busService.subscribe("tool_call_started", this._onTraceEvent);
+            this.busService.subscribe("tool_call_completed", this._onTraceEvent);
+            this.busService.subscribe("loop_end", this._onTraceEvent);
             await this.busService.addChannel(AI_DEBUG_CHANNEL);
         });
 
         onWillUnmount(() => {
             this.busService.deleteChannel(AI_DEBUG_CHANNEL);
-            this.busService.unsubscribe("new_trace", this._onNewTrace);
-            this.busService.unsubscribe("request_state", this._onRequestState);
-            this.busService.unsubscribe("iteration", this._onIteration);
-            this.busService.unsubscribe("tool_call_started", this._onToolCallStarted);
-            this.busService.unsubscribe("tool_call_completed", this._onToolCallCompleted);
-            this.busService.unsubscribe("loop_end", this._onLoopEnd);
-            // Clear any pending buffer timers to avoid orphan callbacks
-            for (const key of Object.keys(this._pendingChildren)) {
-                clearTimeout(this._pendingChildren[key].timer);
-            }
-            this._pendingChildren = {};
+            this.busService.unsubscribe("new_trace", this._onTraceEvent);
+            this.busService.unsubscribe("request_state", this._onTraceEvent);
+            this.busService.unsubscribe("iteration", this._onTraceEvent);
+            this.busService.unsubscribe("tool_call_started", this._onTraceEvent);
+            this.busService.unsubscribe("tool_call_completed", this._onTraceEvent);
+            this.busService.unsubscribe("loop_end", this._onTraceEvent);
         });
 
         // ----------------------------------------------------------------
@@ -415,46 +172,6 @@ export class AiDebugApp extends Component {
                 this._flashId = null;
             }
         });
-    }
-
-    // ----------------------------------------------------------------
-    // Trace placement helper — unconditionally creates the trace entry
-    // Used by both the root path and the pending-child re-attachment path
-    // ----------------------------------------------------------------
-
-    _placeTrace(payload) {
-        if (this.traces.has(payload.trace_id)) return;
-        const iterations = proxy(new Map());
-        this.traces.set(payload.trace_id, {
-            trace_id: payload.trace_id,
-            agent_name: payload.agent_name || "Unknown Agent",
-            trace_kind: payload.trace_kind || null,
-            trace_label: payload.trace_label || null,
-            ai_provider: payload.provider ?? null,
-            model_name: payload.model_name || "",
-            user_query: payload.user_query || "",
-            status: "running",
-            created_ts: Date.now(),
-            duration_ms: null,
-            duration_kind: null,
-            expanded: true,
-            iterations,
-            instructions: payload.instructions || "",
-            state_snapshot: payload.state_snapshot || {},
-            // Phase 13: parent linkage fields (null for root traces)
-            parent_trace_id: payload.parent_trace_id || null,
-            parent_tool_call_id: payload.parent_tool_call_id || null,
-            session_id: payload.session_id || null,
-            _payload_excluded: payload._payload_excluded ?? false,
-            ...callbackCorrelation(payload),
-        });
-        this._lastArrivedId = payload.trace_id;
-        this._flashId = payload.trace_id;
-        this._needsScroll = true;
-        if (this.state.selectedId === null) {
-            this.state.selectedId = payload.trace_id;
-            this.state.selectedType = "trace";
-        }
     }
 
     // ----------------------------------------------------------------
@@ -681,79 +398,7 @@ export class AiDebugApp extends Component {
     }
 
     get sidebarNodes() {
-        const nodes = [];
-        // Root traces: those without a parent_trace_id, newest-first
-        const rootTraces = [...this.traces.values()]
-            .filter((t) => !t.parent_trace_id)
-            .reverse();
-        for (const trace of rootTraces) {
-            this._collectTraceNodes(trace, 0, nodes);
-        }
-        return nodes;
-    }
-
-    /**
-     * Recursively emit node descriptors for one trace and all its descendants.
-     *
-     * Depth rules (TREE-03):
-     *   - The trace row itself is at `depth`.
-     *   - Iteration rows and tool call rows within that trace share the same `depth`
-     *     (flat within trace — indented only by inline padding, not by depth value).
-     *   - Child subagent traces increment to `depth + 1`.
-     *
-     * @param {object} trace - reactive trace object
-     * @param {number} depth - nesting depth (0 = root)
-     * @param {Array}  nodes - accumulator array (mutated in place)
-     */
-    _collectTraceNodes(trace, depth, nodes) {
-        // Push the trace row itself
-        nodes.push({ type: "trace", id: trace.trace_id, depth, trace });
-
-        // TREE-04: collapsed trace hides all descendants
-        if (!trace.expanded) return;
-
-        // Iterate iterations newest-first (matching existing template behavior)
-        const iterKeys = [...trace.iterations.keys()].reverse();
-        for (const iterId of iterKeys) {
-            const iter = trace.iterations.get(iterId);
-            if (!iter) continue;
-
-            // Push iteration row (flat: same depth as trace)
-            nodes.push({ type: "iter", id: iterId, depth, iter, trace });
-
-            // Collapsed iteration: skip its tool calls and child traces
-            if (!iter.expanded) continue;
-
-            // Push tool call rows (flat: same depth as iteration)
-            for (const [tcId, tc] of iter.toolCalls) {
-                // Check if this tool call spawned any child subagent traces
-                let hasChildren = false;
-                if (tc.call_id) {
-                    for (const ct of this.traces.values()) {
-                        if (
-                            ct.parent_trace_id === trace.trace_id &&
-                            ct.parent_tool_call_id === tc.call_id
-                        ) {
-                            hasChildren = true;
-                            break;
-                        }
-                    }
-                }
-                nodes.push({ type: "tc", id: tcId, depth, tc, iter, trace, hasChildren });
-
-                // Recurse into child subagent traces (only when expanded)
-                if (hasChildren && tc.expanded !== false) {
-                    for (const childTrace of this.traces.values()) {
-                        if (
-                            childTrace.parent_trace_id === trace.trace_id &&
-                            childTrace.parent_tool_call_id === tc.call_id
-                        ) {
-                            this._collectTraceNodes(childTrace, depth + 1, nodes);
-                        }
-                    }
-                }
-            }
-        }
+        return collectSidebarNodes(this.traces);
     }
 
     /**
@@ -858,7 +503,7 @@ export class AiDebugApp extends Component {
     get rootTracesCount() {
         let count = 0;
         for (const t of this.traces.values()) {
-            if (!t.parent_trace_id) count++;
+            if (!parentTool(this.traces, t)) count++;
         }
         return count;
     }
@@ -888,7 +533,7 @@ export class AiDebugApp extends Component {
             this.state.checkedTraceIds.clear();
         } else {
             for (const [id, trace] of this.traces) {
-                if (!trace.parent_trace_id) {
+                if (!parentTool(this.traces, trace)) {
                     this.state.checkedTraceIds.add(id);
                 }
             }
@@ -1058,7 +703,7 @@ export class AiDebugApp extends Component {
             (b.created_ts || b.storedAt || 0)
         );
         for (const record of records) {
-            const hydrated = hydrateTrace(record);
+            const hydrated = hydrateTrace(record, () => proxy(new Map()));
             this.traces.set(record.trace_id, hydrated);
             // Fire-and-forget IDB write — overwrites if duplicate (same pattern as _onLoopEnd)
             if (!this.state.ephemeralMode) {

@@ -45,6 +45,8 @@ export function serializeTrace(trace) {
         instructions: trace.instructions,
         state_snapshot: trace.state_snapshot,
         parent_trace_id: trace.parent_trace_id,
+        parent_session_id: trace.parent_session_id,
+        parent_request_uuid: trace.parent_request_uuid,
         parent_tool_call_id: trace.parent_tool_call_id,
         session_id: trace.session_id,
         _payload_excluded: trace._payload_excluded,
@@ -52,6 +54,14 @@ export function serializeTrace(trace) {
         request_uuid: trace.request_uuid,
         round_no: trace.round_no,
         request_state: trace.request_state,
+        request_phase: trace.request_phase,
+        phase: trace.phase,
+        partial: trace.partial,
+        termination_reason: trace.termination_reason,
+        termination_source: trace.termination_source,
+        exchange_result: trace.exchange_result,
+        final_output: trace.final_output,
+        error: trace.error,
         // Map → array of [iterationId, iterationRecord] pairs
         iterations: [...trace.iterations.entries()].map(([iterId, iter]) => [
             iterId,
@@ -63,6 +73,8 @@ export function serializeTrace(trace) {
                 request_uuid: iter.request_uuid,
                 round_no: iter.round_no,
                 request_state: iter.request_state,
+                request_phase: iter.request_phase,
+                phase: iter.phase,
                 has_error: iter.has_error,
                 is_final: iter.is_final,
                 error: iter.error,
@@ -98,6 +110,11 @@ export function serializeTrace(trace) {
                         call_id: tc.call_id,
                         triggered_confirmation: tc.triggered_confirmation,
                         confirmation_message: tc.confirmation_message,
+                        status: tc.status,
+                        child_phase: tc.child_phase,
+                        child_session_id: tc.child_session_id,
+                        child_request_uuid: tc.child_request_uuid,
+                        duration_ms: tc.duration_ms,
                     },
                 ]),
             },
@@ -106,7 +123,7 @@ export function serializeTrace(trace) {
 }
 
 /**
- * Write a completed trace to IndexedDB.
+ * Write the latest captured trace snapshot to IndexedDB, including active traces.
  * Returns a Promise — do NOT await at the call site (fire-and-forget).
  * Caller should .catch() to detect mid-session failures.
  *

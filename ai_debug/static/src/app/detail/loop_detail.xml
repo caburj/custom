@@ -6,7 +6,7 @@
         <!-- Header -->
         <div class="ai-detail-header">
             <span class="ai-detail-type-badge">
-                <t t-out="this.props.trace.trace_kind ? 'Direct' : 'Loop'"/>
+                <t t-out="this.props.trace.trace_kind === 'direct' ? 'Direct' : this.props.trace.trace_kind and this.props.trace.trace_kind !== 'agent_loop' ? 'Helper' : 'Loop'"/>
             </span>
             <span class="ai-detail-name"
                   t-out="this.props.trace.trace_label or this.props.trace.agent_name"/>
@@ -16,6 +16,10 @@
                   class="ai-detail-meta" t-out="this.props.trace.ai_provider"/>
             <span t-if="this.props.trace.model_name"
                   class="ai-detail-meta" t-out="this.props.trace.model_name"/>
+            <span t-if="this.props.trace.phase" class="ai-detail-meta" t-out="this.props.trace.phase.replaceAll('_', ' ')"/>
+            <span t-if="this.props.trace.status === 'running' and this.props.trace.request_state" class="ai-detail-meta" t-out="this.props.trace.request_state.replaceAll('_', ' ')"/>
+            <span t-if="this.props.trace.partial" class="ai-detail-meta">Partial capture</span>
+            <span t-if="this.props.trace.termination_reason" class="ai-detail-meta" t-out="this.props.trace.termination_reason"/>
             <span t-if="this.props.trace.status === 'running'"
                   class="ai-metric-chip ai-metric-chip--live">running</span>
             <span t-elif="this.props.trace.duration_ms !== null and this.props.trace.duration_ms !== undefined"
@@ -32,6 +36,13 @@
 
         <!-- Tabbed content -->
         <Notebook>
+            <t t-set-slot="outcome" title="'Outcome'" isVisible="!!(this.props.trace.exchange_result or this.props.trace.final_output)">
+                <div class="ai-detail-section">
+                    <div class="ai-detail-section-header"><span>Exchange Outcome</span></div>
+                    <JsonTree data="{exchange_result: this.props.trace.exchange_result, final_output: this.props.trace.final_output}"
+                              onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                </div>
+            </t>
             <t t-set-slot="system_prompt" title="'Submitted Instructions'" isVisible="true">
                 <div class="ai-detail-section">
                     <div class="ai-detail-section-header">
