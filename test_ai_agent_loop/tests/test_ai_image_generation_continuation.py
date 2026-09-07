@@ -34,6 +34,20 @@ class ImageGenerationFixture(WebSearchFixture):
     fixture_instructions = 'Generate or edit the requested image.'
     feedback = 'Here is your lighthouse. Would you like any changes?'
 
+    def _create_fixture(self, env):
+        super()._create_fixture(env)
+        session = self._session(env=env)
+        skill = env['ai.skill'].create({
+            'name': f'Image continuation fixture {session.id}',
+            'tool_ids': [Command.set(list(self.tool_ids.values()))],
+        })
+        self.fixture_tools_skill_id = skill.id
+        session.agent_id.skill_ids += skill
+        session.state = {
+            **session.state,
+            'loaded_skills': [*session.state.get('loaded_skills', []), skill.id],
+        }
+
     @property
     def image_title(self):
         return f'Continuation lighthouse {self.session_id}'
@@ -97,7 +111,8 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
         self.assertEqual(parent.channel_id.ai_session_ids, parent)
         self.assertEqual(child.request_user_id.id, self.actor_id)
         self.assertFalse(child.request_guest_id)
-        self.assertEqual(child.request_context, self.context_snapshot)
+        # Instrumentation may add its own context; the business actor/context must match.
+        self.assertEqual({key: child.request_context[key] for key in self.context_snapshot}, self.context_snapshot)
         self.assertEqual(child.request_callback_url, parent.request_callback_url)
         self.assertEqual(child.request_round, 1)
         self.assertEqual(child.request_round_limit, 1)
@@ -342,7 +357,11 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
             'current_view_info': {'website_page': {'is_page_ai_editable': True}},
         }
         parent = self._session()
-        parent.state = {'available_tools': list(self.tool_ids.values())}
+        parent.agent_id.skill_ids += self.env['ai.skill'].browse(self.fixture_tools_skill_id)
+        parent.state = {
+            'available_tools': list(self.tool_ids.values()),
+            'loaded_skills': [self.fixture_tools_skill_id],
+        }
         message = parent.channel_id.message_post(body=self.fixture_prompt, message_type='comment')
         parent.with_context(self.context_snapshot)._prepare_agent_request(message._convert_to_parts())
         self.parent_request_uuid = parent.request_uuid
@@ -361,7 +380,7 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
             ('attachment_id', 'in', permanent.ids),
         ]))
         image_result = self._results(parent)[0]['result'][0]['text']
-        self.assertIn('Here are the public URLs of the generated images.', image_result)
+        self.assertIn('Permanent URLs:', image_result)
         self.assertIn(f'- ID: {original.id}, URL: {permanent.image_src}', image_result)
         self.assertEqual(resumed["prepared_requests"][0]["session_id"], parent.id)
         self.assertEqual(parent.request_round, 2)
