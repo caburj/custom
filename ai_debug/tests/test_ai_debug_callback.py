@@ -2,7 +2,7 @@ import json
 from textwrap import dedent
 from unittest.mock import MagicMock, patch
 
-from odoo import api
+from odoo import api, Command
 from odoo.exceptions import ConcurrencyError
 from odoo.modules.registry import Registry
 from odoo.tests import HttpCase, TransactionCase, new_test_user, tagged
@@ -10,6 +10,7 @@ from odoo.tests import HttpCase, TransactionCase, new_test_user, tagged
 from odoo.addons.ai.models.ai_session import AiSession as EnterpriseAiSession
 from odoo.addons.ai.utils.ai_utils import UserInputResponse
 from odoo.addons.ai_debug.models.ai_session import AiSession as DebugAiSession
+from odoo.addons.base.tests.files import PNG_B64
 
 
 def assistant_text(text, provider_metadata=None):
@@ -94,6 +95,14 @@ class TestAiDebugCallback(TransactionCase):
             'code': code,
         })
 
+    def _enable_fixture_tools(self, session, tools):
+        # Core rebuilds available tools from the agent's linked, loaded skills.
+        skill = self.env['ai.skill'].create({
+            'name': 'AI Debug fixture tools', 'tool_ids': [Command.set(tools.ids)],
+        })
+        session.agent_id.skill_ids |= skill
+        session.state = {'loaded_skills': skill.ids}
+
     @staticmethod
     def _tool_result(tool, call_id, args=None):
         return {
@@ -152,7 +161,7 @@ class TestAiDebugCallback(TransactionCase):
     def test_combined_tool_final_preserves_completion_and_output(self):
         tool = self._create_callback_tool('ai_debug_combined_final',
             "ai['result'] = 'Tool result'\nai['final_message'] = [{'type': 'text', 'text': 'Tool final'}]")
-        self.session.state = {'available_tools': tool.ids}
+        self._enable_fixture_tools(self.session, tool)
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare('Finish in the tool')
@@ -183,7 +192,7 @@ class TestAiDebugCallback(TransactionCase):
             "ai['result'] = {'client_tool': {'name': 'debug_fixture', 'params': {}}}")
         for kind, value in [('client_result', 0), ('client_result', False), ('client_result', ''), ('client_error', '')]:
             with self.subTest(kind=kind, value=value):
-                self.session.state = {'available_tools': tool.ids}
+                self._enable_fixture_tools(self.session, tool)
                 events = []
                 with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
                     session, request = self._prepare('Client response')
@@ -211,7 +220,7 @@ class TestAiDebugCallback(TransactionCase):
 
     def test_ordinary_tool_round_keeps_exchange_and_request_identity(self):
         tool = self._create_callback_tool('ai_debug_round_tool', "ai['result'] = 'executed once'")
-        self.session.state = {'available_tools': tool.ids}
+        self._enable_fixture_tools(self.session, tool)
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare('Run a tool')
@@ -234,7 +243,7 @@ class TestAiDebugCallback(TransactionCase):
 
     def test_atomic_result_and_tool_facts_roll_back_with_reduction(self):
         tool = self._create_callback_tool('ai_debug_rollback_tool', "ai['result'] = 'rolled back'")
-        self.session.state = {'available_tools': tool.ids}
+        self._enable_fixture_tools(self.session, tool)
         session, request = self._prepare()
         bus = self.env['bus.bus'].sudo()
         domain = [('message', 'ilike', request.context_snapshot['ai_debug_exchange_uuid'])]
@@ -329,7 +338,7 @@ class TestAiDebugCallback(TransactionCase):
 
     def test_web_helper_continuation_applies_sources_and_parent_trace(self):
         tool = self._helper_tool('web_search')
-        self.session.state = {'available_tools': tool.ids}
+        self._enable_fixture_tools(self.session, tool)
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             parent, request = self._prepare('Search')
@@ -360,7 +369,7 @@ class TestAiDebugCallback(TransactionCase):
     def test_image_helper_application_rolls_back_attachments_and_trace_together(self):
         from odoo.addons.base.tests.files import PNG_B64
         tool = self.env.ref('ai.ir_actions_server_ai_generate_image')
-        self.session.state = {'available_tools': tool.ids}
+        self._enable_fixture_tools(self.session, tool)
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             parent, request = self._prepare('Generate an image')
@@ -397,7 +406,7 @@ class TestAiDebugCallback(TransactionCase):
 
     def test_consecutive_helpers_keep_parent_identity_and_completed_prefix(self):
         tool = self._helper_tool('web_search')
-        self.session.state = {'available_tools': tool.ids}
+        self._enable_fixture_tools(self.session, tool)
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             parent, request = self._prepare('Search twice')
@@ -428,6 +437,75 @@ class TestAiDebugCallback(TransactionCase):
         self.assertEqual({item['trace_id'] for item in completed}, {request.context_snapshot['ai_debug_exchange_uuid']})
         self.assertEqual(len(self._events(events, 'request_state', phase='child_applied')), 2)
 
+    def test_website_placeholder_images_link_to_active_tool_until_client_ack(self):
+        if 'ai.website.service' not in self.env:
+            self.skipTest('Website placeholder integration requires ai_website')
+        tool = self.env.ref('ai_website.ir_actions_server_apply_html_to_page')
+        actions = [{
+            'zone': 'main', 'mode': 'replace',
+            'content': '<section><img data-ai-image-prompt="A mug"/>'
+                       '<img data-ai-image-prompt="Coffee beans"/></section>',
+        }]
+        calls = [self._tool_result(tool, call_id, {'actions': actions})['content'][0]
+                 for call_id in ('first-page', 'second-page')]
+        events = []
+        with (
+            patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
+            patch.object(self.registry['ai.tool'], '_call_ai_reviewer', return_value=(True, '')),
+            patch.object(self.registry['ai.agent'], '_get_default_tools', return_value=tool),
+            patch.object(self.registry['ai.session'], '_get_direct_response',
+                         side_effect=AssertionError('Placeholder images must be durable')),
+        ):
+            parent, request = self._prepare('Build a page', current_view_info={
+                'website_page': {'is_page_ai_editable': True,
+                                 'website_id': self.env.ref('base.default_website').id},
+            })
+            outcome = self._consume(parent, {'role': 'assistant', 'content': calls})
+            for index, call_id in enumerate(('first-page', 'second-page')):
+                children = self.env['ai.session'].browse([
+                    item['session_id'] for item in outcome['prepared_requests']
+                ])
+                self.assertEqual(len(children), 2)
+                self.assertEqual(parent.loop_state, 'waiting_client_result')
+                token = parent.resume_token
+                parent_trace = request.context_snapshot['ai_debug_exchange_uuid']
+                tool_id = parent._ai_debug_callback_tool_call_id(request.request_uuid, call_id)
+                self.assertFalse(any('child_session_id' in item
+                                     for item in parent.pending_tool_call['pending_results']))
+                for child, result in zip(children, (
+                    {'kind': 'success', 'message': {'role': 'assistant', 'content': [
+                        {'type': 'inline_data', 'data': PNG_B64, 'mimetype': 'image/png'},
+                    ]}},
+                    {'kind': 'failure', 'code': 'request_failed'},
+                )):
+                    trace, = self._events(events, 'new_trace', session_id=child.id)
+                    self.assertEqual(trace['trace_kind'], 'image_generation')
+                    self.assertEqual(trace['parent_trace_id'], parent_trace)
+                    self.assertEqual(trace['parent_session_id'], parent.id)
+                    self.assertEqual(trace['parent_request_uuid'], request.request_uuid)
+                    self.assertEqual(trace['parent_tool_call_id'], tool_id)
+                    child._continue(child.request_uuid, result)
+                    terminal, = self._events(events, 'loop_end', trace_id=trace['trace_id'])
+                    self.assertEqual(terminal['phase'], 'child_settled')
+                    self.assertEqual(terminal['termination_reason'],
+                                     'success' if result['kind'] == 'success' else 'failed')
+                    event_count = len(events)
+                    child._continue(child.request_uuid, result)
+                    self.assertEqual(len(events), event_count)
+                    self.assertEqual(parent.loop_state, 'waiting_client_result')
+                    self.assertEqual(parent.resume_token, token)
+                self.assertTrue(children[0].request_result['image_url'])
+                self.assertFalse(children[1].request_result['image_url'])
+                self.assertFalse(self._events(events, 'request_state', phase='child_applied'))
+                self.assertFalse(self._events(events, 'loop_end', trace_id=parent_trace))
+                self.assertEqual(len(self._events(events, 'tool_call_completed')), index)
+                outcome = parent._resume_pending_interaction(
+                    token, {'kind': 'client_result', 'value': 'Applied the page'},
+                )
+                completed, = self._events(events, 'tool_call_completed', tool_call_id=tool_id)
+                self.assertTrue(completed['success'])
+            self.assertEqual(parent.loop_state, 'waiting_model')
+
     def test_stale_submission_does_not_emit_acknowledgement(self):
         session, first = self._prepare()
         self._consume(session, assistant_text('First answer'))
@@ -451,7 +529,7 @@ class TestAiDebugCallback(TransactionCase):
 
     def test_typed_question_resume_and_supersession(self):
         tool = self._create_callback_tool('ai_debug_question', "ai['user_input_request'] = {'type': 'question', 'body': 'Choose', 'choices': [{'label': 'A', 'value': 'a'}], 'multi_select': False, 'allow_free_text': False}")
-        self.session.state = {'available_tools': tool.ids}
+        self._enable_fixture_tools(self.session, tool)
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, first = self._prepare()
@@ -469,7 +547,7 @@ class TestAiDebugCallback(TransactionCase):
     def test_decline_and_helper_failure_are_not_success(self):
         events = []
         tool = self._helper_tool('web_search')
-        self.session.state = {'available_tools': tool.ids}
+        self._enable_fixture_tools(self.session, tool)
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             parent, request = self._prepare()
             outcome = self._consume(parent, self._tool_result(tool, 'failure'))
@@ -492,7 +570,7 @@ class TestAiDebugCallback(TransactionCase):
                     'choices': [{'label': 'Decline', 'value': 'decline'}],
                     'multi_select': False, 'allow_free_text': False,
                 }))
-                self.session.state = {'available_tools': tool.ids}
+                self._enable_fixture_tools(self.session, tool)
                 events = []
                 with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
                     session, request = self._prepare()
@@ -557,7 +635,7 @@ class TestAiDebugCallback(TransactionCase):
 
     def test_unchanged_event_context_reuses_context_message_with_debug_metadata(self):
         tool = self._create_callback_tool('ai_debug_unchanged_context', "ai['result'] = 'Done'")
-        self.session.state = {'available_tools': tool.ids}
+        self._enable_fixture_tools(self.session, tool)
         session, request = self._prepare('Keep current context')
         current = session.with_context(**session.request_context)
         # Private metadata in the event may belong to a returning child.
@@ -570,7 +648,7 @@ class TestAiDebugCallback(TransactionCase):
 
     def test_continuation_uses_event_context_and_retains_exchange_identity(self):
         tool = self._create_callback_tool('ai_debug_event_context', "ai['result'] = 'Done'")
-        self.session.state = {'available_tools': tool.ids}
+        self._enable_fixture_tools(self.session, tool)
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare('Run with current context', current_view_info={'marker': 'old-view'})
@@ -599,7 +677,7 @@ class TestAiDebugCallback(TransactionCase):
             self.assertEqual(child.request_context['current_view_info'], {'marker': 'start-event'})
             child_trace = child.request_context['ai_debug_exchange_uuid']
             child_link = child.request_context['_ai_debug_parent_link']
-            child.state = {'available_tools': tool.ids}
+            self._enable_fixture_tools(child, tool)
             child_request_uuid = child.request_uuid
             outcome = self._consume(child.with_context(current_view_info={'marker': 'search-event'}), self._tool_result(tool, 'search'))
             helper = self.env['ai.session'].browse(outcome['prepared_requests'][0]['session_id'])

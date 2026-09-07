@@ -1,3 +1,38 @@
+## Website placeholder image continuations — 2026-09-07
+
+Website placeholder children now use the tool call identity already carried by
+`ir.actions.server._ai_tool_run` to build their parent trace link. They are
+prepared inside `apply_html_to_page`, before its client wait is persisted, so
+reading the parent's pending call could select an earlier tool. Ordinary image
+and web-search helpers retain their existing suspended-tool linking.
+
+The regression runs two same-name page calls with two image children each. It
+checks exact parent request/tool links, success and failure, silent callback
+replay, image URL results, and no parent completion or `child_applied` event until
+browser acknowledgement. Existing fixtures now configure tools through linked,
+loaded skills so the current core tool-context rebuild retains them.
+
+**51 selected tests passed, zero failures/errors**, including the real Website
+regression (ai_website installed), normal image/helper tracing, physical HTTP
+atomic retry/replay, and standalone browser checks. Isolated database:
+`ai-debug-subagent-tests-0906a`, HTTP **22284**, gevent **22287**. Log:
+`/tmp/ai-debug-website-images-suite-r2-0907.log`. Process exit: **0**.
+Earlier logs `ai-debug-website-images-focused-0907.log` and
+`ai-debug-website-images-suite-0907.log` expose the obsolete direct-tool fixture
+setup; those runs failed and are not acceptance evidence. Python AST parsing and
+`git diff --check -- ai_debug` passed. No provider or manual tests were run, no
+shared consumers were restarted, and no commits were made.
+
+Enterprise HEAD was `28110c9b77ffec23de622671c603a0223f193b6b` plus the image
+migration's uncommitted changes. Relevant source SHA-256 values at completion:
+
+```text
+ai/models/ai_session.py be725bbfe2d087ce375e8438490023e9e01c87c6da6efa529c372b402e0eedaf
+ai/models/ai_tool.py f1fd805cd30ba8e5d131c0c35dcd6f33f8015b81b067850ec50a09fcf029d35f
+ai_website/models/ai_website_service.py b199aa428653ee9fdcd82ff7a787a9b6f9637c7b281d6e35dca8b66f48a19c62
+ai_website/models/ai_session.py 069d005798d3a08dae0f2258ec88127ee3c1fef7697397737959eca3bab6ecfe
+```
+
 # Callback subagent debugger acceptance — 2026-09-06
 
 ## Selected-schema forwarding — 2026-09-07

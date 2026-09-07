@@ -32,7 +32,9 @@ class TestAiDebugAtomicCallback(HttpCase):
             root = env['ai.session'].sudo().create({'agent_id': agent.id, 'channel_id': channel.id})
             image_tool = env.ref('ai.ir_actions_server_ai_generate_image')
             if image:
-                root.state = {'available_tools': image_tool.ids}
+                skill = env.ref('ai.ai_skill_generate_image')
+                agent.skill_ids = skill
+                root.state = {'loaded_skills': skill.ids}
             root = root.with_context(allowed_company_ids=env.companies.ids, active_company_ids=env.companies.ids)
             root._prepare_agent_request([{'type': 'text', 'text': 'Fixture'}])
 

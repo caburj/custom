@@ -917,6 +917,9 @@ class AiSession(models.Model):
             parent_link = self.env.context.get('_ai_debug_parent_link')
             if request_round > 1:
                 parent_link = (self.request_context or {}).get('_ai_debug_parent_link')
+            elif continuation_data.get('website_placeholder'):
+                # Prepared inside apply_html_to_page, before its client wait is stored.
+                parent_link = self.parent_session_id._ai_debug_parent_link(self.env.context['ai_parent_tool_call_id'])
             elif self.parent_session_id and continuation_data['continuation_type'] in ('web_search', 'image_generation'):
                 callback_context = self.parent_session_id._ai_debug_active_callback_context() or {}
                 parent_link = self.parent_session_id._ai_debug_parent_link(callback_context['helper_call_id'])
