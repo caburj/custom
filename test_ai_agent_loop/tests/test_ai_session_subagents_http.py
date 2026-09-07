@@ -42,17 +42,16 @@ class TestAISessionSubagentsHttp(HttpCase):
             contact_name = f'Physical foreground confirmed {parent.id}'
             parent_uuid = False
             if prepare_root:
-                parent._prepare_model_request(
+                parent.with_context({
+                    'allowed_company_ids': env.companies.ids,
+                    'active_company_ids': env.companies.ids,
+                    **(context_snapshot or {}),
+                })._prepare_agent_request(
                     [{'type': 'text', 'text': 'Run independent children'}],
-                    context_snapshot={
-                        'allowed_company_ids': env.companies.ids,
-                        'active_company_ids': env.companies.ids,
-                        **(context_snapshot or {}),
-                    },
                 )
                 parent_uuid = parent.request_uuid
                 parent = parent.with_context(parent.request_context)
-                prepare_request = type(parent)._prepare_request
+                prepare_request = type(parent)._store_request
                 round_limits = iter(child_round_limits or ())
 
                 def prepare_child_request(session, *args, **kwargs):
@@ -61,7 +60,7 @@ class TestAISessionSubagentsHttp(HttpCase):
                     return prepare_request(session, *args, **kwargs)
 
                 with (
-                    patch.object(type(parent), '_prepare_request', prepare_child_request)
+                    patch.object(type(parent), '_store_request', prepare_child_request)
                     if child_round_limits is not None else nullcontext()
                 ):
                     apply_iap_result(parent, parent_uuid, {
@@ -137,7 +136,7 @@ class TestAISessionSubagentsHttp(HttpCase):
                 parent = env["ai.session"].sudo().browse(fixture["parent_id"])
                 create_tool = env.ref("ai.ir_actions_server_create_records")
                 parent.state = {"available_tools": create_tool.ids}
-                prepared = parent._prepare_model_request(
+                prepared = parent._prepare_agent_request(
                     [{"type": "text", "text": "Delegate then ask"}],
                 )
                 calls = [

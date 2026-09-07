@@ -169,7 +169,7 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
         # Edit the generated attachment through the same public tool contract.
         image_path = next(part['metadata']['image_path'] for part in image_parts if part['mimetype'] == 'image/png')
         edit_prompt = parent.channel_id.message_post(body='Make the lighthouse blue.', message_type='comment')
-        parent._prepare_model_request(edit_prompt._convert_to_parts(), context_snapshot=self.context_snapshot)
+        parent.with_context(self.context_snapshot)._prepare_agent_request(edit_prompt._convert_to_parts())
         edit = self._apply_calls([self._call('image', args={
             'prompt': 'Make the lighthouse blue.', 'images_paths': [image_path],
         })])
@@ -344,7 +344,7 @@ class TestAIImageGenerationContinuation(ImageGenerationFixture, TransactionCase)
         parent = self._session()
         parent.state = {'available_tools': list(self.tool_ids.values())}
         message = parent.channel_id.message_post(body=self.fixture_prompt, message_type='comment')
-        parent._prepare_model_request(message._convert_to_parts(), context_snapshot=self.context_snapshot)
+        parent.with_context(self.context_snapshot)._prepare_agent_request(message._convert_to_parts())
         self.parent_request_uuid = parent.request_uuid
         outcome = self._apply_calls([self._call('image'), self._call('suffix')])
         child = self._session(outcome["prepared_requests"][0]["session_id"])

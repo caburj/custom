@@ -126,12 +126,11 @@ class TestAISessionLoopHttp(HttpCase):
                     env.ref('ai.ir_actions_server_update_records').id,
                 ]}
             message = channel.message_post(body=label, message_type='comment')
-            session._prepare_model_request(
+            session.with_context({
+                'allowed_company_ids': env.companies.ids,
+                'active_company_ids': env.companies.ids,
+            })._prepare_agent_request(
                 message._convert_to_parts(),
-                context_snapshot={
-                    'allowed_company_ids': env.companies.ids,
-                    'active_company_ids': env.companies.ids,
-                },
             )
             return {
                 'session_id': session.id,
@@ -157,9 +156,8 @@ class TestAISessionLoopHttp(HttpCase):
                 'allowed_company_ids': env.companies.ids,
             }
             session = session.with_context(context_snapshot)
-            session._prepare_model_request(
+            session._prepare_agent_request(
                 message._convert_to_parts(),
-                context_snapshot=context_snapshot,
             )
             request_uuid = session.request_uuid
             apply_iap_result(session, request_uuid, {
@@ -279,8 +277,8 @@ class TestAISessionLoopHttp(HttpCase):
                 'allowed_company_ids': [company.id],
                 'active_company_ids': [company.id],
             }
-            session._prepare_model_request(
-                message._convert_to_parts(), context_snapshot=context_snapshot,
+            session.with_context(context_snapshot)._prepare_agent_request(
+                message._convert_to_parts(),
             )
             prepared = {'session_id': session.id, 'request_uuid': session.request_uuid}
             env.user.company_ids = [Command.unlink(company.id)]
@@ -551,30 +549,6 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(len(self.ai_session.event_ids), event_count + 1)
         self.assertEqual(len(self.channel.message_ids), message_count + 1)
 
-
-
-    @mute_logger('odoo.http')
-    def test_callback_rejects_malformed_payload(self):
-        prepared = self._create_committed_prepared_session('Malformed callback payload')
-        for llm_result, llm_error in (
-            ({'status': 'success', 'result': assistant_text('Should not be applied')}, 'provider failed too'),
-            (False, False),
-            ({'status': 'success'}, False),
-            ([], False),
-        ):
-            with self.subTest(llm_result=llm_result, llm_error=llm_error):
-                response = self._post_completion_callback({
-                    'request_uuid': prepared['request_uuid'],
-                    'llm_result': llm_result,
-                    'llm_error': llm_error,
-                })
-
-                self.assertEqual(response.status_code, 500)
-                session = self._get_session(prepared['session_id'])
-                self.assertEqual(session.loop_state, 'waiting_model')
-                self.assertEqual(session.request_phase, 'prepared')
-                self.assertFalse(session.request_result)
-
     def test_auto_approved_callback_mutations_keep_actor_attribution_after_flush(self):
         prepared = self._create_committed_prepared_session(
             'Callback actor attribution', auto_confirm=True,
@@ -649,20 +623,25 @@ class TestAISessionLoopHttp(HttpCase):
         self.assertEqual(partner.write_uid.id, actor_id)
 
     def test_error_callback_finishes_the_matching_request(self):
-        prepared = self._create_committed_prepared_session(
-            'Terminal error callback',
-        )
-        response = self._post_completion_callback({
-            'request_uuid': prepared['request_uuid'],
-            'llm_result': False,
-            'llm_error': 'provider unavailable',
-        })
+        for error in ('provider unavailable', ''):
+            with self.subTest(error=error):
+                prepared = self._create_committed_prepared_session(
+                    'Terminal error callback',
+                )
+                response = self._post_completion_callback({
+                    'request_uuid': prepared['request_uuid'],
+                    'llm_result': False,
+                    'llm_error': error,
+                })
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIsNone(response.json())
-        session = self._get_session(prepared['session_id'])
-        self.assertEqual(session.loop_state, 'ready')
-        self.assertEqual(session.request_uuid, prepared['request_uuid'])
+                self.assertEqual(response.status_code, 200)
+                self.assertIsNone(response.json())
+                session = self._get_session(prepared['session_id'])
+                self.assertEqual(session.loop_state, 'ready')
+                self.assertEqual(session.request_uuid, prepared['request_uuid'])
+                self.assertEqual(session.request_result, {
+                    'kind': 'failure', 'code': 'request_failed',
+                })
 
     def test_confirmation_resume_executes_once_then_submits_followup(self):
         self.authenticate('admin', 'admin')
@@ -1159,12 +1138,11 @@ class TestAISessionLoopHttp(HttpCase):
                 'channel_id': channel.id,
             })
             message = channel.message_post(body='Release the row lock', message_type='comment')
-            prepared = session._prepare_model_request(
+            prepared = session.with_context({
+                'allowed_company_ids': env.companies.ids,
+                'active_company_ids': env.companies.ids,
+            })._prepare_agent_request(
                 message._convert_to_parts(),
-                context_snapshot={
-                    'allowed_company_ids': env.companies.ids,
-                    'active_company_ids': env.companies.ids,
-                },
             )
             session_id = session.id
             channel_id = channel.id

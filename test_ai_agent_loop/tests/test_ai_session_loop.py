@@ -55,16 +55,15 @@ class TestAISessionLoop(TransactionCase):
     def _post_prompt(self, body='Hi'):
         return self.channel.message_post(body=body, message_type='comment')
 
-    def _prepare_model_request(self, message=None):
+    def _prepare_agent_request(self, message=None):
         message = message or self._post_prompt()
         context_snapshot = {
             'active_company_ids': self.env.companies.ids,
             'allowed_company_ids': self.env.companies.ids,
         }
-        session = self.session.with_context(**context_snapshot)
-        prepared = session._prepare_model_request(
+        session = self.session.with_context(context_snapshot)
+        prepared = session._prepare_agent_request(
             message._convert_to_parts(),
-            context_snapshot=context_snapshot,
         )
         return session.browse(prepared['session_id']) if prepared else session.browse()
 
@@ -125,7 +124,7 @@ class TestAISessionLoop(TransactionCase):
     def _prepare_question(self, choices, *, multi_select=False, allow_free_text=False):
         tool = self.env.ref('ai.ir_actions_server_ask_user_question')
         self.session.state = {'available_tools': [tool.id]}
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         waiting = self._apply_iap_tool_call(
             session,
@@ -149,7 +148,7 @@ class TestAISessionLoop(TransactionCase):
             autospec=True,
             return_value='https://callback.example',
         ):
-            session = self._prepare_model_request(message)
+            session = self._prepare_agent_request(message)
         payload_before = copy.deepcopy(session.request_payload)
 
         self.assertEqual(session.loop_state, 'waiting_model')
@@ -184,7 +183,7 @@ class TestAISessionLoop(TransactionCase):
             session.write({'request_payload': {}})
 
     def test_submission_acknowledgement_cannot_overwrite_a_completed_callback(self):
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
 
         def complete_before_acknowledgement(*args, **kwargs):
@@ -197,7 +196,7 @@ class TestAISessionLoop(TransactionCase):
         self.assertEqual(session.request_result['message'], assistant_text('Already completed'))
 
     def test_active_model_round_requires_non_null_bounds(self):
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         for column, query in (
             (
                 'request_round',
@@ -218,14 +217,13 @@ class TestAISessionLoop(TransactionCase):
 
     def test_continuation_dispatch_is_code_owned(self):
         session = self.env['ai.session'].sudo().create({})
-        session._prepare_request(
+        session.with_context({})._store_request(
             {
                 'messages': [],
                 'instructions': 'No external method may be selected.',
                 'tools': [],
             },
             continuation_data={'continuation_type': 'unlink'},
-            context_snapshot={},
             request_round=1,
             request_round_limit=1,
         )
@@ -243,7 +241,7 @@ class TestAISessionLoop(TransactionCase):
         self.assertTrue(session.request_result)
 
     def test_failed_continuation_rolls_back_its_callback_result(self):
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         result = {
             'kind': 'success',
@@ -276,16 +274,15 @@ class TestAISessionLoop(TransactionCase):
         )
 
     def test_continuation_is_fenced_to_its_request(self):
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         stale_request_uuid = session.request_uuid
         session._store_request_result(stale_request_uuid, {
             'kind': 'success',
             'message': assistant_text('Consumed while preparing the next request'),
         })
-        session._prepare_request(
+        session.with_context(session.request_context)._store_request(
             copy.deepcopy(session.request_payload),
             continuation_data={'continuation_type': 'agent_loop'},
-            context_snapshot=copy.deepcopy(session.request_context),
             request_round=2,
             request_round_limit=session.request_round_limit,
             state=copy.deepcopy(session.state),
@@ -305,14 +302,13 @@ class TestAISessionLoop(TransactionCase):
         self.assertEqual(session.request_result, current_result)
 
     def test_preparation_does_not_replace_an_unresolved_request(self):
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
 
         with self.assertRaisesRegex(UserError, 'has not been resolved'):
-            session._prepare_request(
+            session.with_context(session.request_context)._store_request(
                 copy.deepcopy(session.request_payload),
                 continuation_data={'continuation_type': 'agent_loop'},
-                context_snapshot=copy.deepcopy(session.request_context),
                 request_round=2,
                 request_round_limit=session.request_round_limit,
                 state=copy.deepcopy(session.state),
@@ -322,7 +318,7 @@ class TestAISessionLoop(TransactionCase):
         self.assertFalse(session.request_result)
 
     def test_stored_result_blocks_prepared_submission(self):
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         session._store_request_result(request_uuid, {
             'kind': 'success',
@@ -337,8 +333,8 @@ class TestAISessionLoop(TransactionCase):
         message = self._post_prompt()
         context = {'allowed_company_ids': self.env.companies.ids}
 
-        prepared = self.session.with_context(context)._prepare_model_request(
-            message._convert_to_parts(), context_snapshot=context,
+        prepared = self.session.with_context(context)._prepare_agent_request(
+            message._convert_to_parts(),
         )
 
         self.assertEqual(prepared, {
@@ -347,7 +343,7 @@ class TestAISessionLoop(TransactionCase):
         })
 
     def test_plain_result_applies_once_after_submission(self):
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         session.request_phase = 'submitted'
         session._publish_response_state()
@@ -378,12 +374,12 @@ class TestAISessionLoop(TransactionCase):
         ))
         self.assertIn('Hello from the callback', session.channel_id.message_ids[0].body)
 
-        session = self._prepare_model_request(self._post_prompt('Start another exchange'))
+        session = self._prepare_agent_request(self._post_prompt('Start another exchange'))
         self.assertNotEqual(session.request_uuid, request_uuid)
         self.assertFalse(session.request_result)
 
     def test_result_handler_rejects_submission_payload(self):
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         result = apply_iap_result(session, request_uuid, {
             'request_uuid': request_uuid,
@@ -395,7 +391,7 @@ class TestAISessionLoop(TransactionCase):
         self.assertEqual(session.request_uuid, request_uuid)
 
     def test_inline_data_only_success_posts_one_visible_attachment(self):
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         message_count = len(session.channel_id.message_ids)
         result = {
@@ -425,7 +421,7 @@ class TestAISessionLoop(TransactionCase):
             "ai['result'] = len(env['res.partner'].search([('name', '=', 'Callback Tool Contact')]))",
         )
         self.session.state = {'available_tools': [tool.id]}
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         output_message = {
             'role': 'assistant',
@@ -499,7 +495,7 @@ class TestAISessionLoop(TransactionCase):
             thinking_text='Opening customers',
         )
         self.session.state = {'available_tools': [tool.id]}
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
 
         with patch.object(
@@ -541,6 +537,65 @@ class TestAISessionLoop(TransactionCase):
             outcome["prepared_requests"][0]["request_uuid"], session.request_uuid,
         )
         self.assertNotEqual(session.request_uuid, request_uuid)
+
+    def test_oneway_command_is_queued_before_the_following_question(self):
+        navigation = self._create_test_tool(
+            'callback_navigate_before_question',
+            """ai['result'] = {
+                'result': 'Opened contacts',
+                'client_tool': {
+                    'name': 'do_action', 'oneway': True,
+                    'params': {'action': {
+                        'type': 'ir.actions.act_window', 'res_model': 'res.partner',
+                        'views': [[False, 'list']],
+                    }},
+                },
+            }""",
+        )
+        question = self.env.ref('ai.ir_actions_server_ask_user_question')
+        self.session.state = {'available_tools': (navigation | question).ids}
+        session = self._prepare_agent_request()
+        publications = []
+        original_bus_send = self.env.registry['discuss.channel']._bus_send
+        original_publish = self.env.registry['ai.session']._publish_response_state
+
+        def observe_bus(channel, notification_type, payload, *args, **kwargs):
+            if channel == session.channel_id and notification_type == 'ai.session/client_tools':
+                self.assertIn('do_action', [command['name'] for command in payload['commands']])
+                publications.append('commands')
+            return original_bus_send(channel, notification_type, payload, *args, **kwargs)
+
+        def observe_state(source):
+            if source == session:
+                publications.append(source.loop_state)
+            return original_publish(source)
+
+        with (
+            patch.object(self.env.registry['discuss.channel'], '_bus_send', observe_bus),
+            patch.object(self.env.registry['ai.session'], '_publish_response_state', observe_state),
+        ):
+            outcome = apply_iap_result(session, session.request_uuid, {
+                'kind': 'success',
+                'message': {'role': 'assistant', 'content': [{
+                    'type': 'tool_call', 'call_id': 'navigate',
+                    'name': navigation.ai_tool_name, 'args': {},
+                }, {
+                    'type': 'tool_call', 'call_id': 'question',
+                    'name': question.ai_tool_name,
+                    'args': {
+                        'question': 'Choose a view', 'choices': ['List', 'Kanban'],
+                        'multi_select': False, 'allow_free_text': False,
+                    },
+                }]},
+            })
+
+        self.assertEqual(publications, ['commands', 'waiting_answer'])
+        self.assertEqual(outcome['response']['responseState'], 'waiting_user')
+        self.assertEqual(session.pending_tool_call['call_id'], 'question')
+        self.assertEqual(
+            [result['tool_call_id'] for result in session.pending_tool_call['pending_results']],
+            ['navigate'],
+        )
 
     def test_single_choice_question_survives_reload_and_resumes_once(self):
         session, request_uuid, waiting = self._prepare_question(['Draft', 'Send'])
@@ -623,7 +678,7 @@ class TestAISessionLoop(TransactionCase):
         self.session.state = {
             'available_tools': [first_tool.id, question_tool.id, create_tool.id],
         }
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         apply_iap_result(session, request_uuid, {
             'request_uuid': request_uuid,
@@ -711,9 +766,11 @@ class TestAISessionLoop(TransactionCase):
         cases = (
             ('truthy', {'kind': 'client_result', 'value': {'client_value': 42}}, True, '{"client_value": 42}'),
             ('false', {'kind': 'client_result', 'value': False}, True, 'false'),
+            ('zero', {'kind': 'client_result', 'value': 0}, True, '0'),
             ('null', {'kind': 'client_result', 'value': None}, True, 'success'),
             ('empty', {'kind': 'client_result', 'value': ''}, True, ''),
             ('error', {'kind': 'client_error', 'value': 'Client tool failed'}, False, 'Error: Client tool failed'),
+            ('empty-error', {'kind': 'client_error', 'value': ''}, False, 'Error: '),
         )
         for label, response, success, expected_data in cases:
             with self.subTest(label=label):
@@ -724,12 +781,11 @@ class TestAISessionLoop(TransactionCase):
                     'state': {'available_tools': [tool.id]},
                 })
                 message = channel.message_post(body='Run client tool', message_type='comment')
-                session._prepare_model_request(
+                session.with_context({
+                    'active_company_ids': self.env.companies.ids,
+                    'allowed_company_ids': self.env.companies.ids,
+                })._prepare_agent_request(
                     message._convert_to_parts(),
-                    context_snapshot={
-                        'active_company_ids': self.env.companies.ids,
-                        'allowed_company_ids': self.env.companies.ids,
-                    },
                 )
                 request_uuid = session.request_uuid
 
@@ -785,7 +841,7 @@ class TestAISessionLoop(TransactionCase):
     def test_create_tool_waits_durably_then_confirmation_executes_once(self):
         tool = self.env.ref('ai.ir_actions_server_create_records')
         self.session.state = {'available_tools': [tool.id]}
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
 
         waiting = self._apply_iap_tool_call(
@@ -834,7 +890,7 @@ class TestAISessionLoop(TransactionCase):
     def test_confirmation_resume_rolls_back_effect_and_session_state_together(self):
         tool = self.env.ref('ai.ir_actions_server_create_records')
         self.session.state = {'available_tools': [tool.id]}
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         partner_name = 'Callback Rolled Back Contact'
         self._apply_iap_tool_call(
@@ -850,7 +906,7 @@ class TestAISessionLoop(TransactionCase):
         with (
             patch.object(
                 AiSession,
-                '_prepare_model_request',
+                '_prepare_agent_request',
                 side_effect=RuntimeError('fixture rollback after tool execution'),
             ),
             self.assertRaises(RuntimeError),
@@ -880,7 +936,7 @@ class TestAISessionLoop(TransactionCase):
         self.session.state = {
             'available_tools': [create_tool.id, question_tool.id],
         }
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         partner_name = 'Callback Question Follow-up Contact'
         waiting = apply_iap_result(session, request_uuid, {
@@ -977,7 +1033,7 @@ class TestAISessionLoop(TransactionCase):
             """),
         )
         self.session.state = {'available_tools': [tool.id]}
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
 
         waiting = self._apply_iap_tool_call(
@@ -1004,7 +1060,7 @@ class TestAISessionLoop(TransactionCase):
         partner = self.env['res.partner'].create({'name': 'Callback Before Update'})
         tool = self.env.ref('ai.ir_actions_server_update_records')
         self.session.state = {'available_tools': [tool.id]}
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         args = {
             'explanation': 'Rename the callback contact?',
@@ -1040,7 +1096,7 @@ class TestAISessionLoop(TransactionCase):
     def test_decline_balances_the_tool_call_without_mutating(self):
         tool = self.env.ref('ai.ir_actions_server_create_records')
         self.session.state = {'available_tools': [tool.id]}
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         self._apply_iap_tool_call(
             session, request_uuid, tool, 'declined-create',
@@ -1065,7 +1121,7 @@ class TestAISessionLoop(TransactionCase):
     def test_sequential_confirmations_rotate_tokens_and_preserve_result_order(self):
         tool = self.env.ref('ai.ir_actions_server_create_records')
         self.session.state = {'available_tools': [tool.id]}
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         tool_calls = [
             {
@@ -1128,7 +1184,7 @@ class TestAISessionLoop(TransactionCase):
     def test_auto_confirm_executes_later_confirmation_without_waiting(self):
         tool = self.env.ref('ai.ir_actions_server_create_records')
         self.session.state = {'available_tools': [tool.id]}
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         first_request_uuid = session.request_uuid
         self._apply_iap_tool_call(
             session, first_request_uuid, tool, 'auto-first',

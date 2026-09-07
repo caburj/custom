@@ -37,7 +37,7 @@ class TestAIWebsiteCallback(TransactionCase):
 
         prepared_session = session.with_context(
             current_view_info={},
-        )._prepare_model_request()
+        )._prepare_agent_request()
 
         self.assertFalse(prepared_session)
         self.assertEqual(session.loop_state, 'ready')
@@ -58,9 +58,9 @@ class TestAIWebsiteCallback(TransactionCase):
             'allowed_company_ids': self.env.companies.ids,
             'current_view_info': current_view_info,
         }
-        session = session.with_context(**snapshot)
+        session = session.with_context(snapshot)
 
-        prepared = session._prepare_model_request(context_snapshot=snapshot)
+        prepared = session._prepare_agent_request()
         tools_context = session._build_tools_context()
 
         self.assertEqual(prepared['session_id'], session.id)
@@ -106,8 +106,8 @@ else:
             'current_view_info': current_view_info,
         }
         session.state = {'available_tools': tool.ids}
-        session = session.with_context(**snapshot)
-        session._prepare_model_request(context_snapshot=snapshot)
+        session = session.with_context(snapshot)
+        session._prepare_agent_request()
         request_uuid = session.request_uuid
         waiting = apply_iap_result(session, request_uuid, {
             'request_uuid': request_uuid,
@@ -128,7 +128,6 @@ else:
         unavailable = session.with_context(current_view_info={})._resume_pending_interaction(
             resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
-            context_snapshot={'current_view_info': {}},
         )
 
         self.assertEqual(waiting['response']['responseState'], 'waiting_user')
@@ -146,7 +145,6 @@ else:
         resumed = session._resume_pending_interaction(
             resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
-            context_snapshot=snapshot,
         )
         self.assertEqual(resumed['response']['responseState'], 'running')
         self.assertEqual(session.state['website_runs'], 1)

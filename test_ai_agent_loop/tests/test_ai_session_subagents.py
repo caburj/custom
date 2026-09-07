@@ -49,9 +49,8 @@ class TestAISessionSubagents(TransactionCase):
 
     def _prepare(self, session=None, text='Parent-only conversation'):
         session = self.session if session is None else session
-        session.with_context(**self.context_snapshot)._prepare_model_request(
+        session.with_context(self.context_snapshot)._prepare_agent_request(
             [{'type': 'text', 'text': text}],
-            context_snapshot=self.context_snapshot,
         )
         return session
 
@@ -577,10 +576,10 @@ class TestAISessionSubagents(TransactionCase):
         self.context_snapshot = {**self.context_snapshot,
             'current_view_info': {'website_page': {'is_page_ai_editable': True}},
         }
-        self.session = self.session.with_context(**self.context_snapshot)
+        self.session = self.session.with_context(self.context_snapshot)
         self._prepare()
         self._apply(self.session, self._start('website'))
-        child = self._children().with_context(**self.context_snapshot)
+        child = self._children().with_context(self.context_snapshot)
         child.state = {'available_tools': self.create_tool.ids}
         self._apply(child, self._create_contact('website-confirm', 'Foreground website contact'))
         pending = copy.deepcopy(child.pending_tool_call)
@@ -589,7 +588,6 @@ class TestAISessionSubagents(TransactionCase):
             child.with_context(current_view_info={})._resume_pending_interaction(
                 token,
                 {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
-                context_snapshot={'current_view_info': {}},
             )
         self.assertEqual(child.loop_state, 'waiting_confirmation')
         self.assertEqual(child.resume_token, token)

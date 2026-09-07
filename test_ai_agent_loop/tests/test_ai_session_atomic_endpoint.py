@@ -208,7 +208,7 @@ class TestAISessionAtomicEndpoint(HttpCase):
                 env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
                 root = env['ai.session'].sudo().browse(fixture['parent_id'])
                 root.state = {'available_tools': env.ref('ai.ir_actions_server_create_records').ids}
-                root._prepare_model_request([{'type': 'text', 'text': 'Create A then B'}])
+                root._prepare_agent_request([{'type': 'text', 'text': 'Create A then B'}])
                 apply_iap_result(root, root.request_uuid, {
                     'kind': 'success', 'message': {'role': 'assistant', 'content': [
                         self._contact_call(env, 'prior', fixture['contact_name'] + ' A'),

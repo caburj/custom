@@ -48,7 +48,7 @@ class TestAIChannelNameContinuation(TransactionCase):
             'active_company_ids': self.env.companies.ids,
         }
         title_session = self.env['ai.session'].sudo().create({})
-        title_session._prepare_request(
+        title_session.with_context(context_snapshot)._store_request(
             {
                 'messages': [{
                     'role': 'user',
@@ -62,7 +62,6 @@ class TestAIChannelNameContinuation(TransactionCase):
                 'continuation_type': 'channel_name',
                 'channel_id': channel.id,
             },
-            context_snapshot=context_snapshot,
             request_round=1,
             request_round_limit=1,
         )

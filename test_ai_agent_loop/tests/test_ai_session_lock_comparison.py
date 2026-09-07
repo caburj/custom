@@ -58,7 +58,7 @@ class TestAISessionLockComparison(HttpCase):
             session_model = self.registry['ai.session']
             original_merge = session_model._merge_child_result
             original_store = session_model._store_request_result
-            original_prepare = session_model._prepare_model_request
+            original_prepare = session_model._prepare_agent_request
             original_post = self.registry['discuss.channel'].message_post
             original_tool = self.registry['ir.actions.server']._ai_tool_run
             router = importlib.import_module('odoo.http.router')
@@ -176,7 +176,7 @@ class TestAISessionLockComparison(HttpCase):
                     patch.object(router, 'serve_ir_http', observe_http),
                     patch.object(session_model, '_merge_child_result', merge),
                     patch.object(session_model, '_store_request_result', store),
-                    patch.object(session_model, '_prepare_model_request', prepare),
+                    patch.object(session_model, '_prepare_agent_request', prepare),
                     patch.object(self.registry['discuss.channel'], 'message_post', post),
                     patch.object(self.registry['ir.actions.server'], '_ai_tool_run', tool),
                     patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', side_effect=submit),

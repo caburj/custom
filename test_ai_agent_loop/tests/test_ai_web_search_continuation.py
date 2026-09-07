@@ -111,8 +111,8 @@ ai['result'] = {'client_tool': {'name': 'web_search_fixture_client', 'params': {
             'web_sources': {'f00d': {'url': 'https://example.org/old', 'source_name': 'Earlier source'}},
         }
         message = channel.message_post(body=self.fixture_prompt, message_type='comment')
-        session._prepare_model_request(
-            message._convert_to_parts(), context_snapshot=self.context_snapshot,
+        session.with_context(self.context_snapshot)._prepare_agent_request(
+            message._convert_to_parts(),
         )
         self.parent_request_uuid = session.request_uuid
 

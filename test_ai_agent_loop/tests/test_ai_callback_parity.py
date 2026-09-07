@@ -49,7 +49,7 @@ class TestAICallbackParity(TransactionCase):
             'code': code,
         })
 
-    def _prepare_model_request(self, session=None, channel=None, body='Hi', snapshot=None):
+    def _prepare_agent_request(self, session=None, channel=None, body='Hi', snapshot=None):
         session = session or self.session
         channel = channel or self.channel
         snapshot = snapshot or {
@@ -57,10 +57,9 @@ class TestAICallbackParity(TransactionCase):
             'allowed_company_ids': self.env.companies.ids,
         }
         message = channel.message_post(body=body, message_type='comment')
-        session = session.with_context(**snapshot)
-        session._prepare_model_request(
+        session = session.with_context(snapshot)
+        session._prepare_agent_request(
             message._convert_to_parts(),
-            context_snapshot=snapshot,
         )
         return session
 
@@ -163,7 +162,7 @@ else:
         )
         tools = first | first_confirmation | blocking_client | second_confirmation | last
         self.session.state = {'available_tools': tools.ids}
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         event_count = len(session.event_ids)
         calls = [
@@ -255,7 +254,7 @@ else:
         self.session.state = {
             'available_tools': (first | confirmation | excess).ids,
         }
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         self._apply_iap_tool_calls(session, request_uuid, [
             self._tool_call(first, 'before-pause'),
@@ -283,7 +282,7 @@ else:
 
     def test_new_message_refuses_pending_batch_then_starts_a_new_request(self):
         question = self.env.ref('ai.ir_actions_server_ask_user_question')
-        session = self._prepare_model_request(body='Ask me a question')
+        session = self._prepare_agent_request(body='Ask me a question')
         first_request_uuid = session.request_uuid
         self._apply_iap_tool_calls(session, first_request_uuid, [{
             **self._tool_call(question, 'pending-question'),
@@ -295,7 +294,7 @@ else:
             },
         }])
 
-        session = self._prepare_model_request(
+        session = self._prepare_agent_request(
             session=session,
             body='Forget that and answer this instead',
         )
@@ -323,7 +322,7 @@ else:
             'current_view_info': {'marker': 'initial'},
         }
         self.session.state = {'available_tools': ordinary_tool.ids}
-        session = self._prepare_model_request(snapshot=initial_snapshot)
+        session = self._prepare_agent_request(snapshot=initial_snapshot)
         first_request_uuid = session.request_uuid
         first_context = self._context_part(
             copy.deepcopy(session.request_payload),
@@ -357,7 +356,7 @@ else:
 """,
         )
         paused_session.state = {'available_tools': confirmation.ids}
-        paused_session = self._prepare_model_request(
+        paused_session = self._prepare_agent_request(
             session=paused_session,
             channel=channel,
             body='Pause first',
@@ -373,11 +372,10 @@ else:
             'allowed_company_ids': self.env.companies.ids,
             'current_view_info': {'marker': 'resumed'},
         }
-        fresh_session = paused_session.with_context(**fresh_snapshot)
+        fresh_session = paused_session.with_context(fresh_snapshot)
         resumed = fresh_session._resume_pending_interaction(
             fresh_session.resume_token,
             {'kind': 'confirmation', 'value': UserInputResponse.CONFIRM_ONCE},
-            context_snapshot=fresh_snapshot,
         )
 
         self.assertEqual(
@@ -400,14 +398,13 @@ else:
             'loaded_skills': skill.ids,
             'available_tools': tool.ids,
         }
-        self.assertIn(tool, self.session._get_available_tools(
-            self.session._build_tools_context(),
-        ))
+        linked_context = self.session._build_tools_context()
+        self.assertIn(tool.id, linked_context['state']['available_tools'])
 
         self.agent.skill_ids = False
         unlinked_context = self.session._build_tools_context()
         self.assertNotIn(skill.id, unlinked_context['state']['loaded_skills'])
-        self.assertNotIn(tool, self.session._get_available_tools(unlinked_context))
+        self.assertNotIn(tool.id, unlinked_context['state']['available_tools'])
 
         self.agent.skill_ids = skill
         self.session.state = {
@@ -417,7 +414,7 @@ else:
         skill.unlink()
         deleted_context = self.session._build_tools_context()
         self.assertFalse(deleted_context['state']['loaded_skills'])
-        self.assertNotIn(tool, self.session._get_available_tools(deleted_context))
+        self.assertNotIn(tool.id, deleted_context['state']['available_tools'])
 
     def test_tool_failures_prepare_one_explanatory_round_without_replay(self):
         for variant in ('unknown', 'exception'):
@@ -431,7 +428,7 @@ else:
                     f'callback_raising_{variant}', "ai['result'] = 1 / 0",
                 )
                 session.state = {'available_tools': (successful | failing).ids}
-                session = self._prepare_model_request(
+                session = self._prepare_agent_request(
                     session=session, channel=channel, body=f'Test {variant}',
                 )
                 request_uuid = session.request_uuid
@@ -503,7 +500,7 @@ else:
 """,
         )
         self.session.state = {'available_tools': (final_tool | confirmation).ids}
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         waiting = self._apply_iap_tool_calls(session, request_uuid, [
             self._tool_call(final_tool, 'owned-final'),
@@ -526,33 +523,38 @@ else:
             for message in session.channel_id.message_ids
         ))
 
-        failure_channel, failure_session = self._new_session(
-            'Callback failed sibling final',
-        )
-        failure_session.state = {'available_tools': final_tool.ids}
-        failure_session = self._prepare_model_request(
-            session=failure_session,
-            channel=failure_channel,
-            body='Suppress a final after a failure',
-        )
-        failure_uuid = failure_session.request_uuid
-        failure_outcome = self._apply_iap_tool_calls(failure_session, failure_uuid, [
-            self._tool_call(final_tool, 'candidate-final'),
-            {
-                'type': 'tool_call',
-                'call_id': 'failed-sibling',
-                'name': 'callback_missing_sibling',
-                'args': {},
-            },
-        ])
-        self.assertEqual(failure_outcome['response']['responseState'], 'running')
-        self.assertFalse(
-            self._tool_results(failure_session.request_payload)[1]['success'],
-        )
-        self.assertFalse(any(
-            'Owned final response' in str(message.body)
-            for message in failure_session.channel_id.message_ids
-        ))
+        for failure_first in (False, True):
+            with self.subTest(failure_first=failure_first):
+                failure_channel, failure_session = self._new_session(
+                    'Callback failed sibling final',
+                )
+                failure_session.state = {'available_tools': final_tool.ids}
+                failure_session = self._prepare_agent_request(
+                    session=failure_session,
+                    channel=failure_channel,
+                    body='Suppress a final after a failure',
+                )
+                failure_uuid = failure_session.request_uuid
+                calls = [
+                    self._tool_call(final_tool, 'candidate-final'),
+                    {
+                        'type': 'tool_call',
+                        'call_id': 'failed-sibling',
+                        'name': 'callback_missing_sibling',
+                        'args': {},
+                    },
+                ]
+                if failure_first:
+                    calls.reverse()
+                failure_outcome = self._apply_iap_tool_calls(failure_session, failure_uuid, calls)
+                self.assertEqual(failure_outcome['response']['responseState'], 'running')
+                self.assertFalse(
+                    self._tool_results(failure_session.request_payload)[0 if failure_first else 1]['success'],
+                )
+                self.assertFalse(any(
+                    'Owned final response' in str(message.body)
+                    for message in failure_session.channel_id.message_ids
+                ))
 
         suffix_channel, suffix_session = self._new_session(
             'Callback suffix continuation',
@@ -565,7 +567,7 @@ ai['result'] = 'continue'
 """,
         )
         suffix_session.state = {'available_tools': suffix_tool.ids}
-        suffix_session = self._prepare_model_request(
+        suffix_session = self._prepare_agent_request(
             session=suffix_session,
             channel=suffix_channel,
             body='Carry preview markup to the final round',
@@ -598,7 +600,7 @@ ai['result'] = 'continue'
             'callback_round_limit_tool', "ai['result'] = 'continue'",
         )
         self.session.state = {'available_tools': tool.ids}
-        session = self._prepare_model_request()
+        session = self._prepare_agent_request()
         request_uuid = session.request_uuid
         result = {
             'request_uuid': request_uuid,
@@ -623,7 +625,7 @@ ai['result'] = 'continue'
                 channel, error_session = self._new_session(
                     f'Callback terminal {error_code}',
                 )
-                error_session = self._prepare_model_request(
+                error_session = self._prepare_agent_request(
                     session=error_session,
                     channel=channel,
                     body='Trigger a terminal error',
@@ -654,7 +656,7 @@ ai['result'] = 'continue'
                 )
 
         channel, invalid_session = self._new_session('Callback invalid result')
-        invalid_session = self._prepare_model_request(
+        invalid_session = self._prepare_agent_request(
             session=invalid_session,
             channel=channel,
             body='Trigger invalid result',
@@ -750,6 +752,49 @@ class TestAIDirectParity(TransactionCase):
         self.assertFalse(tool_history)
         self.assertEqual(field_value, 'Generated')
         self.assertEqual(direct_response.call_count, 2)
+        self.assertEqual(self._loop_snapshot(), loop_snapshot)
+
+    def test_direct_action_records_a_tool_result_before_returning_its_final(self):
+        partner = self.env['res.partner'].create({'name': 'Direct terminal action'})
+        tool = self.env['ir.actions.server'].create({
+            'name': 'Direct terminal result',
+            'model_id': self.env['ir.model']._get_id('res.partner'),
+            'state': 'code',
+            'use_in_ai': True,
+            'ai_tool_name': 'direct_terminal_result',
+            'ai_tool_schema': '{"type": "object", "properties": {}, "required": []}',
+            'code': """
+ai['result'] = 'Recorded tool result'
+ai['final_message'] = [{'type': 'text', 'text': 'Tool-owned final answer'}]
+""",
+        })
+        action = self.env['ir.actions.server'].create({
+            'name': 'Direct terminal action',
+            'model_id': self.env['ir.model']._get_id('res.partner'),
+            'state': 'ai',
+            'ai_action_prompt': 'Return the tool answer.',
+            'ai_tool_ids': [Command.set(tool.ids)],
+        })
+        loop_snapshot = self._loop_snapshot()
+        with patch.object(AiSession, '_get_completions', return_value={
+            'status': 'success',
+            'result': {'role': 'assistant', 'content': [{
+                'type': 'tool_call',
+                'call_id': 'direct-terminal-result',
+                'name': tool.ai_tool_name,
+                'args': {},
+            }]},
+        }) as completion:
+            answer, tool_history = action._ai_action_run(partner)
+
+        completion.assert_called_once()
+        self.assertEqual(answer, [{'type': 'text', 'text': 'Tool-owned final answer'}])
+        self.assertEqual(tool_history, [{
+            'action': tool,
+            'arguments': {},
+            'error': False,
+            'result': 'Recorded tool result',
+        }])
         self.assertEqual(self._loop_snapshot(), loop_snapshot)
 
     def test_legacy_image_generation_remains_direct(self):
