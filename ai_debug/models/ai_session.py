@@ -604,21 +604,18 @@ class AiSession(models.Model):
             'round_no': self.request_round,
             'round_limit': self.request_round_limit,
             'payload': copy.deepcopy(self.request_payload or {}),
-            'message_body_suffix': self.request_message_body_suffix,
             'user_id': self.request_user_id.id,
             'guest_id': self.request_guest_id.id,
             'context_snapshot': copy.deepcopy(self.request_context),
             'loop_state': self.loop_state,
-            'request_phase': self.request_phase,
-            'result': copy.deepcopy(self.request_result),
             'pending': copy.deepcopy(self.pending_tool_call or {}),
-            'continuation_type': (self.continuation_data or {}).get('continuation_type'),
+            'continuation_type': (self.state or {}).get('callback_type'),
+            'parent_session_id': self.parent_session_id.id,
         }
 
     def _get_request_context_snapshot(self, context=None):
         snapshot = super()._get_request_context_snapshot(context)
-        # Core compares snapshots to reuse unchanged model context. Include only
-        # this session's private correlation; business values come from the event.
+        # Keep this session's private correlation; business values come from the event.
         store_context = self.env.context.get(_AI_DEBUG_STORE_CONTEXT_KEY)
         correlation = (store_context['correlation']
                        if store_context and store_context['session_id'] == self.id
@@ -840,8 +837,6 @@ class AiSession(models.Model):
         for item in items:
             try:
                 client_tool = item.get('client_tool') or {}
-                if item.get('completion_request'):
-                    context['helper_call_id'] = item['pending_tool_call']['call_id']
                 if client_tool.get('name') == 'update_thinking' or item.get('prepared_request'):
                     current_tool_call = self._ai_debug_find_tool_call(
                         tool_calls, tools_context.get('tool_call_id'),
@@ -907,22 +902,18 @@ class AiSession(models.Model):
                 target_user_id=context['target_user_id'],
             )
 
-    def _store_request(self, payload, *, continuation_data,
-                         request_round, request_round_limit, message_body_suffix=False, state=None):
+    def _save_and_submit_request(self, payload, *, callback_type,
+                         request_round, request_round_limit, state=None):
         # Correlation is part of immutable request intent; instrumentation is optional.
         def prepare_context():
             prepared_context = self._ai_debug_prepare_request_context(
                 {}, continuation=request_round > 1,
             )
-            parent_link = self.env.context.get('_ai_debug_parent_link')
+            parent_link = None
+            if request_round == 1 and self.parent_session_id and callback_type == 'agent_loop':
+                parent_link = self.parent_session_id._ai_debug_parent_link(self.env.context['ai_parent_tool_call_id'])
             if request_round > 1:
                 parent_link = (self.request_context or {}).get('_ai_debug_parent_link')
-            elif continuation_data.get('website_placeholder'):
-                # Prepared inside apply_html_to_page, before its client wait is stored.
-                parent_link = self.parent_session_id._ai_debug_parent_link(self.env.context['ai_parent_tool_call_id'])
-            elif self.parent_session_id and continuation_data['continuation_type'] in ('web_search', 'image_generation'):
-                callback_context = self.parent_session_id._ai_debug_active_callback_context() or {}
-                parent_link = self.parent_session_id._ai_debug_parent_link(callback_context['helper_call_id'])
             if parent_link:
                 prepared_context['_ai_debug_parent_link'] = parent_link
             else:
@@ -933,16 +924,17 @@ class AiSession(models.Model):
         session = self.with_context(**{_AI_DEBUG_STORE_CONTEXT_KEY: {
             'session_id': self.id, 'correlation': correlation,
         }})
-        prepared = super(AiSession, session)._store_request(
-            payload, continuation_data=continuation_data,
+        result = super(AiSession, session)._save_and_submit_request(
+            payload, callback_type=callback_type,
             request_round=request_round, request_round_limit=request_round_limit,
-            message_body_suffix=message_body_suffix, state=state,
+            state=state,
         )
         request = self._ai_debug_try(self._ai_debug_request_snapshot)
         if request:
             self._ai_debug_try(lambda: self._ai_debug_trace_request_prepared(request))
             self._ai_debug_try(lambda: self._ai_debug_trace_request_result(request, {}, {}, None))
-        return prepared
+            self._ai_debug_try(lambda: self._ai_debug_emit_state(request, 'submitted'))
+        return result
 
     def _ai_debug_parent_link(self, call_id):
         request = self._ai_debug_request_snapshot()
@@ -954,10 +946,6 @@ class AiSession(models.Model):
             'parent_request_uuid': request['request_uuid'],
             'parent_tool_call_id': self._ai_debug_callback_tool_call_id(request['request_uuid'], call_id),
         }
-
-    def _prepare_subagent_session(self, tool_call, schema):
-        link = self._ai_debug_try(lambda: self._ai_debug_parent_link(tool_call['call_id']))
-        return super(AiSession, self.with_context(_ai_debug_parent_link=link))._prepare_subagent_session(tool_call, schema)
 
     def _ai_debug_normalized_request(self, request):
         """Rebuild the credential-free normalized payload submitted to IAP."""
@@ -1025,25 +1013,22 @@ class AiSession(models.Model):
             'request_uuid': request['request_uuid'],
             'round_no': request['round_no'],
             'request_state': request['loop_state'],
-            'request_phase': request['request_phase'],
             'session_id': self.id,
             'trace_kind': request['continuation_type'],
-            'trace_label': {'web_search': 'Web Search', 'image_generation': 'Image Generation',
-                            'channel_name': 'Conversation Title'}.get(request['continuation_type']),
+            'trace_label': {'channel_name': 'Conversation Title'}.get(request['continuation_type']),
             **(request['context_snapshot'].get('_ai_debug_parent_link') or {}),
             'agent_name': self.agent_id.name if self.agent_id else None,
             'user_query': self._ai_debug_user_query(request),
             'instructions': payload.get('instructions') or '',
             'state_snapshot': {
                 'loop_state': request['loop_state'],
-                'request_phase': request['request_phase'],
-                'round_limit': request['round_limit'],
+                    'round_limit': request['round_limit'],
                 'message_summary': self._ai_debug_message_summary(payload.get('messages')),
             },
         }, target_user_id=request['user_id'])
 
     def _ai_debug_trace_exchange_end(
-        self, request, outcome, *, error=None, termination_reason=None,
+        self, request, outcome, *, error=None, termination_reason=None, request_state=None,
     ):
         """Close a trace from the accepted reducer outcome, not a removed ledger state."""
         if outcome.get('responseState') != 'idle':
@@ -1063,8 +1048,8 @@ class AiSession(models.Model):
                 (self._ai_debug_active_callback_context() or {}).get('child_result'),
             ),
             'final_output': (self._ai_debug_active_callback_context() or {}).get('final_output'),
-            'request_state': self.loop_state,
-            'phase': 'child_settled' if self.parent_session_id else 'completed',
+            'request_state': request_state or self.loop_state,
+            'phase': 'child_settled' if request['parent_session_id'] else 'completed',
             'error': error,
             'iteration_count': request['round_no'],
             'duration_ms': None,
@@ -1105,10 +1090,9 @@ class AiSession(models.Model):
             'response_label': 'Normalized IAP Result',
             'has_tool_calls': has_tool_calls,
             'is_final': False,
-            'phase': 'result_received' if response else 'prepared',
+            'phase': 'result_received' if response else 'submitted',
             'error': error,
             'request_state': request['loop_state'],
-            'request_phase': request['request_phase'],
             'outcome_response_state': outcome.get('responseState'),
             'provider': provider_metadata.get('provider'),
             'model_name': provider_metadata.get('model'),
@@ -1117,46 +1101,25 @@ class AiSession(models.Model):
             'duration_kind': None,
         }, target_user_id=request['user_id'])
 
-    def _store_request_result(self, request_uuid, result):
-        request = self._ai_debug_try(lambda: self._ai_debug_request_snapshot(request_uuid))
-        accepted = super()._store_request_result(request_uuid, result)
-        if accepted and request and not request['result']:
-            response = ({'status': 'success', 'result': result['message']}
-                        if result['kind'] == 'success' else {'status': 'error', 'error': result['code']})
-            self._ai_debug_try(lambda: self._ai_debug_trace_request_result(
-                request, response, {}, self._ai_debug_result_error(response),
-            ))
-            self._ai_debug_try(lambda: self._ai_debug_emit_state(request, 'result_received'))
-        return accepted
-
-    def _submit_prepared_request(self, request_uuid):
-        session = self.sudo().exists()
-        request = session._ai_debug_try(lambda: session._ai_debug_request_snapshot(request_uuid))
-        result = super()._submit_prepared_request(request_uuid)
-        if (request and request['request_phase'] == 'prepared'
-                and session.request_uuid == request_uuid and session.request_phase == 'submitted'):
-            session._ai_debug_try(lambda: session._ai_debug_emit_state(request, 'submitted'))
-        return result
-
     def _ai_debug_emit_state(self, request, phase, **values):
         return self._ai_debug_bus_send('request_state', {
             'type': 'request_state', 'trace_id': self._ai_debug_exchange_uuid(request),
             'exchange_uuid': self._ai_debug_exchange_uuid(request),
             'session_id': self.id, 'request_uuid': request['request_uuid'],
             'iteration_id': request['request_uuid'], 'round_no': request['round_no'],
-            'state': self.loop_state, 'request_phase': self.request_phase,
+            'state': self.loop_state,
             'phase': phase, **values,
         }, target_user_id=request['user_id'])
 
-    def _ai_debug_transition_snapshot(self, result=None):
+    def _ai_debug_transition_snapshot(self, completion_result=None):
         request = self._ai_debug_request_snapshot()
         if not request:
             return None
-        if result is not None:
-            request['result'] = result
+        request['result'] = copy.deepcopy(completion_result)
         context = self._ai_debug_callback_context(request, continuing=True)
-        context['tool_calls'] = [part for part in (request['result'] or {}).get('message', {}).get('content', [])
-                                 if part.get('type') == 'tool_call']
+        context['tool_calls'] = ([part for part in completion_result.get('message', {}).get('content', [])
+                                  if part.get('type') == 'tool_call'] if completion_result is not None
+                                 else self._get_last_tool_calls() if self.pending_tool_call else [])
         pending = request['pending'].get('pending_results', [])
         context['started_tool_call_ids'].update(
             self._ai_debug_callback_tool_call_id(request['request_uuid'], item.get('tool_call_id'))
@@ -1177,42 +1140,37 @@ class AiSession(models.Model):
         return context
 
     @contextmanager
-    def _ai_debug_transition(self, result=None):
-        snapshot = self._ai_debug_try(lambda: self._ai_debug_transition_snapshot(result))
+    def _ai_debug_transition(self, completion_result=None):
+        snapshot = self._ai_debug_try(lambda: self._ai_debug_transition_snapshot(completion_result))
         if not snapshot:
             yield self
             return
         request, context, history_ids = snapshot
         context['outer_context'] = self.env.context.get(_AI_DEBUG_CALLBACK_CONTEXT_KEY)
         session = self.with_context(**{_AI_DEBUG_CALLBACK_CONTEXT_KEY: context})
+        if completion_result is not None:
+            session._ai_debug_try(lambda: session._ai_debug_record_callback(request, completion_result))
         yield session
         session._ai_debug_try(lambda: session._ai_debug_observe_transition(request, context, history_ids))
 
     def _finish_exchange(self, status='completed', *, content=None):
-        result = super()._finish_exchange(status, content=content)
         def capture():
             context = self._ai_debug_active_callback_context()
             if context:
                 context['finish_status'] = status
-                context['child_result'] = copy.deepcopy(result.get('child_result'))
+                if content is not None:
+                    parts = content if isinstance(content, list) else [{'type': 'text', 'text': str(content)}]
+                    context['final_output'] = self._ai_debug_normalized_message({'role': 'assistant', 'content': parts})
         self._ai_debug_try(capture)
-        return result
+        return super()._finish_exchange(status, content=content)
 
-    def _post_ai_response(self, content, *, status='completed'):
-        result = super()._post_ai_response(content, status=status)
-        def capture():
-            context = self._ai_debug_active_callback_context()
-            if context:
-                parts = content if isinstance(content, list) else [{'type': 'text', 'text': str(content)}]
-                context['final_output'] = self._ai_debug_normalized_message({'role': 'assistant', 'content': parts})
-        self._ai_debug_try(capture)
-        return result
-
-    def _prepare_agent_request(self, message=None, *, continuation=False, **kwargs):
-        if not continuation and message and self.loop_state in ('waiting_answer', 'waiting_confirmation', 'waiting_client_result'):
-            with self._ai_debug_transition() as session:
-                return super(AiSession, session)._prepare_agent_request(message, continuation=continuation, **kwargs)
-        return super()._prepare_agent_request(message, continuation=continuation, **kwargs)
+    def _abort_pending_tools(self):
+        # New messages abort their pending interaction in the controller, before
+        # preparing the next exchange. Resume already owns an observation span.
+        if self._ai_debug_active_callback_context():
+            return super()._abort_pending_tools()
+        with self._ai_debug_transition() as session:
+            return super(AiSession, session)._abort_pending_tools()
 
     def _ai_debug_observe_transition(self, request, context, history_ids):
         if (request['request_uuid'] == self.request_uuid and request['loop_state'] == self.loop_state
@@ -1235,32 +1193,44 @@ class AiSession(models.Model):
                 )
         self._ai_debug_flush_callback_tool_events(context)
         self._ai_debug_emit_state(request, 'result_consumed')
-        superseded = self.request_uuid != request['request_uuid'] and self.request_round == 1
-        if request['loop_state'] != 'ready' and (self.loop_state == 'ready' or superseded):
-            result = self.request_result or {}
+        if context.get('finish_status') or (request['loop_state'] != 'ready' and self.loop_state == 'ready'):
+            result = request['result'] or {}
             error = result.get('code') if result.get('kind') == 'failure' else None
-            reason = ('superseded' if superseded else context.get('finish_status')
-                      or request['pending'].get('exchange_status'))
+            reason = context.get('finish_status') or request['pending'].get('exchange_status')
             self._ai_debug_trace_exchange_end(
-                request, {'responseState': 'idle'}, error=error,
+                request, {'responseState': 'idle'}, error=error, request_state='ready',
                 termination_reason='failed' if error and reason == 'completed' else 'success' if reason == 'completed' else reason,
             )
 
-    def _continue(self, request_uuid, result):
-        if self.request_uuid != request_uuid or self.loop_state != 'waiting_model':
-            return super()._continue(request_uuid, result)
-        owner = self._get_continuation_owner()
-        if owner != self:
-            with owner._ai_debug_child_application(self) as parent:
-                with self.with_env(parent.env)._ai_debug_transition(result) as session:
-                    return super(AiSession, session)._continue(request_uuid, result)
-        with self._ai_debug_transition(result) as session:
-            return super(AiSession, session)._continue(request_uuid, result)
+    def _ai_debug_record_callback(self, request, result):
+        response = ({'status': 'success', 'result': result['message']}
+                    if result['kind'] == 'success' else {'status': 'error', 'error': result['code']})
+        self._ai_debug_trace_request_result(request, response, {}, self._ai_debug_result_error(response))
+        self._ai_debug_emit_state(request, 'result_received')
 
-    def _resume_pending_interaction(self, resume_token, response):
+    def _continue_agent_loop(self, completion_result):
+        with self._ai_debug_transition(completion_result) as session:
+            return super(AiSession, session)._continue_agent_loop(completion_result)
+
+    def _continue_channel_name(self, completion_result):
+        # The core title handler deletes its temporary session. Keep the facts
+        # needed to close the trace before handing over ownership.
+        request = self._ai_debug_try(self._ai_debug_request_snapshot)
+        if request:
+            self._ai_debug_try(lambda: self._ai_debug_record_callback(request, completion_result))
+        result = super()._continue_channel_name(completion_result)
+        if request:
+            self._ai_debug_try(lambda: self._ai_debug_trace_exchange_end(
+                request, {'responseState': 'idle'}, request_state='ready',
+                error=completion_result.get('code'),
+                termination_reason='failed' if completion_result['kind'] == 'failure' else 'success',
+            ))
+        return result
+
+    def _resume_pending_interaction(self, resume_token, response, ai_session_config=None):
         with self._ai_debug_transition() as session:
             return super(AiSession, session)._resume_pending_interaction(
-                resume_token, response,
+                resume_token, response, ai_session_config=ai_session_config,
             )
 
     @contextmanager
@@ -1283,6 +1253,11 @@ class AiSession(models.Model):
             ))
 
     def _merge_child_result(self, child, result):
+        def capture():
+            context = child._ai_debug_active_callback_context()
+            if context:
+                context['child_result'] = copy.deepcopy(result)
+        self._ai_debug_try(capture)
         with self._ai_debug_child_application(child) as session:
             return super(AiSession, session)._merge_child_result(child, result)
 
@@ -1295,21 +1270,28 @@ class AiSession(models.Model):
             agent = self.agent_id
         elif isinstance(agent_id, int):
             agent = agent.browse(agent_id).exists()
-        trace_kind = (
-            'channel_name'
-            if completion_options.get('usage') == 'channel_name'
-            else 'direct'
-        )
-        direct_self = self.with_context({
+        trace_kind = ('image_generation' if completion_options.get('image_generation') else
+                      completion_options.get('usage') if completion_options.get('usage') in ('channel_name', 'web_search')
+                      else 'direct')
+        parent_link = {}
+        callback_context = self.env.context.get(_AI_DEBUG_CALLBACK_CONTEXT_KEY)
+        if callback_context and self.env.context.get('ai_parent_trace_id') == callback_context['trace_id']:
+            parent_link = {
+                'parent_trace_id': callback_context['trace_id'],
+                'parent_session_id': callback_context['session_id'],
+                'parent_request_uuid': callback_context['request_uuid'],
+                'parent_tool_call_id': self._ai_debug_callback_tool_call_id(
+                    callback_context['request_uuid'], self.env.context['ai_parent_tool_call_id'],
+                ),
+            }
+        direct_self = self.with_context(**{
             _AI_DEBUG_DIRECT_TRACE_CONTEXT_KEY: {
+                **parent_link,
                 'session_id': self.id if len(self) == 1 else None,
                 'agent_name': agent.name if agent else None,
                 'trace_kind': trace_kind,
-                'trace_label': (
-                    'Conversation Title'
-                    if trace_kind == 'channel_name'
-                    else 'Direct Completion'
-                ),
+                'trace_label': {'channel_name': 'Conversation Title', 'web_search': 'Web Search',
+                                'image_generation': 'Image Generation', 'direct': 'Direct Completion'}[trace_kind],
             },
         })
         return super(AiSession, direct_self)._get_direct_response(
@@ -1317,6 +1299,16 @@ class AiSession(models.Model):
             on_item_callback=on_item_callback,
             **completion_options,
         )
+
+    def _get_completions(self, messages, instructions, tools=None, **options):
+        context = self.env.context.get('_debug_ctx')
+        if context is not None:
+            context['prepared_iteration_id'] = uuid.uuid4().hex
+            context['request_body'] = self._ai_debug_try(lambda: self._ai_debug_normalized_request({
+                'request_uuid': context['prepared_iteration_id'],
+                'payload': {'messages': messages, 'instructions': instructions, 'tools': tools, **options},
+            }))
+        return super()._get_completions(messages, instructions, tools, **options)
 
     @api.model
     def _run_agentic_loop(self, instructions, message, tools_context, record=None, **completion_options):
@@ -1342,6 +1334,9 @@ class AiSession(models.Model):
             ),
             'parent_trace_id': self.env.context.get('ai_parent_trace_id'),
             'parent_tool_call_id': self.env.context.get('ai_parent_tool_call_id'),
+            **{key: value for key, value in direct_trace.items() if key.startswith('parent_')},
+            'user_query': self._ai_debug_text_from_parts(message),
+            'instructions': instructions,
             'agent_name': (
                 self.agent_id.name
                 if len(self) == 1 and self.agent_id
@@ -1368,7 +1363,8 @@ class AiSession(models.Model):
             ):
                 if 'tool_calls' in item or 'final_message' in item:
                     iteration_count += 1
-                    iteration_id = uuid.uuid4().hex
+                    prepared_id = _debug_ctx.pop('prepared_iteration_id', None)
+                    iteration_id = prepared_id or uuid.uuid4().hex
                     _debug_ctx['iteration_id'] = iteration_id
                     parts = item.get('tool_calls') or item.get('final_message') or []
                     normalized_response = self._ai_debug_normalized_messages([{
@@ -1380,6 +1376,7 @@ class AiSession(models.Model):
                         'trace_id': trace_id,
                         'iteration_id': iteration_id,
                         'iteration_index': iteration_count,
+                        'request_body': _debug_ctx.get('request_body') if prepared_id else None,
                         'raw_response': normalized_response,
                         'response_summary': self._ai_debug_message_summary([{
                             'role': 'assistant',

@@ -8,7 +8,8 @@ import requests
 from odoo import api, Command
 from odoo.exceptions import ConcurrencyError
 from odoo.tests import HttpCase, tagged
-from odoo.addons.ai.controllers.thread import AIThreadController
+from odoo.addons.ai_debug.models.ai_session import AiSession as DebugAiSession
+from odoo.addons.ai.models.ai_session import AiSession as EnterpriseAiSession
 from odoo.addons.base.tests.files import PNG_B64
 
 
@@ -36,44 +37,41 @@ class TestAiDebugAtomicCallback(HttpCase):
                 agent.skill_ids = skill
                 root.state = {'loaded_skills': skill.ids}
             root = root.with_context(allowed_company_ids=env.companies.ids, active_company_ids=env.companies.ids)
-            root._prepare_agent_request([{'type': 'text', 'text': 'Fixture'}])
+            with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None):
+                root._submit_agent_request([{'type': 'text', 'text': 'Fixture'}])
 
             def delegate(parent):
-                parent._store_request_result(parent.request_uuid, {'kind': 'success', 'message': assistant([{
-                    'type': 'tool_call', 'name': 'start_session', 'call_id': 'child',
-                    'args': {'agent_id': agent.id, 'message': 'Fixture child'},
-                }])})
-                outcome = parent._continue(parent.request_uuid, parent.request_result)
-                return env['ai.session'].sudo().browse(outcome['prepared_requests'][0]['session_id'])
+                with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None):
+                    parent._continue_agent_loop({'kind': 'success', 'message': assistant([{
+                        'type': 'tool_call', 'name': 'ai_tool_start_session', 'call_id': 'child',
+                        'args': {'agent_id': agent.id, 'message': 'Fixture child'},
+                    }])})
+                return env['ai.session'].sudo().browse(parent.pending_tool_call['pending_results'][-1]['child_session_id'])
 
             if image:
                 title = f'atomic-debug-{root.id}'
-                root._store_request_result(root.request_uuid, {'kind': 'success', 'message': assistant([{
-                    'type': 'tool_call', 'name': image_tool.ai_tool_name, 'call_id': 'image',
-                    'args': {'prompt': 'Green mug', 'images_paths': [], 'image_title': title,
-                             'feedback': 'Here is the image', 'aspect_ratio': '1:1'},
-                }])})
-                outcome = root._continue(root.request_uuid, root.request_result)
-                leaf = env['ai.session'].sudo().browse(outcome['prepared_requests'][0]['session_id'])
-                sessions = root | leaf
+                leaf = root
+                sessions = root
             else:
                 middle = delegate(root)
                 leaf = delegate(middle)
                 # A declined ancestor waits for its outstanding descendant before
                 # its result can be delivered to the root.
-                middle._finish_exchange('declined')
+                middle._abort_pending_tools()
                 sessions = root | middle | leaf
             fixture = {
                 'ids': sessions.ids, 'root': root.id, 'leaf': leaf.id, 'uuid': leaf.request_uuid,
                 'traces': [session.request_context['ai_debug_exchange_uuid'] for session in sessions],
                 'channel': channel.id, 'agent': agent.id,
                 'attachment_name': f'AI Generated {title}' if image else 'No atomic image',
+                'image_tool_name': image_tool.ai_tool_name,
             }
         try:
             # HTTP must use independent real cursors, not HttpCase's shared test cursor.
             with patch.object(self.registry, 'cursor', lambda readonly=False: raw_cursor()):
                 yield fixture
         finally:
+            trace_ids = {event['payload']['trace_id'] for _id, event in self._snapshot(fixture)['events']}
             with raw_cursor() as cr:
                 env = api.Environment(cr, self.env.uid, {})
                 env['ai.session'].sudo().browse(fixture['root']).exists().unlink()
@@ -81,48 +79,56 @@ class TestAiDebugAtomicCallback(HttpCase):
                 env['ai.agent'].sudo().browse(fixture['agent']).exists().unlink()
                 env['ir.attachment'].sudo().search([('name', '=', fixture['attachment_name'])]).unlink()
                 cr.execute("DELETE FROM bus_bus WHERE message::jsonb->'payload'->>'trace_id' = ANY(%s)",
-                           [fixture['traces']])
+                           [list(trace_ids)])
 
     def _snapshot(self, fixture):
         with self.registry._db.cursor() as cr:
-            cr.execute('''SELECT id, loop_state, request_uuid, request_phase, request_result,
+            cr.execute('''SELECT id, loop_state, request_uuid, state, request_payload,
                                  pending_tool_call
                             FROM ai_session WHERE id = ANY(%s) ORDER BY id''', [fixture['ids']])
             sessions = cr.fetchall()
             cr.execute("SELECT id FROM ir_attachment WHERE name = %s ORDER BY id", [fixture['attachment_name']])
             attachments = cr.fetchall()
             cr.execute("""SELECT id, message::jsonb FROM bus_bus
-                            WHERE message::jsonb->'payload'->>'trace_id' = ANY(%s) ORDER BY id""",
-                       [fixture['traces']])
-            return {'sessions': sessions, 'attachments': attachments, 'events': cr.fetchall()}
+                            WHERE message::jsonb->'payload'->>'trace_id' = ANY(%s)
+                               OR message::jsonb->'payload'->>'parent_trace_id' = ANY(%s) ORDER BY id""",
+                       [fixture['traces'], fixture['traces']])
+            events = cr.fetchall()
+            nested_ids = [event['payload']['trace_id'] for _id, event in events
+                          if event['payload'].get('parent_trace_id') in fixture['traces']]
+            if nested_ids:
+                cr.execute("SELECT id, message::jsonb FROM bus_bus WHERE message::jsonb->'payload'->>'trace_id' = ANY(%s) ORDER BY id", [nested_ids])
+                events = sorted(dict(events + cr.fetchall()).items())
+            return {'sessions': sessions, 'attachments': attachments, 'events': events}
 
     def _exercise_atomic_callback(self, *, image):
         with self._fixture(image=image) as fixture:
             before = self._snapshot(fixture)
             attempts = []
-            original = AIThreadController._session_transaction
+            original = DebugAiSession._continue_agent_loop
 
-            @contextmanager
-            def retry_before_commit(controller, session, **actor_params):
-                with original(controller, session, **actor_params) as bound:
-                    yield bound
-                    bound.env.flush_all()
-                    # Independent readers cannot see receipt, settlement, parent
-                    # application, the generated attachment, or any debugger fact.
-                    self.assertEqual(self._snapshot(fixture), before)
-                    transport.assert_not_called()
-                    bound.env.cr.execute('SELECT txid_current()')
-                    attempts.append(bound.env.cr.fetchone()[0])
-                    if len(attempts) == 1:
-                        raise ConcurrencyError('Retry the entire callback including debugger facts')
+            def retry_before_commit(session, completion_result):
+                result = original(session, completion_result)
+                session.env.flush_all()
+                self.assertEqual(self._snapshot(fixture), before)
+                session.env.cr.execute('SELECT txid_current()')
+                attempts.append(session.env.cr.fetchone()[0])
+                if len(attempts) == 1:
+                    raise ConcurrencyError('Retry the callback including debugger facts')
+                return result
 
-            content = ([{'type': 'inline_data', 'mimetype': 'image/png',
-                         'data': PNG_B64.decode() if isinstance(PNG_B64, bytes) else PNG_B64}]
+            content = ([{'type': 'tool_call', 'name': fixture['image_tool_name'], 'call_id': 'image',
+                         'args': {'prompt': 'Green mug', 'images_paths': [],
+                                  'image_title': f"atomic-debug-{fixture['root']}",
+                                  'feedback': 'Here is the image', 'aspect_ratio': '1:1'}}]
                        if image else [{'type': 'text', 'text': 'Child result'}])
             payload = {'request_uuid': fixture['uuid'], 'llm_error': False,
                        'llm_result': {'status': 'success', 'result': assistant(content)}}
             with (
-                patch.object(AIThreadController, '_session_transaction', retry_before_commit),
+                patch.object(DebugAiSession, '_continue_agent_loop', retry_before_commit),
+                patch.object(EnterpriseAiSession, '_get_completions', return_value={'result': assistant([
+                    {'type': 'inline_data', 'mimetype': 'image/png', 'data': PNG_B64},
+                ])}),
                 patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None) as transport,
                 self.allow_requests(all_requests=True),
             ):
@@ -130,7 +136,7 @@ class TestAiDebugAtomicCallback(HttpCase):
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(len(attempts), 2)
             self.assertNotEqual(*attempts)
-            self.assertEqual(transport.call_count, 0 if image else 1)
+            self.assertEqual(transport.call_count, 0 if image else 2)
             after = self._snapshot(fixture)
             prior_ids = {row_id for row_id, _event in before['events']}
             events = [event for row_id, event in after['events'] if row_id not in prior_ids]
@@ -141,7 +147,7 @@ class TestAiDebugAtomicCallback(HttpCase):
             terminals = [event['payload'] for event in events if event['type'] == 'loop_end']
             self.assertEqual(len(terminals), 2)
             if image:
-                self.assertTrue(all(terminal['exchange_result'] is None for terminal in terminals))
+                self.assertTrue(all(terminal.get('exchange_result') is None for terminal in terminals))
             else:
                 by_trace = {terminal['trace_id']: terminal for terminal in terminals}
                 leaf_result = by_trace[fixture['traces'][-1]]['exchange_result']
@@ -151,16 +157,17 @@ class TestAiDebugAtomicCallback(HttpCase):
                 self.assertEqual(middle_result['status'], 'declined')
                 self.assertIn('Skipped', middle_result['message'])
             self.assertEqual(sum(event['type'] == 'tool_call_completed' for event in events), 1 if image else 2)
-            self.assertEqual(sum(event['payload'].get('phase') == 'child_applied' for event in events), 1 if image else 2)
+            self.assertEqual(sum(event['payload'].get('phase') == 'child_applied' for event in events), 0 if image else 2)
             self.assertEqual(len(after['attachments']), 1 if image else 0)
             self.assertEqual(next(row for row in after['sessions'] if row[0] == fixture['leaf'])[1], 'ready')
             with self.allow_requests(all_requests=True), patch(
                 'odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None,
             ) as replay_transport:
-                replay = requests.post(self.base_url() + '/ai/completion_result_ready', json=payload, timeout=30)
+                stale_payload = {**payload, 'request_uuid': 'no-longer-active-debug-request'}
+                replay = requests.post(self.base_url() + '/ai/completion_result_ready', json=stale_payload, timeout=30)
             self.assertEqual(replay.status_code, 200, replay.text)
             replay_transport.assert_not_called()
-            self.assertEqual(self._snapshot(fixture), after, 'Replay must not duplicate facts or image effects')
+            self.assertEqual(self._snapshot(fixture), after, 'Unknown callback must not change facts or image effects')
 
     def test_nested_delivery_and_debugger_facts_retry_atomically(self):
         self._exercise_atomic_callback(image=False)

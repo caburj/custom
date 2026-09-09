@@ -1,3 +1,89 @@
+## Current callback submission and delivery — 2026-09-10
+
+Adapted to clean Enterprise `2c8ddf107a2bd81d4e3f344f9c6e01e4407d2e2d`
+on `master-ai-callback-driven-loop`. The debugger now observes
+`_save_and_submit_request` and callback results passed directly into
+`_continue_agent_loop` / `_continue_channel_name`. It no longer reads removed
+request phase/result or continuation fields. Submission occurs inside the core
+transaction; trace phases describe observed events rather than a request ledger.
+
+Ordinary start/continue-session tools supply the exact parent tool identity.
+Child traces keep that link across subsequent model rounds and start a new trace
+when reused for another exchange. Direct nested child delivery captures the exact
+result received by the parent. Title traces close from captured facts after core
+deletes their temporary session. Synchronous web search and image generation
+remain nested beneath their invoking tool, with normalized requests and responses.
+
+**34 selected tests passed, zero failures/errors**, process exit **0**. Log:
+`/tmp/ai-debug-current-main-0910-final2.log`. Isolated database:
+`ai-debug-subagent-tests-0906a`; HTTP **22284**, gevent **22287**. Coverage includes
+physical HTTP callback rollback/retry and persisted Bus/image evidence, nested
+child delivery, multi-round child identity and reuse, title-session deletion,
+client-result/configuration forwarding, tool-final response preservation, observer
+failure isolation, private Bus access, and standalone browser/asset checks.
+AI transport/completions were mocked; this is not live-provider/manual acceptance.
+
+Core no longer fences a repeated callback for the same terminal request UUID.
+The HTTP tests check unknown-UUID rejection rather than asserting the removed
+replay contract. Transport is attempted within each retried transaction; only the
+successful transaction's business state and trace events survive.
+
+Independent source finding: Enterprise's insufficient-credit handler in
+`_save_and_submit_request` still calls removed `_store_request_result`. This path
+is not repaired or masked by ai_debug and remains an Enterprise issue.
+
+Preserved the preexisting context-refresh regression and unrelated
+`test_ai_agent_loop` edits. Changes remain uncommitted. No Enterprise edits or
+shared-consumer restarts; running consumers need a Python reload to use these hooks.
+
+Verified Enterprise source SHA-256 values:
+
+```text
+ai/models/ai_session.py 8f2139ff90afe535a40fa65842f57f41baec313491a0a49c92107fb57017a6ce
+ai/controllers/thread.py 2270eadb0722291c12edade8ae0049fb115f2af40a64e681eb355ffa960cb580
+ai/models/ai_tool.py 1a1ef89c23eeb9cc8519991f4dd11688d7912cc2f98766bc9c0cf1503660f3a6
+```
+
+## Current callback entry points — 2026-09-09
+
+Adapted to Enterprise `e7cb08f790f896d0cf4e31aead1e0584c65b50c5` on
+`master-ai-callback-driven-loop`. The controller now stores callback results and
+calls `_continue_agent_loop` / `_continue_channel_name` directly. The debugger
+observes those handlers and controller-triggered pending-tool aborts, forwards
+resume configuration, and captures terminal root/subagent content at
+`_finish_exchange`. Removed the obsolete `_continue` hook, suffix field/argument,
+and durable web/image/Website helper assumptions.
+
+Current Enterprise runs web search and image generation synchronously inside
+tools. Those calls retain company/view context and nest beneath the exact parent
+request/tool, using existing debugger IDs without reading the parent's restricted
+session through a non-admin tool environment. Their normalized prompts/options
+and responses are inspectable. A tool's synthetic final message gets a distinct
+iteration so it cannot overwrite the original model tool-call response.
+
+**48 selected tests passed, zero failures/errors**, process exit **0**. Log:
+`/tmp/ai-debug-current-main-0909-final.log`. Isolated database:
+`ai-debug-subagent-tests-0906a`; HTTP **22284**, gevent **22287**. Tests include
+actual HTTP callback rollback/retry/replay with persisted Bus/image evidence,
+foreground-child delivery, nested synchronous search/image tools, non-admin
+linking, channel titles, configuration forwarding, private Bus access, and the
+standalone browser/asset checks. Removed tests targeted continuation types that
+no longer exist; their applicable tracing/transaction assertions were replaced
+with current-tool coverage. Earlier r1/r2 runs failed on test adapter/schema
+mistakes; r3 and the final run passed. No live-provider/manual acceptance claimed.
+
+Preserved the preexisting context-refresh test edit and unrelated
+`test_ai_agent_loop` changes. Only ai_debug files changed here; no commits,
+Enterprise edits, or shared-consumer restarts. Running consumers still need to
+reload this Python code before using the updated debugger.
+
+Verified Enterprise source SHA-256 values:
+
+```text
+ai/models/ai_session.py 74f4c9bd6dc966e1decba59fd3de6df55b0e1dcfd01d19404af5ef330abfc51b
+ai/controllers/thread.py b3acaa97e4acf68151197422e1ae029dbb2dbb77b7a2bc45e6e9ae5f864e50e8
+```
+
 ## Website placeholder image continuations — 2026-09-07
 
 Website placeholder children now use the tool call identity already carried by
