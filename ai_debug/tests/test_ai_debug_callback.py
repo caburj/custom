@@ -129,9 +129,9 @@ class TestAiDebugCallback(TransactionCase):
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, first = self._prepare('Trace my message')
-            self.assertEqual(self.transport.call_count, 1)
+            self.transport.assert_not_called()
             self.assertEqual(session.state['callback_type'], 'agent_loop')
-            self.assertEqual(self._events(events, 'request_state')[-1]['phase'], 'submitted')
+            self.assertEqual(self._events(events, 'iteration')[-1]['phase'], 'prepared')
             self._consume(session, self._tool_result(tool, 'one'))
             self.assertEqual(session.loop_state, 'waiting_model')
             self.assertNotEqual(session.request_uuid, first.request_uuid)
@@ -206,7 +206,7 @@ class TestAiDebugCallback(TransactionCase):
             session, first = self._prepare()
             self._consume(session, self._tool_result(tool, 'client'))
             self.assertEqual(session.loop_state, 'waiting_client_result')
-            session._resume_pending_interaction(session.resume_token, {'kind': 'client_result', 'value': False},
+            session._resume_pending_interaction({'kind': 'client_result', 'value': False},
                                                 ai_session_config={'enable_think_longer': True})
             self.assertTrue(session.request_payload['boost_reasoning'])
             completed, = self._events(events, 'tool_call_completed')
@@ -538,6 +538,8 @@ class TestAiDebugCallback(TransactionCase):
                 'clientSecret': 'client-secret',
                 'set-cookie': 'session-secret',
                 'resume_token': 'resume-secret',
+                'webhook_secret': 'webhook-secret',
+                'signature': 'callback-signature',
                 'blob': b'binary fixture',
             },
         }
@@ -549,6 +551,8 @@ class TestAiDebugCallback(TransactionCase):
         self.assertEqual(sanitized['nested']['clientSecret'], '[REDACTED]')
         self.assertEqual(sanitized['nested']['set-cookie'], '[REDACTED]')
         self.assertEqual(sanitized['nested']['resume_token'], '[REDACTED]')
+        self.assertEqual(sanitized['nested']['webhook_secret'], '[REDACTED]')
+        self.assertEqual(sanitized['nested']['signature'], '[REDACTED]')
         self.assertEqual(
             sanitized['nested']['blob'],
             {'_binary_excluded': True, 'size': len(b'binary fixture')},

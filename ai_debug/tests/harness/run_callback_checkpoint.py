@@ -119,18 +119,12 @@ class CallbackShimHandler(ProviderHandler):
             self.send_error(404)
             return
         payload = self._read_json()
-        params = payload.get('params') or {}
-        request_uuid = params.get('request_uuid')
+        # Current callbacks are signed json2 bodies, not UUID-only notifications.
+        request_uuid = payload['request_uuid']
+        self.state.callback_payload = payload
         response = requests.post(
-            CONSUMER_URL + '/ai/completion_result_ready',
-            json={
-                'jsonrpc': '2.0',
-                'id': payload.get('id'),
-                'method': 'call',
-                'params': {'request_uuid': request_uuid},
-            },
-            timeout=15,
-            allow_redirects=False,
+            CONSUMER_URL + '/ai/completion_result_ready', json=payload,
+            timeout=15, allow_redirects=False,
         )
         append_jsonl(self.state.callback_journal, {
             'request_uuid': request_uuid,
@@ -267,12 +261,13 @@ def assert_debug_events(events, request_uuid, exchange_uuid, provider_payload):
     types = [event['type'] for event in events]
     if types.count('new_trace') != 1:
         raise AssertionError(types)
-    if types.count('iteration') != 1:
+    if types.count('iteration') != 2:
         raise AssertionError(types)
     if types.count('loop_end') != 1:
         raise AssertionError(types)
     trace = next(event['payload'] for event in events if event['type'] == 'new_trace')
-    iteration = next(event['payload'] for event in events if event['type'] == 'iteration')
+    iteration = next(event['payload'] for event in events
+                     if event['type'] == 'iteration' and event['payload']['phase'] == 'result_received')
     terminal = next(event['payload'] for event in events if event['type'] == 'loop_end')
     if trace['trace_id'] != exchange_uuid or trace['exchange_uuid'] != exchange_uuid:
         raise AssertionError(trace)
@@ -312,7 +307,6 @@ def assert_debug_events(events, request_uuid, exchange_uuid, provider_payload):
     if tool_names != {'ai_tool_ask_user_question', 'ai_tool_load_skills'}:
         raise AssertionError(tool_names)
     expected_result = {
-        'request_uuid': request_uuid,
         'status': 'success',
         'result': {
             'role': 'assistant',
@@ -349,7 +343,7 @@ def assert_debug_events(events, request_uuid, exchange_uuid, provider_payload):
         raise AssertionError('Callback contract must not fabricate a tool-call count')
     forbidden = {
         'accounttoken', 'cookie', 'databaseuuid', 'dbuuid', 'headers',
-        'connection',
+        'connection', 'webhooksecret', 'signature',
     }
     leaked = sorted(forbidden & collect_normalized_keys(events))
     if leaked:
@@ -363,7 +357,7 @@ def main():
     if CORE is None or ENTERPRISE is None:
         raise RuntimeError(
             'AI_DEBUG_E2E_CORE and AI_DEBUG_E2E_ENTERPRISE must name the '
-            'paired committed source snapshots'
+            'paired source checkouts'
         )
     required = (
         CUSTOM, ENTERPRISE, CORE, IAP_CORE, IAP_ENTERPRISE, IAP_APPS,
@@ -498,8 +492,8 @@ def main():
         )
         if kickoff_payload.get('error'):
             raise RuntimeError(f'Callback kickoff failed: {kickoff_payload["error"]}')
-        acknowledgement = kickoff_payload['result']
-        request_uuid = acknowledgement['request_uuid']
+        if kickoff_payload['result'] != {'loop_state': 'waiting_model'}:
+            raise AssertionError(kickoff_payload)
 
         deadline = time.monotonic() + 30
         consumer_status = None
@@ -516,6 +510,7 @@ def main():
             raise RuntimeError(f'Consumer did not reach done: {consumer_status}')
         require_processes_alive(processes)
 
+        request_uuid = consumer_status['request_uuid']
         events = wait_debug_events()
         exchange_uuid = next(
             event['payload']['exchange_uuid']
@@ -527,12 +522,11 @@ def main():
         assert_debug_events(events, request_uuid, exchange_uuid, state.provider_payloads[0])
         before_replay = json.dumps(events, sort_keys=True)
 
-        replay, replay_payload = jsonrpc_post(
-            CONSUMER_URL + '/ai/completion_result_ready',
-            {'request_uuid': request_uuid},
+        replay = requests.post(
+            CONSUMER_URL + '/ai/completion_result_ready', json=state.callback_payload, timeout=15,
         )
-        if replay.status_code != 200 or replay_payload.get('result') is not None:
-            raise AssertionError(replay_payload)
+        if replay.status_code != 200 or replay.json() is not None:
+            raise AssertionError(replay.text)
         time.sleep(0.5)
         after_replay = json.dumps(read_debug_events(), sort_keys=True)
         if after_replay != before_replay:

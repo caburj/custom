@@ -1,3 +1,106 @@
+## Current -loop-ref post-commit lifecycle — 2026-09-13
+
+Joseph requested this adaptation after B9 removed the unused internal
+`resume_token` parameter, to align ai_debug with the actual current Enterprise
+`master-ai-callback-driven-loop-ref` contracts. Enterprise began at `61f88352427`
+plus the uncommitted B3–B9 changes, which were committed during this work as
+`60d98bc6c163012d1af2010547789ca4b860d775`. The final Enterprise worktree is clean.
+Community HEAD: `2b2c1b9b35ada1a723728d52bbc57cfef23f8a55`.
+Custom HEAD remains `e8cc9ebd9ba7b6847b33e661109d5feec30cd6dd` plus the preserved
+and adapted uncommitted debugger/harness changes.
+
+Production instrumentation now requires `state` on `_save_and_submit_request`.
+It records a prepared request when core saves intent and registers post-commit
+submission. It no longer claims transport ran before the method returned.
+Submission rescue finishes sessions in a fresh environment: `_finish_exchange`
+opens an observation span when necessary, preserving child output, parent/tool
+links, and parent continuation. Title rescue deletion closes from captured request
+facts; successful title callbacks retain their separate completion path. Rescue
+failures are reported as `request_failed`, because these model hooks do not receive
+the original transport exception. Child output preserves core's actual message.
+No callback receipt or result-consumed event is fabricated for submission rescue.
+
+The B9 internal resume signature and `automatic` forwarding are retained. The
+controller continues to own browser resume-token validation. The harness reads
+request UUID from persisted session status; status no longer reads removed
+`request_phase`. The checkpoint asserts raw `loop_state` start acknowledgement,
+forwards signed json2 callback bodies, replays the complete signed body, and
+expects separate prepared/result iterations. Debugger-owned `responseState`
+arguments are internal event helpers, not controller acknowledgement fields;
+their consumers were inspected and their contract was retained. Webhook secrets
+and callback signatures are explicitly redacted.
+
+**36 selected tests passed, zero failures/errors, exit 0**. Final log:
+`/tmp/ai-debug-ref-0913-final.log`. Fresh isolated DB:
+`ai-debug-ref-contract-tests-0913`, HTTP 22284, gevent 22287, workers/cron disabled.
+All AI transport/completion calls were mocked. Tests cover real post-commit rescue
+in fresh transactions for root, follow-up, child and title credit failures, generic
+transport failure, signed callback rollback/retry, deferred follow-up submission,
+normal nested child delivery, web/image tool traces, resume configuration,
+secret redaction, and existing browser/asset checks. The desktop frontend suite
+also passed 15 tests / 80 assertions. AST parsing of all 10 debugger/test/harness
+Python files and `git diff --check` passed.
+
+Earlier r1/r2 attempts on the old `ai-debug-subagent-tests-0906a` database did not
+provide acceptance: dependency drift skipped ai_debug, then stale views blocked
+installation. A fresh database resolved the fixture problem; r3 and the final run
+passed. The paired standalone IAP checkpoint received source-contract updates but
+was not executed. It still depends on the separately deferred
+`test_ai_agent_loop` IAP harness and its configured IAP checkouts; no end-to-end
+paired-IAP acceptance is claimed. No manual/provider testing, shared server
+restart, Enterprise edits, worktree operations, or commits were performed.
+
+Verified Enterprise source SHA-256 values:
+
+```text
+ai/models/ai_session.py e9f54bf20eed8edd4127cf6296e6a89bb1917d7072a88454a10cd8afb6d175c6
+ai/controllers/thread.py fb66d5492df41811620b9d800fcc70739ecddf29fc0e70641bc1f2b76da7898d
+ai/utils/types.py 6616bfc42123014bffa0740b17049970412047c73bbc50e11e7238cc7500dd67
+```
+
+## Reference branch credit rejection — 2026-09-10
+
+Custom `master-ai-callback-driven-loop-ref` was created with `wt fork` from
+`master-ai-callback-driven-loop` at `e8cc9ebd9ba7b6847b33e661109d5feec30cd6dd`.
+The paired Enterprise `master-ai-callback-driven-loop-ref` is at
+`2c8ddf107a2bd81d4e3f344f9c6e01e4407d2e2d` plus uncommitted changes in
+`ai/models/ai_session.py`, `ai/models/ai_tool.py`, and
+`ai_app/models/ir_actions_server.py`.
+
+Enterprise now handles insufficient credits during submission: ordinary sessions
+finish immediately, rejected title sessions are deleted, and a rejected new child
+returns a tool error before a pending child marker is registered. It also retains
+`cron_id` in request context. The earlier insufficient-credit source issue recorded
+below is fixed in this paired working tree.
+
+The debugger captures the saved request at core's response-state publication before
+transport can reject it. Each submission gets its own observation context so a
+failed follow-up closes the correct request once, retaining the exact parent/tool
+link and child output. Deleted title traces close from captured facts. Immediate
+rejections emit a failed terminal with `insufficient_credit` without inventing a
+received callback. The existing trace reducer keeps completed progress when older
+round events arrive afterward; no frontend changes were needed.
+
+**38 selected tests passed, zero failures/errors**, process exit **0**. Log:
+`/tmp/ai-debug-ref-0910-r1.log`. This includes four new credit-rejection regressions,
+physical HTTP rollback/retry tests, existing subagent/search/image coverage, and
+browser checks (15 frontend tests, 80 assertions). The isolated database was
+`ai-debug-subagent-tests-0906a`, HTTP **22284**, gevent **22287**, with workers and
+cron disabled and AI transport/completions mocked. Expected observer/wakeup errors
+were injected by isolation tests. No live-provider/manual acceptance is claimed.
+
+Only this Custom child was edited. The Custom parent and Enterprise working trees
+were preserved. Adaptation changes remain uncommitted; no shared consumer was
+restarted.
+
+Verified Enterprise source SHA-256 values:
+
+```text
+ai/models/ai_session.py f8740f4163014f92b84dd22fc054dd5fd53cf12bc4022b2e5920a5eca6c393ca
+ai/models/ai_tool.py ad15be99f11ad39dab511ccff62e1041a0ef90e56858ad17c5cc0c04e65ec0a2
+ai_app/models/ir_actions_server.py 21407a80e76cf8f57fa327f6072863b10c6515646c691cd0c7a1f19812c7cfd0
+```
+
 ## Current callback submission and delivery — 2026-09-10
 
 Adapted to clean Enterprise `2c8ddf107a2bd81d4e3f344f9c6e01e4407d2e2d`

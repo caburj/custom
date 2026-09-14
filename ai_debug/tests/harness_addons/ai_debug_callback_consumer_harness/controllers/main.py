@@ -94,8 +94,6 @@ class AiDebugCallbackConsumerHarness(http.Controller):
             'session_id': session.id,
             'request_uuid': session.request_uuid or False,
             'loop_state': session.loop_state,
-            'request_phase': session.request_phase or False,
-            'response_state': session._get_response_state(),
             'event_roles': [
                 event.metadata.get('role')
                 for event in session.event_ids.sorted('id')

@@ -67,6 +67,8 @@ _SENSITIVE_KEYS = {
     "refresh_token",
     "resume_token",
     "secret",
+    "webhook_secret",
+    "signature",
     "set_cookie",
     "thought_signature",
 }
@@ -903,7 +905,7 @@ class AiSession(models.Model):
             )
 
     def _save_and_submit_request(self, payload, *, callback_type,
-                         request_round, request_round_limit, state=None):
+                         request_round, request_round_limit, state):
         # Correlation is part of immutable request intent; instrumentation is optional.
         def prepare_context():
             prepared_context = self._ai_debug_prepare_request_context(
@@ -933,7 +935,6 @@ class AiSession(models.Model):
         if request:
             self._ai_debug_try(lambda: self._ai_debug_trace_request_prepared(request))
             self._ai_debug_try(lambda: self._ai_debug_trace_request_result(request, {}, {}, None))
-            self._ai_debug_try(lambda: self._ai_debug_emit_state(request, 'submitted'))
         return result
 
     def _ai_debug_parent_link(self, call_id):
@@ -1090,7 +1091,7 @@ class AiSession(models.Model):
             'response_label': 'Normalized IAP Result',
             'has_tool_calls': has_tool_calls,
             'is_final': False,
-            'phase': 'result_received' if response else 'submitted',
+            'phase': 'result_received' if response else 'prepared',
             'error': error,
             'request_state': request['loop_state'],
             'outcome_response_state': outcome.get('responseState'),
@@ -1154,6 +1155,13 @@ class AiSession(models.Model):
         session._ai_debug_try(lambda: session._ai_debug_observe_transition(request, context, history_ids))
 
     def _finish_exchange(self, status='completed', *, content=None):
+        # Submission rescue uses a fresh environment, outside a callback span.
+        if not self._ai_debug_active_callback_context():
+            with self._ai_debug_transition() as session:
+                return session._ai_debug_finish_exchange(status, content=content)
+        return self._ai_debug_finish_exchange(status, content=content)
+
+    def _ai_debug_finish_exchange(self, status, *, content):
         def capture():
             context = self._ai_debug_active_callback_context()
             if context:
@@ -1192,10 +1200,13 @@ class AiSession(models.Model):
                     context, call, result=item['result'], success=item.get('success', True),
                 )
         self._ai_debug_flush_callback_tool_events(context)
-        self._ai_debug_emit_state(request, 'result_consumed')
-        if context.get('finish_status') or (request['loop_state'] != 'ready' and self.loop_state == 'ready'):
+        if not (context.get('finish_status') == 'failed' and request['result'] is None):
+            self._ai_debug_emit_state(request, 'result_consumed')
+        if context.get('finish_status') or (request['request_uuid'] == self.request_uuid
+                and request['loop_state'] != 'ready' and self.loop_state == 'ready'):
             result = request['result'] or {}
-            error = result.get('code') if result.get('kind') == 'failure' else None
+            error = result.get('code') if result.get('kind') == 'failure' else (
+                'request_failed' if context.get('finish_status') == 'failed' else None)
             reason = context.get('finish_status') or request['pending'].get('exchange_status')
             self._ai_debug_trace_exchange_end(
                 request, {'responseState': 'idle'}, error=error, request_state='ready',
@@ -1218,7 +1229,7 @@ class AiSession(models.Model):
         request = self._ai_debug_try(self._ai_debug_request_snapshot)
         if request:
             self._ai_debug_try(lambda: self._ai_debug_record_callback(request, completion_result))
-        result = super()._continue_channel_name(completion_result)
+        result = super(AiSession, self.with_context(_ai_debug_title_callback=True))._continue_channel_name(completion_result)
         if request:
             self._ai_debug_try(lambda: self._ai_debug_trace_exchange_end(
                 request, {'responseState': 'idle'}, request_state='ready',
@@ -1227,10 +1238,27 @@ class AiSession(models.Model):
             ))
         return result
 
-    def _resume_pending_interaction(self, resume_token, response, ai_session_config=None):
+    def unlink(self):
+        # Submission rescue deletes title sessions without a completion callback.
+        requests = []
+        if not self.env.context.get('_ai_debug_title_callback'):
+            for session in self:
+                if session.loop_state == 'waiting_model' and session.state.get('callback_type') == 'channel_name':
+                    request = session._ai_debug_try(session._ai_debug_request_snapshot)
+                    if request:
+                        requests.append((session, request))
+        result = super().unlink()
+        for session, request in requests:
+            session._ai_debug_try(lambda: session._ai_debug_trace_exchange_end(
+                request, {'responseState': 'idle'}, request_state='ready',
+                termination_reason='failed', error='request_failed',
+            ))
+        return result
+
+    def _resume_pending_interaction(self, response, ai_session_config=None, *, automatic=False):
         with self._ai_debug_transition() as session:
             return super(AiSession, session)._resume_pending_interaction(
-                resume_token, response, ai_session_config=ai_session_config,
+                response, ai_session_config=ai_session_config, automatic=automatic,
             )
 
     @contextmanager

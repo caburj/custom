@@ -8,6 +8,8 @@ import requests
 from odoo import api, Command
 from odoo.exceptions import ConcurrencyError
 from odoo.tests import HttpCase, tagged
+from odoo.addons.iap import InsufficientCreditError
+from odoo.tools import hmac
 from odoo.addons.ai_debug.models.ai_session import AiSession as DebugAiSession
 from odoo.addons.ai.models.ai_session import AiSession as EnterpriseAiSession
 from odoo.addons.base.tests.files import PNG_B64
@@ -21,6 +23,12 @@ def assistant(content):
 class TestAiDebugAtomicCallback(HttpCase):
     @contextmanager
     def _fixture(self, *, image):
+        with patch("odoo.addons.ai.models.ai_session.call_odoo_ai_transport", return_value=None):
+            with self._committed_fixture(image=image) as fixture:
+                yield fixture
+
+    @contextmanager
+    def _committed_fixture(self, *, image):
         raw_cursor = self.registry._db.cursor
         with raw_cursor() as cr:
             env = api.Environment(cr, self.env.ref('base.user_admin').id, {})
@@ -65,6 +73,7 @@ class TestAiDebugAtomicCallback(HttpCase):
                 'channel': channel.id, 'agent': agent.id,
                 'attachment_name': f'AI Generated {title}' if image else 'No atomic image',
                 'image_tool_name': image_tool.ai_tool_name,
+                'secret': leaf.request_webhook_secret,
             }
         try:
             # HTTP must use independent real cursors, not HttpCase's shared test cursor.
@@ -111,6 +120,7 @@ class TestAiDebugAtomicCallback(HttpCase):
                 result = original(session, completion_result)
                 session.env.flush_all()
                 self.assertEqual(self._snapshot(fixture), before)
+                transport.assert_not_called()
                 session.env.cr.execute('SELECT txid_current()')
                 attempts.append(session.env.cr.fetchone()[0])
                 if len(attempts) == 1:
@@ -124,6 +134,7 @@ class TestAiDebugAtomicCallback(HttpCase):
                        if image else [{'type': 'text', 'text': 'Child result'}])
             payload = {'request_uuid': fixture['uuid'], 'llm_error': False,
                        'llm_result': {'status': 'success', 'result': assistant(content)}}
+            payload['signature'] = hmac(None, 'odoo_ai-webhook', (fixture['uuid'], payload['llm_result'], False), secret=fixture['secret'])
             with (
                 patch.object(DebugAiSession, '_continue_agent_loop', retry_before_commit),
                 patch.object(EnterpriseAiSession, '_get_completions', return_value={'result': assistant([
@@ -136,7 +147,7 @@ class TestAiDebugAtomicCallback(HttpCase):
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(len(attempts), 2)
             self.assertNotEqual(*attempts)
-            self.assertEqual(transport.call_count, 0 if image else 2)
+            self.assertEqual(transport.call_count, 0 if image else 1)
             after = self._snapshot(fixture)
             prior_ids = {row_id for row_id, _event in before['events']}
             events = [event for row_id, event in after['events'] if row_id not in prior_ids]
@@ -174,3 +185,72 @@ class TestAiDebugAtomicCallback(HttpCase):
 
     def test_image_application_and_debugger_facts_retry_atomically(self):
         self._exercise_atomic_callback(image=True)
+
+    def _exercise_submission_failure(self, kind, failure):
+        with self._fixture(image=True) as fixture:
+            with self.registry._db.cursor() as cr:
+                env = api.Environment(cr, self.env.uid, {'cron_id': 123})
+                root = env['ai.session'].browse(fixture['root'])
+                if kind == 'title':
+                    target = env['ai.session'].create({'parent_session_id': root.id})
+                    target._save_and_submit_request(
+                        {'messages': [], 'instructions': 'Name it', 'tools': []},
+                        callback_type='channel_name', request_round=1, request_round_limit=1, state={},
+                    )
+                elif kind == 'child':
+                    root._continue_agent_loop({'kind': 'success', 'message': assistant([{
+                        'type': 'tool_call', 'name': 'ai_tool_start_session', 'call_id': 'rejected-child',
+                        'args': {'agent_id': fixture['agent'], 'message': 'Child task'},
+                    }])})
+                    target = env['ai.session'].browse(root.pending_tool_call['pending_results'][0]['child_session_id'])
+                    self.assertEqual(root.loop_state, 'waiting_child')
+                elif kind == 'followup':
+                    root._continue_agent_loop({'kind': 'success', 'message': assistant([{
+                        'type': 'tool_call', 'name': 'ai_tool_load_skills', 'call_id': 'load',
+                        'args': {'skill_ids': [env.ref('ai.ai_skill_generate_image').id]},
+                    }])})
+                    target = root
+                    self.assertEqual(target.request_round, 2)
+                else:
+                    root._continue_agent_loop({'kind': 'success', 'message': assistant([{'type': 'text', 'text': 'Done'}])})
+                    root._submit_agent_request([{'type': 'text', 'text': 'New exchange'}])
+                    target = root
+                target_id = target.id
+                trace_id = target.request_context['ai_debug_exchange_uuid']
+                request_uuid = target.request_uuid
+                fixture['traces'].append(trace_id)
+                self.assertEqual(target.loop_state, 'waiting_model')
+                self.assertEqual(target.request_context['cron_id'], 123)
+                with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', side_effect=[failure, None]) as transport:
+                    transport.assert_not_called()
+                    cr.commit()
+                    self.assertEqual(transport.call_count, 2 if kind == 'child' else 1)
+            events = [event for _id, event in self._snapshot(fixture)['events']
+                      if event['payload']['trace_id'] == trace_id and event['payload'].get('request_uuid') == request_uuid]
+            terminal, = [event['payload'] for event in events if event['type'] == 'loop_end']
+            self.assertEqual(terminal['termination_reason'], 'failed')
+            self.assertEqual(terminal['error'], 'request_failed')
+            self.assertFalse([event for event in events
+                              if event['payload'].get('phase') in ('result_received', 'result_consumed')])
+            with self.registry._db.cursor() as cr:
+                env = api.Environment(cr, self.env.uid, {})
+                target = env['ai.session'].browse(target_id).exists()
+                if kind == 'title':
+                    self.assertFalse(target)
+                else:
+                    self.assertEqual(target.loop_state, 'ready')
+                if kind == 'child':
+                    self.assertEqual(terminal['exchange_result']['status'], 'failed')
+                    self.assertIn('Not enough credits', str(terminal['final_output']))
+                    self.assertEqual(env['ai.session'].browse(fixture['root']).loop_state, 'waiting_model')
+                    applied = [event for _id, event in self._snapshot(fixture)['events']
+                               if event['payload'].get('phase') == 'child_applied']
+                    self.assertEqual(len(applied), 1)
+
+    def test_submission_credit_rescue_uses_fresh_transaction(self):
+        for kind in ('root', 'followup', 'child', 'title'):
+            with self.subTest(kind=kind):
+                self._exercise_submission_failure(kind, InsufficientCreditError())
+
+    def test_submission_transport_failure_closes_trace(self):
+        self._exercise_submission_failure('root', RuntimeError('Mock transport unavailable'))
