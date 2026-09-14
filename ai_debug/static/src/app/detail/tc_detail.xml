@@ -19,6 +19,19 @@
             <strong>Error:</strong> <t t-out="this.props.toolCall.error"/>
         </div>
 
+        <div t-if="this.props.toolCall.tool_status || this.props.toolCall.summary" class="ai-detail-section">
+            <dl class="mb-0">
+                <t t-if="this.props.toolCall.tool_status">
+                    <dt>Tool status</dt>
+                    <dd class="text-break" t-esc="this.props.toolCall.tool_status"/>
+                </t>
+                <t t-if="this.props.toolCall.summary">
+                    <dt>Summary</dt>
+                    <dd class="text-break mb-0" t-esc="this.props.toolCall.summary"/>
+                </t>
+            </dl>
+        </div>
+
         <Notebook>
             <t t-set-slot="arguments" title="'Arguments'" isVisible="true">
                 <div class="ai-detail-section">

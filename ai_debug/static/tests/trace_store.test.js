@@ -161,3 +161,22 @@ test("child application does not freeze the parent interaction phase", () => {
     expect(traces.get("parent").request_state).toBe("waiting_confirmation");
     expect(traces.get("parent").iterations.get("r1").request_state).toBe("waiting_confirmation");
 });
+
+
+test("thinking progress stays on its tool and survives persistence without completing it", () => {
+    const traces = new Map();
+    iteration(traces);
+    tool(traces);
+    tool(traces, "tool_call_progress", { tool_status: "Searching records" });
+    tool(traces, "tool_call_progress", { summary: "Searched <records>" });
+    const tc = traces.get("parent").iterations.get("r1").toolCalls.get("r1-call");
+    expect(tc.status).toBe("running");
+    expect(tc.result).toBe(null);
+    tool(traces, "tool_call_completed", { result: "Business result", success: true });
+    const restored = hydrateTrace(serializeTrace(traces.get("parent")));
+    const saved = restored.iterations.get("r1").toolCalls.get("r1-call");
+    expect(saved.tool_status).toBe("Searching records");
+    expect(saved.summary).toBe("Searched <records>");
+    expect(saved.result).toBe("Business result");
+    expect(saved.status).toBe("completed");
+});

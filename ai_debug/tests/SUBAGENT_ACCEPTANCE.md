@@ -1,3 +1,50 @@
+## Combined thinking and callback loop — 2026-09-14
+
+The target is the accumulated Enterprise feature, not the thinking commit alone:
+`master-ai-callback-driven-loop-ref-thinking` at clean
+`edd05e81114b64cbb9820361a02b7457cc3fd17e`, with thinking commit
+`01bb371bb71` directly beneath the callback-loop commit. Compared the resulting
+source to Enterprise `master-ai-callback-driven-loop-ref` (`f96657641dc`) and
+inspected the lifecycle against the Custom parent's existing adaptation.
+
+Custom `master-ai-callback-driven-loop-ref-thinking` already existed clean at
+`48784cd968339d28fc2324a0479bc236186dcea9`; `wt parent` confirmed
+`master-ai-callback-driven-loop-ref`. Reused that child. Its Custom parent remains
+clean at the same commit. No branches were recreated or reparented.
+
+The combined loop now emits `tool_status` before execution and intermediary tool
+summaries, rather than update_thinking client commands. The debugger observes that
+boundary, preserving exact request/tool identity. A separate tool_call_progress
+event carries plain status/summary text without completing the tool or replacing
+its business result. Both callback and synchronous paths are covered. Tool detail
+shows escaped text; capture storage, export, hydration, and copied details retain
+these fields. Synchronous iteration capture now uses the normalized complete
+completion response so intermediary assistant text and provider metadata are not
+lost when the loop yields tool calls separately. Existing nested child/web/image
+links, post-commit rescue, callback signatures, and B9 resume behavior remain.
+
+**38 selected tests passed, zero failures/errors, exit 0.** Final log:
+`/tmp/ai-debug-thinking-0914-final.log`. Fresh isolated database:
+`ai-debug-thinking-tests-0914`, HTTP 22284, gevent 22287, workers/cron disabled.
+AI transport and completions were mocked. Added callback/direct thinking tests and
+progress persistence checks; existing signed callback rollback/retry, fresh rescue,
+subagent, image, search, and browser/asset tests passed. Desktop and mobile frontend
+runs each passed **16 tests / 86 assertions**. Initial r1 had two test expectation
+failures (added progress events and a mistaken method-versus-server-action search
+argument mapping); the final run corrected both. AST/XML parsing and diff checks
+passed. No manual/provider or full Website-builder acceptance is claimed.
+
+Only this Custom child was edited. Enterprise and Custom parent checkouts remain
+unchanged. Changes are uncommitted; no shared consumer was restarted.
+
+Verified Enterprise SHA-256:
+
+```text
+ai/models/ai_session.py 6c40180c94ebba2e1cb5f279bbee9bc058f154a2abc693210a901b0d3c9537f3
+ai/models/ai_tool.py 5a61f53d623179848b57bee3a53f29fbc1daf2e5e2784e971103b5d81260643a
+ai/controllers/thread.py 2964056e5d2ff89cc311604fff152f407af248d7dcb259c4507ea9e6babddf1a
+```
+
 ## Current -loop-ref post-commit lifecycle — 2026-09-13
 
 Joseph requested this adaptation after B9 removed the unused internal

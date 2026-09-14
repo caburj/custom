@@ -832,20 +832,29 @@ class AiSession(models.Model):
         except Exception:  # noqa: BLE001
             _logger.exception("ai_debug: failed to buffer callback tool completion")
 
+    def _ai_debug_tool_progress(self, item):
+        if 'tool_status' in item:
+            return {'tool_status': self._ai_debug_sanitize(item['tool_status'])}
+        if item.get('is_tool_summary'):
+            return {'summary': self._ai_debug_sanitize(html2plaintext(item['intermediary_message']))}
+        return {}
+
     def _ai_debug_buffer_callback_tool_items(
         self, items, tool_calls, tools_context, context,
     ):
         """Buffer tool observations within the enclosing business transaction."""
         for item in items:
             try:
-                client_tool = item.get('client_tool') or {}
-                if client_tool.get('name') == 'update_thinking' or item.get('prepared_request'):
-                    current_tool_call = self._ai_debug_find_tool_call(
-                        tool_calls, tools_context.get('tool_call_id'),
-                    )
-                    self._ai_debug_buffer_callback_tool_started(
-                        context, current_tool_call,
-                    )
+                if progress := self._ai_debug_tool_progress(item):
+                    current_tool_call = self._ai_debug_find_tool_call(tool_calls, tools_context['tool_call_id'])
+                    tool_call_id = self._ai_debug_buffer_callback_tool_started(context, current_tool_call)
+                    if tool_call_id:
+                        context['events'].append(('tool_call_progress', {
+                            'type': 'tool_call_progress', 'trace_id': context['trace_id'],
+                            'request_uuid': context['request_uuid'], 'round_no': context['round_no'],
+                            'iteration_id': context['iteration_id'], 'tool_call_id': tool_call_id,
+                            **progress,
+                        }))
 
                 for result_item in item.get('tool_results') or ():
                     tool_call = self._ai_debug_tool_call_from_result(
@@ -1336,7 +1345,11 @@ class AiSession(models.Model):
                 'request_uuid': context['prepared_iteration_id'],
                 'payload': {'messages': messages, 'instructions': instructions, 'tools': tools, **options},
             }))
-        return super()._get_completions(messages, instructions, tools, **options)
+        result = super()._get_completions(messages, instructions, tools, **options)
+        if context is not None:
+            context['raw_response'] = self._ai_debug_try(
+                lambda: self._ai_debug_normalized_messages([result['result']]))
+        return result
 
     @api.model
     def _run_agentic_loop(self, instructions, message, tools_context, record=None, **completion_options):
@@ -1405,7 +1418,7 @@ class AiSession(models.Model):
                         'iteration_id': iteration_id,
                         'iteration_index': iteration_count,
                         'request_body': _debug_ctx.get('request_body') if prepared_id else None,
-                        'raw_response': normalized_response,
+                        'raw_response': _debug_ctx.pop('raw_response', normalized_response) if prepared_id else normalized_response,
                         'response_summary': self._ai_debug_message_summary([{
                             'role': 'assistant',
                             'content': parts,
@@ -1557,6 +1570,13 @@ class AiSession(models.Model):
             pending_tool_response=pending_tool_response,
             previous_results=previous_results,
         ):
+            progress = self._ai_debug_try(lambda: self._ai_debug_tool_progress(item))
+            if progress:
+                self._ai_debug_bus_send('tool_call_progress', {
+                    'type': 'tool_call_progress', 'trace_id': _debug_ctx['trace_id'],
+                    'iteration_id': _debug_ctx['iteration_id'],
+                    'tool_call_id': _tc_id_map[tools_context['tool_call_id']], **progress,
+                })
             if tool_results := item.get('tool_results'):
                 # state_after_batch = copy.deepcopy(tools_context.get('state') or {})
 

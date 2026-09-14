@@ -108,7 +108,7 @@ export function reduceTraceEvent(traces, payload, newMap = makeMap) {
             }
         } else if (payload.tool_call_id) {
             const tc = ensureTool(iteration, payload);
-            assignDefined(tc, payload, ["tool_name", "call_id", "args"]);
+            assignDefined(tc, payload, ["tool_name", "call_id", "args", "tool_status", "summary"]);
             if (payload.type === "tool_call_completed") {
                 const status = payload.status ?? (payload.triggered_confirmation ? "waiting_confirmation" : "completed");
                 if (tc.status !== "completed" || status === "completed") {

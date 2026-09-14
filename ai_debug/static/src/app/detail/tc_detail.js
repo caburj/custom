@@ -52,6 +52,8 @@ export class ToolCallDetail extends Component {
         const tc = this.props.toolCall;
         return JSON.stringify({
             tool_name: tc.tool_name,
+            tool_status: tc.tool_status,
+            summary: tc.summary,
             args: tc.args,
             result: tc.result,
         }, null, 2);

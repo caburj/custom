@@ -130,6 +130,7 @@ export class AiDebugApp extends Component {
             this.busService.subscribe("iteration", this._onTraceEvent);
             this.busService.subscribe("tool_call_started", this._onTraceEvent);
             this.busService.subscribe("tool_call_completed", this._onTraceEvent);
+            this.busService.subscribe("tool_call_progress", this._onTraceEvent);
             this.busService.subscribe("loop_end", this._onTraceEvent);
             await this.busService.addChannel(AI_DEBUG_CHANNEL);
         });
@@ -141,6 +142,7 @@ export class AiDebugApp extends Component {
             this.busService.unsubscribe("iteration", this._onTraceEvent);
             this.busService.unsubscribe("tool_call_started", this._onTraceEvent);
             this.busService.unsubscribe("tool_call_completed", this._onTraceEvent);
+            this.busService.unsubscribe("tool_call_progress", this._onTraceEvent);
             this.busService.unsubscribe("loop_end", this._onTraceEvent);
         });
 

@@ -105,6 +105,8 @@ export function serializeTrace(trace) {
                         args: tc.args,
                         result: tc.result,
                         error: tc.error,
+                        tool_status: tc.tool_status,
+                        summary: tc.summary,
                         state_before: tc.state_before,
                         state_after: tc.state_after,
                         call_id: tc.call_id,

@@ -189,6 +189,70 @@ class TestAiDebugCallback(TransactionCase):
         self.assertIs(raised.exception, conflict)
         observer.assert_not_called()
 
+    def test_thinking_status_and_summary_preserve_callback_tool_identity(self):
+        tool = self._create_callback_tool('debug_thinking',
+            "ai['result'] = {'response': 'Business response', 'summary': {'icon': 'search', 'text': 'Searched records'}}")
+        self._enable_fixture_tools(self.session, tool)
+        events = []
+        original = type(tool)._ai_tool_run
+
+        def execute(action, record, arguments, tools_context):
+            self.assertNotIn('tool_status', arguments)
+            context = action.env.context['_ai_debug_callback_ctx']
+            self.assertTrue(context['started_tool_call_ids'])
+            self.assertTrue(any(kind == 'tool_call_progress' for kind, _payload in context['events']))
+            return original(action, record, arguments, tools_context)
+
+        with (
+            patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
+            patch.object(type(tool), '_ai_tool_run', execute),
+        ):
+            session, request = self._prepare('Find records', ai_show_tool_status=True, debug=True)
+            model_message = self._tool_result(tool, 'thinking-call', {'tool_status': 'Searching records'})
+            model_message['content'].insert(0, {'type': 'text', 'text': 'I will check the records.'})
+            self._consume(session, model_message)
+        progress = self._events(events, 'tool_call_progress')
+        self.assertEqual(len(progress), 2)
+        completed, = self._events(events, 'tool_call_completed')
+        self.assertTrue(all(item['tool_call_id'] == completed['tool_call_id'] for item in progress))
+        self.assertEqual(progress[0]['tool_status'], 'Searching records')
+        self.assertIn('Searched records', progress[1]['summary'])
+        self.assertIn('Business response', str(completed['result']))
+        self.assertNotIn('Searched records', str(completed['result']))
+        received, = self._events(events, 'iteration', phase='result_received')
+        self.assertIn('I will check the records.', str(received['raw_response']))
+        self.assertIn('Searching records', str(received['raw_response']))
+        self.assertTrue(session.request_context['ai_show_tool_status'])
+        self.assertTrue(session.request_context['debug'])
+        self.assertFalse(self._events(events, 'loop_end'))
+
+    def test_direct_thinking_preserves_full_model_response_and_progress(self):
+        tool = self._create_callback_tool('debug_direct_thinking',
+            "ai['result'] = {'response': 'Done', 'summary': {'text': 'Checked records'}}")
+        message = self._tool_result(tool, 'direct-thinking', {'tool_status': 'Checking records'})
+        message['content'].insert(0, {'type': 'text', 'text': 'Let me check.'})
+        events, items = [], []
+        with (
+            patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
+            patch.object(EnterpriseAiSession, '_get_completions', side_effect=[
+                {'result': message}, {'result': assistant_text('Finished')},
+            ]),
+        ):
+            result = self.env['ai.session']._get_direct_response(
+                instructions='Check.', message=[{'type': 'text', 'text': 'Run'}], tools=tool,
+                on_item_callback=lambda item, _context: items.append(item),
+            )
+        iterations = self._events(events, 'iteration')
+        self.assertEqual(len(iterations), 2)
+        self.assertIn('Let me check.', str(iterations[0]['raw_response']))
+        self.assertNotIn('Checked records', str(iterations[0]['raw_response']))
+        self.assertEqual(result, assistant_text('Finished')['content'])
+        self.assertTrue(any(item.get('intermediary_message') == 'Let me check.' for item in items))
+        progress = self._events(events, 'tool_call_progress')
+        self.assertEqual(len(progress), 2)
+        completed, = self._events(events, 'tool_call_completed')
+        self.assertTrue(all(item['tool_call_id'] == completed['tool_call_id'] for item in progress))
+
     def test_failed_callback_closes_trace(self):
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
@@ -464,6 +528,8 @@ class TestAiDebugCallback(TransactionCase):
             [event for event, _payload, _kwargs in events],
             [
                 'new_trace', 'iteration', 'tool_call_started',
+                'tool_call_progress',
+                'tool_call_progress',
                 'tool_call_completed', 'iteration', 'loop_end',
             ],
         )
