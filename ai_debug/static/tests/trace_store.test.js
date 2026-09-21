@@ -180,3 +180,38 @@ test("thinking progress stays on its tool and survives persistence without compl
     expect(saved.result).toBe("Business result");
     expect(saved.status).toBe("completed");
 });
+
+test("round timing survives prepared replays, tool waits, refresh and export", () => {
+    const traces = new Map();
+    iteration(traces, { phase: "result_received", duration_ms: 4200, duration_kind: "model_round_trip" });
+    iteration(traces, { duration_ms: null, duration_kind: null });
+    tool(traces, "tool_call_completed", { status: "waiting_confirmation" });
+    const restored = hydrateTrace(JSON.parse(JSON.stringify(serializeTrace(traces.get("parent")))));
+    const round = restored.iterations.get("r1");
+    expect(round.duration_ms).toBe(4200);
+    expect(round.duration_kind).toBe("model_round_trip");
+    const reloaded = new Map([["parent", restored]]);
+    iteration(reloaded, { iteration_id: "r2", request_uuid: "r2", round_no: 2 });
+    expect(restored.iterations.get("r2").duration_ms).toBe(null);
+    iteration(reloaded, { iteration_id: "r2", request_uuid: "r2", round_no: 2,
+        phase: "result_received", duration_ms: 0, duration_kind: "model_round_trip" });
+    const exported = serializeTrace(restored);
+    expect(exported.iterations.map(([, iter]) => iter.duration_ms)).toEqual([4200, 0]);
+});
+
+test("tool duration stays separate from model time through confirmation, replay and persistence", () => {
+    const traces = new Map();
+    iteration(traces, { phase: "result_received", duration_ms: 4200, duration_kind: "model_round_trip" });
+    tool(traces, "tool_call_completed", { status: "waiting_confirmation", duration_ms: null });
+    const tc = traces.get("parent").iterations.get("r1").toolCalls.get("r1-call");
+    expect(tc.duration_ms).toBe(null);
+    tool(traces, "tool_call_completed", { status: "completed", success: true, duration_ms: 16000 });
+    tool(traces, "tool_call_completed", { status: "waiting_confirmation", duration_ms: null });
+    const restored = hydrateTrace(JSON.parse(JSON.stringify(serializeTrace(traces.get("parent")))));
+    const round = restored.iterations.get("r1");
+    expect(round.duration_ms).toBe(4200);
+    expect(round.toolCalls.get("r1-call").duration_ms).toBe(16000);
+    const partial = new Map();
+    tool(partial, "tool_call_completed", { status: "completed", duration_ms: 0 });
+    expect(partial.get("parent").iterations.get("r1").toolCalls.get("r1-call").duration_ms).toBe(0);
+});

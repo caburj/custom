@@ -11,6 +11,11 @@
             <span t-elif="this.props.toolCall.success" class="ai-detail-meta success">Success</span>
             <span t-else="" class="ai-detail-meta error">Failed</span>
             <span t-if="this.props.toolCall.child_phase" class="ai-detail-meta">Child applied</span>
+            <span t-if="this.props.toolCall.duration_ms !== null and this.props.toolCall.duration_ms !== undefined"
+                  class="ai-metric-chip"
+                  title="Tool duration, including any confirmation, user-input, or subagent wait.">
+                <t t-out="this.formatDuration(this.props.toolCall.duration_ms)"/>
+            </span>
             <CopyButton content="() => this.fullToolCallJson" successText="'Copied!'" className="'ms-auto'"/>
         </div>
 

@@ -1,4 +1,5 @@
 import json
+import time
 from textwrap import dedent
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +9,7 @@ from odoo.modules.registry import Registry
 from odoo.tests import HttpCase, TransactionCase, new_test_user, tagged
 
 from odoo.addons.ai.models.ai_session import AiSession as EnterpriseAiSession
+from odoo.addons.ai.models.ir_actions_server import IrActionsServer as EnterpriseActions
 from odoo.addons.ai.utils.ai_utils import UserInputResponse
 from odoo.addons.ai_debug.models.ai_session import AiSession as DebugAiSession
 
@@ -143,6 +145,230 @@ class TestAiDebugCallback(TransactionCase):
         self.assertIn('The answer', str(terminal['final_output']))
         self.assertEqual(terminal['termination_reason'], 'success')
         self.assertEqual([e['round_no'] for e in self._events(events, 'iteration', phase='result_received')], [1, 2])
+
+    def test_model_round_duration_excludes_tools_and_restarts_per_request(self):
+        tool = self._create_callback_tool('timed_round_tool', "ai['result'] = 'Done'")
+        self._enable_fixture_tools(self.session, tool)
+        events = []
+        original_tools = EnterpriseAiSession._handle_tool_calls
+
+        def slow_tools(session, *args, **kwargs):
+            clock.time_ns.return_value = 20_000_000_000
+            yield from original_tools(session, *args, **kwargs)
+
+        with (
+            patch('odoo.addons.ai_debug.models.ai_session.time', wraps=time) as clock,
+            patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
+            patch.object(EnterpriseAiSession, '_handle_tool_calls', slow_tools),
+        ):
+            clock.time_ns.return_value = 1_000_000_000
+            session, first = self._prepare()
+            self.assertIsNone(self._events(events, 'iteration')[-1]['duration_ms'])
+            # The callback uses persisted metadata, including in a new worker.
+            session.invalidate_recordset(['request_context'])
+            clock.time_ns.return_value = 4_000_000_000
+            self._consume(session, self._tool_result(tool, 'timed'))
+            second_uuid = session.request_uuid
+            self.assertNotEqual(first.request_uuid, second_uuid)
+            clock.time_ns.return_value = 22_000_000_000
+            self._consume(session, assistant_text('Done'))
+        rounds = self._events(events, 'iteration', phase='result_received')
+        self.assertEqual([(item['request_uuid'], item['duration_ms']) for item in rounds],
+                         [(first.request_uuid, 3000), (second_uuid, 2000)])
+        self.assertTrue(all(item['duration_kind'] == 'model_round_trip' for item in rounds))
+
+    def test_tool_duration_includes_confirmation_until_accepted_or_declined(self):
+        tool = self._create_callback_tool('timed_confirmation', """
+if not ai['tool_request_confirmed']:
+    ai['user_input_request'] = {
+        'type': 'confirmation', 'body': 'Proceed?',
+        'choices': [
+            {'label': 'Yes', 'value': 'confirm_once'},
+            {'label': 'No', 'value': 'decline'},
+        ],
+    }
+else:
+    ai['result'] = 'Confirmed'
+""")
+        self._enable_fixture_tools(self.session, tool)
+        for choice in (UserInputResponse.CONFIRM_ONCE, UserInputResponse.DECLINE):
+            with self.subTest(choice=choice):
+                events = []
+                with (
+                    patch('odoo.addons.ai_debug.models.ai_session.time', wraps=time) as clock,
+                    patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
+                ):
+                    clock.time_ns.return_value = 1_000_000_000
+                    session, first = self._prepare()
+                    clock.time_ns.return_value = 4_000_000_000
+                    self._consume(session, self._tool_result(tool, 'confirm'))
+                    self.assertEqual(session.loop_state, 'waiting_confirmation')
+                    waiting, = self._events(events, 'tool_call_completed', status='waiting_confirmation')
+                    self.assertIsNone(waiting['duration_ms'])
+                    session.invalidate_recordset(['request_context'])
+                    clock.time_ns.return_value = 20_000_000_000
+                    session._resume_pending_interaction({'kind': 'confirmation', 'value': choice})
+                    completed, = self._events(events, 'tool_call_completed', status='completed')
+                    self.assertEqual(completed['duration_ms'], 16000)
+                    received, = self._events(events, 'iteration', phase='result_received')
+                    self.assertEqual(received['duration_ms'], 3000)
+                    if choice == UserInputResponse.CONFIRM_ONCE:
+                        self.assertEqual(session.loop_state, 'waiting_model')
+                        clock.time_ns.return_value = 22_000_000_000
+                        self._consume(session, assistant_text('Done'))
+                    else:
+                        self.assertEqual(session.loop_state, 'ready')
+
+    def test_child_tool_duration_stops_before_parent_continuation(self):
+        self.agent.allowed_agent_ids = self.agent
+        events = []
+        original_merge = EnterpriseAiSession._merge_child_result
+
+        def slow_parent(session, child, result):
+            clock.time_ns.return_value = 20_000_000_000
+            return original_merge(session, child, result)
+
+        with (
+            patch('odoo.addons.ai_debug.models.ai_session.time', wraps=time) as clock,
+            patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
+            patch.object(EnterpriseAiSession, '_merge_child_result', slow_parent),
+        ):
+            clock.time_ns.return_value = 1_000_000_000
+            parent, first = self._prepare()
+            clock.time_ns.return_value = 4_000_000_000
+            start = self.env.ref('ai.ir_actions_server_start_session')
+            self._consume(parent, self._tool_result(start, 'child', {
+                'agent_id': self.agent.id, 'message': 'Help me',
+            }))
+            self.assertEqual(parent.loop_state, 'waiting_child')
+            child = self.env['ai.session'].browse(parent.pending_tool_call['pending_results'][0]['child_session_id'])
+            child_uuid = child.request_uuid
+            clock.time_ns.return_value = 10_000_000_000
+            self._consume(child, assistant_text('Done'))
+        completed, = self._events(events, 'tool_call_completed', call_id='child')
+        self.assertEqual(completed['duration_ms'], 6000)
+        self.assertEqual(completed['request_uuid'], first.request_uuid)
+
+    def test_each_tool_in_a_batch_has_its_own_duration(self):
+        first = self._create_callback_tool('timed_first', "ai['result'] = 'First'")
+        second = self._create_callback_tool('timed_second', "ai['result'] = 'Second'")
+        failed = self._create_callback_tool('timed_failure', "raise UserError('Fixture failure')")
+        tools = first | second | failed
+        self._enable_fixture_tools(self.session, tools)
+        durations = {first.id: 800, second.id: 1200, failed.id: 450}
+        calls = [self._tool_result(tool, tool.ai_tool_name)['content'][0] for tool in tools]
+        original = EnterpriseActions._ai_tool_run
+
+        def run(action, record, arguments, tools_context):
+            clock.time_ns.return_value += durations[action.id] * 1_000_000
+            clock.monotonic.return_value += durations[action.id] / 1000
+            return original(action, record, arguments, tools_context)
+
+        for direct in (False, True):
+            with self.subTest(direct=direct):
+                events = []
+                with (
+                    patch('odoo.addons.ai_debug.models.ai_session.time', wraps=time) as clock,
+                    patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
+                    patch.object(EnterpriseActions, '_ai_tool_run', run),
+                    patch.object(EnterpriseAiSession, '_get_completions', side_effect=[
+                        {'result': {'role': 'assistant', 'content': calls}},
+                        {'result': assistant_text('Done')},
+                    ]),
+                ):
+                    clock.time_ns.return_value = 1_000_000_000
+                    clock.monotonic.return_value = 100
+                    if direct:
+                        self.env['ai.session']._get_direct_response(
+                            instructions='Run tools.', message=[{'type': 'text', 'text': 'Hi'}], tools=tools,
+                        )
+                    else:
+                        session, _request = self._prepare()
+                        clock.time_ns.return_value = 4_000_000_000
+                        self._consume(session, {'role': 'assistant', 'content': calls})
+                        self._consume(session, assistant_text('Done'))
+                completed = self._events(events, 'tool_call_completed')
+                self.assertEqual([(item['call_id'], item['duration_ms']) for item in completed],
+                                 [('timed_first', 800), ('timed_second', 1200), ('timed_failure', 450)])
+                self.assertFalse(completed[-1]['success'])
+
+    def test_client_tool_duration_ends_before_the_following_tool_runs(self):
+        client = self._create_callback_tool('timed_client',
+            "ai['result'] = {'client_tool': {'name': 'timed_client', 'params': {}}}")
+        following = self._create_callback_tool('timed_following', "ai['result'] = 'Done'")
+        self._enable_fixture_tools(self.session, client | following)
+        original = EnterpriseActions._ai_tool_run
+        events = []
+
+        def run(action, record, arguments, tools_context):
+            if action == following:
+                clock.time_ns.return_value += 5_000_000_000
+            return original(action, record, arguments, tools_context)
+
+        with (
+            patch('odoo.addons.ai_debug.models.ai_session.time', wraps=time) as clock,
+            patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
+            patch.object(EnterpriseActions, '_ai_tool_run', run),
+        ):
+            clock.time_ns.return_value = 1_000_000_000
+            session, _request = self._prepare()
+            clock.time_ns.return_value = 4_000_000_000
+            self._consume(session, {'role': 'assistant', 'content': [
+                self._tool_result(tool, tool.ai_tool_name)['content'][0] for tool in (client | following)
+            ]})
+            self.assertEqual(session.loop_state, 'waiting_client_result')
+            session.invalidate_recordset(['request_context'])
+            clock.time_ns.return_value = 20_000_000_000
+            session._resume_pending_interaction({'kind': 'client_result', 'value': 'Done'})
+        completed = self._events(events, 'tool_call_completed')
+        self.assertEqual([(item['call_id'], item['duration_ms']) for item in completed],
+                         [('timed_client', 16000), ('timed_following', 5000)])
+
+    def test_model_round_without_start_keeps_unknown_duration(self):
+        events = []
+        with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
+            session, _request = self._prepare()
+            context = dict(session.request_context)
+            context.pop('_ai_debug_round_started_at_ms')
+            session.request_context = context
+            self._consume(session, assistant_text('Done'))
+        received, = self._events(events, 'iteration', phase='result_received')
+        self.assertIsNone(received['duration_ms'])
+        self.assertIsNone(received['duration_kind'])
+
+    def test_direct_model_round_duration_excludes_tool_time(self):
+        tool = self._create_callback_tool('timed_direct_tool', "ai['result'] = 'Done'")
+        events = []
+        original_tools = EnterpriseAiSession._handle_tool_calls
+        completions = iter([
+            (1.5, self._tool_result(tool, 'timed')),
+            (2.25, assistant_text('Done')),
+        ])
+
+        def complete(*args, **kwargs):
+            duration, message = next(completions)
+            clock.monotonic.return_value += duration
+            return {'result': message}
+
+        def slow_tools(session, *args, **kwargs):
+            clock.monotonic.return_value += 10
+            yield from original_tools(session, *args, **kwargs)
+
+        with (
+            patch('odoo.addons.ai_debug.models.ai_session.time', wraps=time) as clock,
+            patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
+            patch.object(EnterpriseAiSession, '_get_completions', side_effect=complete),
+            patch.object(EnterpriseAiSession, '_handle_tool_calls', slow_tools),
+        ):
+            clock.monotonic.return_value = 100
+            self.env['ai.session']._get_direct_response(
+                instructions='Use the tool.', message=[{'type': 'text', 'text': 'Hi'}], tools=tool,
+            )
+        rounds = self._events(events, 'iteration')
+        self.assertEqual([item['duration_ms'] for item in rounds], [1500, 2250])
+        self.assertTrue(all(item['duration_kind'] == 'model_round_trip' for item in rounds))
+        terminal, = self._events(events, 'loop_end')
+        self.assertEqual(terminal['duration_ms'], 13750)
 
     def test_combined_tool_final_preserves_completion_and_output(self):
         tool = self._create_callback_tool('ai_debug_combined_final',
@@ -926,8 +1152,39 @@ class TestAiDebugHttp(HttpCase):
 
     def test_debugger_page_mounts(self):
         self.browser_js(
-            url_path='/ai-debug',
-            code="console.log('test successful');",
-            ready="document.querySelector('.ai-debug-header') !== null",
+            url_path='/ai-debug?debug=assets',
+            ready="Boolean(document.querySelector('.ai-debug-header') && odoo.__WOWL_DEBUG__?.root)",
             login='admin',
+            code="""
+                const root = odoo.__WOWL_DEBUG__.root;
+                root.state.ephemeralMode = true;
+                root._onTraceEvent({type: "new_trace", trace_id: "timed-trace", agent_name: "Timing"});
+                root._onTraceEvent({type: "iteration", trace_id: "timed-trace",
+                    iteration_id: "timed-round", round_no: 1, phase: "result_received",
+                    duration_ms: 4200, duration_kind: "model_round_trip"});
+                root._onTraceEvent({type: "tool_call_completed", trace_id: "timed-trace",
+                    iteration_id: "timed-round", round_no: 1, tool_call_id: "timed-tool",
+                    tool_name: "accounting_report_describe", duration_ms: 800, success: true});
+                root.selectItem("timed-round", "iteration");
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                    const row = document.querySelector('[data-node-id="timed-round"]');
+                    const chip = document.querySelector(".ai-detail-header .ai-metric-chip");
+                    const toolRow = document.querySelector('[data-node-id="timed-tool"]');
+                    if (!row?.textContent.includes("4.2s") || row.textContent.includes("total")
+                        || !toolRow?.textContent.includes("800ms")
+                        || !chip?.textContent.includes("Model round trip:")
+                        || !chip.textContent.includes("4.2s")
+                        || !chip.title.includes("Excludes tool execution and user input")) {
+                        throw new Error("Model round duration or its explanation is missing");
+                    }
+                    root.selectItem("timed-tool", "tool_call");
+                    requestAnimationFrame(() => requestAnimationFrame(() => {
+                        const duration = document.querySelector(".ai-detail-header .ai-metric-chip");
+                        if (!duration?.textContent.includes("800ms")) {
+                            throw new Error("Tool detail duration is missing");
+                        }
+                        console.log("test successful");
+                    }));
+                }));
+            """,
         )

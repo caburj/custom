@@ -6,6 +6,7 @@ import { useService } from "@web/core/utils/hooks";
 import { JsonTree } from "./json_tree";
 import { TextPopupDialog } from "./text_popup";
 import { ImagePopupDialog } from "./image_popup";
+import { formatDuration } from "../format_metrics";
 
 function parseJsonContentData(part) {
     const data = part?.type === "text" ? part.content?.data : undefined;
@@ -31,6 +32,7 @@ export class ToolCallDetail extends Component {
     };
 
     setup() {
+        this.formatDuration = formatDuration;
         try {
             this.dialog = useService("dialog");
         } catch {
@@ -56,6 +58,7 @@ export class ToolCallDetail extends Component {
             summary: tc.summary,
             args: tc.args,
             result: tc.result,
+            duration_ms: tc.duration_ms,
         }, null, 2);
     }
 

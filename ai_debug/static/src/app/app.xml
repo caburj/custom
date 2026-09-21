@@ -159,7 +159,10 @@
                                     &#xB7; <t t-out="node.iter.toolCalls.size"/> call<t t-if="node.iter.toolCalls.size !== 1">s</t>
                                 </span>
                                 <t t-if="node.iter.duration_ms !== null and node.iter.duration_ms !== undefined">
-                                    <span class="ai-tree-label-dim"> &#xB7; <t t-out="this.formatDuration(node.iter.duration_ms)"/></span>
+                                    <span class="ai-tree-label-dim"
+                                          t-att-title="node.iter.duration_kind === 'model_round_trip' ? 'Time from preparing the model request to receiving its response, including queueing and network time. Excludes tool execution and user input.' : undefined">
+                                        &#xB7; <t t-out="this.formatDuration(node.iter.duration_ms)"/>
+                                    </span>
                                 </t>
                                 <t t-elif="node.trace.status === 'running' and node.id === [...node.trace.iterations.keys()].pop()">
                                     <span class="ai-tree-label-dim"> &#xB7; <span class="ai-debug-pulse-dot tiny"/></span>
@@ -188,6 +191,11 @@
                             <span class="ai-tree-label"
                                   t-on-click="() => this.selectItem(node.id, 'tool_call')">
                                 <t t-out="node.tc.tool_name"/>
+                                <span t-if="node.tc.duration_ms !== null and node.tc.duration_ms !== undefined"
+                                      class="ai-tree-label-dim"
+                                      title="Tool duration, including any confirmation, user-input, or subagent wait.">
+                                    &#xB7; <t t-out="this.formatDuration(node.tc.duration_ms)"/>
+                                </span>
                             </span>
                             <span t-if="node.tc.status === 'running'" class="ai-debug-pulse-dot tiny"/>
                             <span t-elif="node.tc.status === 'waiting_confirmation'" class="ai-tree-label-dim">confirmation</span>
