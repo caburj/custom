@@ -35,7 +35,7 @@ class TestAiDebugAssets(TransactionCase):
         self.assertIn("web/static/src/core/dialog/dialog_plugin.js", paths)
         self.assertIn("web/static/src/core/overlay/overlay_container.js", paths)
         self.assertFalse(any(path.startswith("mail/") for path in runtime_paths))
-        self.assertFalse(any(path.startswith(("ai/", "ai_app/")) for path in runtime_paths))
+        self.assertFalse(any(path.startswith(("ai/", "ai_agentic/")) for path in runtime_paths))
         self.assertFalse(
             any(path.startswith("web/static/src/webclient/") for path in runtime_paths)
         )

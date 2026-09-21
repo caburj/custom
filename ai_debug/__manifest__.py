@@ -4,7 +4,7 @@
     'category': 'Technical',
     'author': 'Odoo S.A.',
     'summary': 'Standalone live tracer for the AI agentic loop',
-    'depends': ['ai_app', 'bus'],
+    'depends': ['ai', 'bus'],
     'data': [
         'views/ai_debug_index.xml',
     ],

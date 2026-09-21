@@ -72,7 +72,7 @@ cd /Users/joseph/.wt/worktrees/caburj/custom/master-ai-callback-driven-loop
    ./odoo-bin --addons-path=odoo/addons,enterprise,custom
    ```
 
-2. **Install the `ai_debug` module** (requires `ai_app` and `bus`):
+2. **Install the `ai_debug` module** (requires `ai` and `bus`):
 
    ```bash
    ./odoo-bin --addons-path=odoo/addons,enterprise,custom -d mydb -i ai_debug
