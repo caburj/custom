@@ -402,7 +402,7 @@ def main():
         )))
         consumer_init = [
             str(MASTER_PYTHON), str(CORE / 'odoo-bin'), '-d', CONSUMER_DB,
-            '-i', 'ai_app,ai_debug,ai_debug_callback_consumer_harness', '--stop-after-init',
+            '-i', 'ai_debug,ai_debug_callback_consumer_harness', '--stop-after-init',
             f'--http-port={CONSUMER_PORT}', f'--gevent-port={CONSUMER_GEVENT_PORT}',
             '--addons-path', consumer_addons, '--without-demo',
         ]
