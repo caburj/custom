@@ -13,4 +13,10 @@ class IrActionsServer(models.Model):
                 ai_parent_trace_id=parent_trace_id,
                 ai_parent_tool_call_id=tools_context.get('tool_call_id'),
             )
-        return super()._ai_tool_run(record, arguments, tools_context)
+        timer = self.env.context.get('_ai_debug_tool_timer')
+        if not timer:
+            return super()._ai_tool_run(record, arguments, tools_context)
+        # Multi-actions belong to this same model tool call; time the outer action only.
+        self = self.with_context(_ai_debug_tool_timer=None)
+        with timer(tools_context['tool_call_id']):
+            return super()._ai_tool_run(record, arguments, tools_context)

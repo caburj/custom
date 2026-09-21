@@ -10,7 +10,9 @@
             <span t-if="this.props.iteration.is_final" class="ai-detail-meta">Final</span>
             <span t-if="this.props.iteration.has_error" class="ai-detail-meta error">Error</span>
             <span t-if="this.props.iteration.duration_ms !== null and this.props.iteration.duration_ms !== undefined"
-                  class="ai-metric-chip">
+                  class="ai-metric-chip"
+                  t-att-title="this.props.iteration.duration_kind === 'model_round_trip' ? 'Time from preparing the model request to receiving its response, including queueing and network time. Excludes tool execution and user input.' : undefined">
+                <t t-if="this.props.iteration.duration_kind === 'model_round_trip'">Model round trip: </t>
                 <t t-out="this.formatDuration(this.props.iteration.duration_ms)"/>
                 <t t-if="this.props.iteration.duration_kind === 'request_lifecycle'"> lifecycle</t>
             </span>

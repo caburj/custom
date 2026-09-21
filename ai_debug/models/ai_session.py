@@ -29,6 +29,8 @@ _MAX_IMAGE_DATA_BYTES = 48_000
 _MAX_STRING_CHARS = 64_000
 _REDACTED = "[REDACTED]"
 _AI_DEBUG_EXCHANGE_UUID_CONTEXT_KEY = 'ai_debug_exchange_uuid'
+_AI_DEBUG_ROUND_START_CONTEXT_KEY = '_ai_debug_round_started_at_ms'
+_AI_DEBUG_TOOL_TIMINGS_CONTEXT_KEY = '_ai_debug_tool_timings'
 _AI_DEBUG_CALLBACK_CONTEXT_KEY = '_ai_debug_callback_ctx'
 _AI_DEBUG_STORE_CONTEXT_KEY = '_ai_debug_store_ctx'
 _AI_DEBUG_DIRECT_TRACE_CONTEXT_KEY = '_ai_debug_direct_trace'
@@ -622,7 +624,8 @@ class AiSession(models.Model):
         correlation = (store_context['correlation']
                        if store_context and store_context['session_id'] == self.id
                        else self.request_context or {})
-        for key in (_AI_DEBUG_EXCHANGE_UUID_CONTEXT_KEY, '_ai_debug_parent_link'):
+        for key in (_AI_DEBUG_EXCHANGE_UUID_CONTEXT_KEY, '_ai_debug_parent_link',
+                    _AI_DEBUG_ROUND_START_CONTEXT_KEY, _AI_DEBUG_TOOL_TIMINGS_CONTEXT_KEY):
             if key in correlation:
                 snapshot[key] = copy.deepcopy(correlation[key])
         return snapshot
@@ -699,7 +702,7 @@ class AiSession(models.Model):
             'target_user_id': request['user_id'],
             'events': [],
             'started_tool_call_ids': set(),
-            'start_times': {},
+            'tool_timings': copy.deepcopy(request['context_snapshot'].get(_AI_DEBUG_TOOL_TIMINGS_CONTEXT_KEY, {})),
         }
         if continuing:
             pending_tool_call = self.pending_tool_call or {}
@@ -763,6 +766,29 @@ class AiSession(models.Model):
             }
         )
 
+    @contextmanager
+    def _ai_debug_time_tool(self, timings, call_id, *, durable):
+        def now_ms():
+            return time.time_ns() // 1_000_000 if durable else int(time.monotonic() * 1000)
+
+        timing = timings.setdefault(call_id, {'started_at_ms': now_ms()})
+        try:
+            yield
+        finally:
+            timing['finished_at_ms'] = now_ms()
+
+    @staticmethod
+    def _ai_debug_tool_duration(timings, call_id):
+        timing = timings.get(call_id)
+        if not timing or 'finished_at_ms' not in timing:
+            return None
+        return max(0, timing['finished_at_ms'] - timing['started_at_ms'])
+
+    @staticmethod
+    def _ai_debug_end_tool_wait(context, call_id):
+        if context and (timing := context['tool_timings'].get(call_id)):
+            timing.setdefault('finished_at_ms', time.time_ns() // 1_000_000)
+
     def _ai_debug_buffer_callback_tool_started(self, context, tool_call):
         """Buffer one start fact without affecting the parent tool generator."""
         try:
@@ -771,7 +797,6 @@ class AiSession(models.Model):
             tool_call_id = self._ai_debug_callback_tool_call_id(
                 context['request_uuid'], tool_call['call_id'],
             )
-            context['start_times'].setdefault(tool_call_id, time.monotonic())
             if tool_call_id in context['started_tool_call_ids']:
                 return tool_call_id
             context['started_tool_call_ids'].add(tool_call_id)
@@ -826,7 +851,8 @@ class AiSession(models.Model):
                 'error': error,
                 'triggered_confirmation': triggered_confirmation,
                 'confirmation_message': confirmation_message,
-                'duration_ms': None,
+                'duration_ms': (None if triggered_confirmation else
+                                self._ai_debug_tool_duration(context['tool_timings'], tool_call['call_id'])),
                 'status': 'waiting_confirmation' if triggered_confirmation else 'completed',
             }))
         except Exception:  # noqa: BLE001
@@ -861,6 +887,7 @@ class AiSession(models.Model):
                         tool_calls, result_item,
                     )
                     if 'child_session_id' in result_item:
+                        context['tool_timings'].get(tool_call['call_id'], {}).pop('finished_at_ms', None)
                         self._ai_debug_buffer_callback_tool_started(context, tool_call)
                         continue
                     self._ai_debug_buffer_callback_tool_completed(
@@ -871,12 +898,15 @@ class AiSession(models.Model):
                     )
 
                 pending_tool_call = item.get('pending_tool_call') or {}
+                if 'call_id' in pending_tool_call:
+                    context['tool_timings'].get(pending_tool_call['call_id'], {}).pop('finished_at_ms', None)
                 user_input_request = item.get('user_input_request') or {}
                 for result_item in pending_tool_call.get('pending_results') or ():
                     tool_call = self._ai_debug_tool_call_from_result(
                         tool_calls, result_item,
                     )
                     if 'child_session_id' in result_item:
+                        context['tool_timings'].get(tool_call['call_id'], {}).pop('finished_at_ms', None)
                         self._ai_debug_buffer_callback_tool_started(context, tool_call)
                         continue
                     self._ai_debug_buffer_callback_tool_completed(
@@ -929,6 +959,8 @@ class AiSession(models.Model):
                 prepared_context['_ai_debug_parent_link'] = parent_link
             else:
                 prepared_context.pop('_ai_debug_parent_link', None)
+            # Wall time survives the transaction/worker boundary to the callback.
+            prepared_context[_AI_DEBUG_ROUND_START_CONTEXT_KEY] = time.time_ns() // 1_000_000
             return prepared_context
 
         correlation = self._ai_debug_try(prepare_context) or {}
@@ -1068,6 +1100,12 @@ class AiSession(models.Model):
 
     def _ai_debug_trace_request_result(self, request, response, outcome, error):
         """Queue one normalized iteration after Enterprise accepts the active UUID."""
+        started_at_ms = request['context_snapshot'].get(_AI_DEBUG_ROUND_START_CONTEXT_KEY)
+        # Capture before normalization and, on callbacks, before any tool execution.
+        duration_ms = (
+            max(0, time.time_ns() // 1_000_000 - started_at_ms)
+            if response and started_at_ms is not None else None
+        )
         normalized_request = self._ai_debug_normalized_request(request)
         normalized_response = self._ai_debug_normalized_response(response)
         result = (
@@ -1107,8 +1145,8 @@ class AiSession(models.Model):
             'provider': provider_metadata.get('provider'),
             'model_name': provider_metadata.get('model'),
             'provider_api': provider_metadata.get('api'),
-            'duration_ms': None,
-            'duration_kind': None,
+            'duration_ms': duration_ms,
+            'duration_kind': 'model_round_trip' if duration_ms is not None else None,
         }, target_user_id=request['user_id'])
 
     def _ai_debug_emit_state(self, request, phase, **values):
@@ -1184,9 +1222,12 @@ class AiSession(models.Model):
     def _abort_pending_tools(self):
         # New messages abort their pending interaction in the controller, before
         # preparing the next exchange. Resume already owns an observation span.
-        if self._ai_debug_active_callback_context():
+        if context := self._ai_debug_active_callback_context():
+            self._ai_debug_end_tool_wait(context, (self.pending_tool_call or {}).get('call_id'))
             return super()._abort_pending_tools()
         with self._ai_debug_transition() as session:
+            session._ai_debug_end_tool_wait(session._ai_debug_active_callback_context(),
+                                            (session.pending_tool_call or {}).get('call_id'))
             return super(AiSession, session)._abort_pending_tools()
 
     def _ai_debug_observe_transition(self, request, context, history_ids):
@@ -1208,6 +1249,10 @@ class AiSession(models.Model):
                 self._ai_debug_buffer_callback_tool_completed(
                     context, call, result=item['result'], success=item.get('success', True),
                 )
+        if self.request_uuid == request['request_uuid'] and self.loop_state != 'ready' and context['tool_timings']:
+            self.request_context = {
+                **self.request_context, _AI_DEBUG_TOOL_TIMINGS_CONTEXT_KEY: context['tool_timings'],
+            }
         self._ai_debug_flush_callback_tool_events(context)
         if not (context.get('finish_status') == 'failed' and request['result'] is None):
             self._ai_debug_emit_state(request, 'result_consumed')
@@ -1266,6 +1311,8 @@ class AiSession(models.Model):
 
     def _resume_pending_interaction(self, response, ai_session_config=None, *, automatic=False):
         with self._ai_debug_transition() as session:
+            session._ai_debug_end_tool_wait(session._ai_debug_active_callback_context(),
+                                            (session.pending_tool_call or {}).get('call_id'))
             return super(AiSession, session)._resume_pending_interaction(
                 response, ai_session_config=ai_session_config, automatic=automatic,
             )
@@ -1279,6 +1326,7 @@ class AiSession(models.Model):
             return
         request = self._ai_debug_try(self._ai_debug_request_snapshot)
         with self._ai_debug_transition() as session:
+            session._ai_debug_end_tool_wait(session._ai_debug_active_callback_context(), marker['tool_call_id'])
             yield session
         still_pending = any(item.get('child_session_id') == child.id
                             for item in (self.pending_tool_call or {}).get('pending_results', []))
@@ -1345,8 +1393,10 @@ class AiSession(models.Model):
                 'request_uuid': context['prepared_iteration_id'],
                 'payload': {'messages': messages, 'instructions': instructions, 'tools': tools, **options},
             }))
+        started_at = time.monotonic()
         result = super()._get_completions(messages, instructions, tools, **options)
         if context is not None:
+            context['model_duration_ms'] = int((time.monotonic() - started_at) * 1000)
             context['raw_response'] = self._ai_debug_try(
                 lambda: self._ai_debug_normalized_messages([result['result']]))
         return result
@@ -1407,6 +1457,7 @@ class AiSession(models.Model):
                     prepared_id = _debug_ctx.pop('prepared_iteration_id', None)
                     iteration_id = prepared_id or uuid.uuid4().hex
                     _debug_ctx['iteration_id'] = iteration_id
+                    duration_ms = _debug_ctx.pop('model_duration_ms', None) if prepared_id else None
                     parts = item.get('tool_calls') or item.get('final_message') or []
                     normalized_response = self._ai_debug_normalized_messages([{
                         'role': 'assistant',
@@ -1425,6 +1476,8 @@ class AiSession(models.Model):
                         }]),
                         'has_tool_calls': 'tool_calls' in item,
                         'is_final': 'final_message' in item,
+                        'duration_ms': duration_ms,
+                        'duration_kind': 'model_round_trip' if duration_ms is not None else None,
                     })
                     if 'final_message' in item:
                         completed = True
@@ -1504,6 +1557,12 @@ class AiSession(models.Model):
             if not _debug_ctx
             else None
         )
+        tool_timings = callback_context['tool_timings'] if callback_context else {}
+        if callback_context or _debug_ctx:
+            def time_tool(call_id):
+                return self._ai_debug_time_tool(tool_timings, call_id, durable=bool(callback_context))
+            tools_by_name = {name: tool.with_context(_ai_debug_tool_timer=time_tool)
+                             for name, tool in tools_by_name.items()}
         if callback_context:
             tools_context['_debug_trace_id'] = callback_context['trace_id']
             yield from self._ai_debug_buffer_callback_tool_items(
@@ -1560,11 +1619,6 @@ class AiSession(models.Model):
                 'args': tc.get('args', {}),
             })
 
-        # Record start time per call_id just before tool execution begins.
-        # For batch execution these are all the same moment, giving us the
-        # aggregate duration from batch start to each individual result.
-        _tc_start_times = {tc['call_id']: time.monotonic() for tc in tool_calls}
-
         for item in super()._handle_tool_calls(
             tool_calls, tools_by_name, tools_context, record,
             pending_tool_response=pending_tool_response,
@@ -1592,7 +1646,6 @@ class AiSession(models.Model):
 
                     _debug_ctx['tool_call_count'] += 1
 
-                    _tc_start = _tc_start_times.get(call_id, time.monotonic())
                     self._ai_debug_bus_send('tool_call_completed', {
                         'type': 'tool_call_completed',
                         'trace_id': _debug_ctx['trace_id'],
@@ -1603,7 +1656,7 @@ class AiSession(models.Model):
                         'result': result,
                         'success': success,
                         'error': error,
-                        'duration_ms': int((time.monotonic() - _tc_start) * 1000),
+                        'duration_ms': self._ai_debug_tool_duration(tool_timings, call_id),
                     })
 
             elif (
@@ -1616,7 +1669,6 @@ class AiSession(models.Model):
                 originating_tc = tool_calls_by_id.get(call_id, {})
                 _debug_ctx['tool_call_count'] += 1
 
-                _tc_start = _tc_start_times.get(call_id, time.monotonic())
                 self._ai_debug_bus_send('tool_call_completed', {
                     'type': 'tool_call_completed',
                     'trace_id': _debug_ctx['trace_id'],
@@ -1630,7 +1682,7 @@ class AiSession(models.Model):
                     'error': None,
                     'triggered_confirmation': True,
                     'confirmation_message': user_input_request.get('body', ''),
-                    'duration_ms': int((time.monotonic() - _tc_start) * 1000),
+                    'duration_ms': None,
                 })
 
             yield item
