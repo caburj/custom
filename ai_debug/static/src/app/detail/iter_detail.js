@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component } from "@odoo/owl";
+import { Component, t, useProps } from "@odoo/owl";
 import { Notebook } from "@web/core/notebook/notebook";
 import { CopyButton } from "@web/core/copy_button/copy_button";
 import { useService } from "@web/core/utils/hooks";
@@ -11,9 +11,9 @@ import { formatTokens, formatDuration } from "../format_metrics";
 export class IterationDetail extends Component {
     static template = "ai_debug.IterationDetail";
     static components = { Notebook, CopyButton, JsonTree };
-    static props = {
-        iteration: { type: Object, optional: true },
-    };
+    props = useProps({
+        iteration: t.object().optional(),
+    });
 
     setup() {
         this.formatTokens = formatTokens;

@@ -1,17 +1,17 @@
 /** @odoo-module **/
-import { Component, onMounted, signal, proxy } from "@odoo/owl";
+import { Component, onMounted, signal, proxy, t, useProps } from "@odoo/owl";
 import { Dialog } from "@web/core/dialog/dialog";
 import { CopyButton } from "@web/core/copy_button/copy_button";
 
 export class TextPopupDialog extends Component {
     static template = "ai_debug.TextPopupDialog";
     static components = { Dialog, CopyButton };
-    static props = {
-        title: String,
-        content: String,
-        language: { type: String, optional: true },
-        close: Function,  // Injected by dialog service
-    };
+    props = useProps({
+        title: t.string(),
+        content: t.string(),
+        language: t.string().optional(),
+        close: t.function(),  // Injected by dialog service
+    });
 
     setup() {
         this.codeRef = signal.ref();
