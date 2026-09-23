@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, onWillUpdateProps, signal, proxy } from "@odoo/owl";
+import { Component, onWillUpdateProps, signal, proxy, t, useProps } from "@odoo/owl";
 import { CopyButton } from "@web/core/copy_button/copy_button";
 
 const TRUNCATION_THRESHOLD = 300;
@@ -7,15 +7,15 @@ const TRUNCATION_THRESHOLD = 300;
 export class JsonTree extends Component {
     static template = "ai_debug.JsonTree";
     static components = { JsonTree, CopyButton };  // Self-reference for recursive rendering
-    static props = {
-        data: { optional: true },       // Any JSON value (may be undefined before data arrives)
-        label: { type: String, optional: true },
-        depth: { type: Number, optional: true },
-        onExpandText: { type: Function, optional: true },  // Callback for long-text popup
-        onExpandImage: { type: Function, optional: true },  // Callback for image popup
-        forceCollapsed: { type: Boolean, optional: true },
-        forceVersion: { type: Number, optional: true },
-    };
+    props = useProps({
+        data: t.any().optional(),       // Any JSON value (may be undefined before data arrives)
+        label: t.string().optional(),
+        depth: t.number().optional(),
+        onExpandText: t.function().optional(),  // Callback for long-text popup
+        onExpandImage: t.function().optional(),  // Callback for image popup
+        forceCollapsed: t.boolean().optional(),
+        forceVersion: t.number().optional(),
+    });
 
     setup() {
         this.imageOverlayRef = signal.ref();

@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component } from "@odoo/owl";
+import { Component, t, useProps } from "@odoo/owl";
 import { Notebook } from "@web/core/notebook/notebook";
 import { CopyButton } from "@web/core/copy_button/copy_button";
 import { useService } from "@web/core/utils/hooks";
@@ -11,9 +11,9 @@ import { extractRagContexts } from "../event_payload";
 export class LoopDetail extends Component {
     static template = "ai_debug.LoopDetail";
     static components = { Notebook, CopyButton, JsonTree };
-    static props = {
-        trace: { type: Object, optional: true },
-    };
+    props = useProps({
+        trace: t.object().optional(),
+    });
 
     setup() {
         try {

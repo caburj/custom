@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component } from "@odoo/owl";
+import { Component, t, useProps } from "@odoo/owl";
 import { Notebook } from "@web/core/notebook/notebook";
 import { CopyButton } from "@web/core/copy_button/copy_button";
 import { useService } from "@web/core/utils/hooks";
@@ -27,9 +27,9 @@ function parseJsonContentData(part) {
 export class ToolCallDetail extends Component {
     static template = "ai_debug.ToolCallDetail";
     static components = { Notebook, CopyButton, JsonTree };
-    static props = {
-        toolCall: { type: Object, optional: true },
-    };
+    props = useProps({
+        toolCall: t.object().optional(),
+    });
 
     setup() {
         this.formatDuration = formatDuration;

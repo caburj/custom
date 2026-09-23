@@ -15,7 +15,6 @@ const AI_DEBUG_CHANNEL = "ai_debug";
 
 export class AiDebugApp extends Component {
     static template = "ai_debug.App";
-    static props = {};
     static components = { LoopDetail, IterationDetail, ToolCallDetail, MainComponentsContainer };
 
     setup() {
