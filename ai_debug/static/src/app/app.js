@@ -43,7 +43,7 @@ export class AiDebugApp extends Component {
         this.formatTokens = formatTokens;
         this.formatDuration = formatDuration;
 
-        // Sidebar DOM ref for auto-scroll
+        // Sidebar DOM ref for the new-trace flash effect
         this.sidebarRef = signal.ref();
         // Select-all checkbox DOM ref for indeterminate state sync
         this.selectAllRef = signal.ref();
@@ -54,19 +54,13 @@ export class AiDebugApp extends Component {
         } catch {
             this.dialog = null;
         }
-        this._needsScroll = false;
         this._flashId = null;
-        this._lastArrivedId = null;
         // Every captured event is immediately inspectable and persisted, including
         // partial children whose parent has not reached this browser yet.
         this._onTraceEvent = (payload) => {
             const isNew = !this.traces.has(payload.trace_id);
             const trace = reduceTraceEvent(this.traces, payload, () => proxy(new Map()));
             if (!trace) return;
-            if (isNew || payload.type === "iteration") {
-                this._lastArrivedId = payload.iteration_id ?? payload.trace_id;
-                this._needsScroll = true;
-            }
             if (isNew) this._flashId = payload.trace_id;
             if (this.state.selectedId === null) {
                 this.state.selectedId = trace.trace_id;
@@ -146,21 +140,12 @@ export class AiDebugApp extends Component {
         });
 
         // ----------------------------------------------------------------
-        // Post-render: auto-scroll to newest item + flash effect
+        // Post-render: checkbox state and new-trace flash effect
         // ----------------------------------------------------------------
         onPatched(() => {
             // Indeterminate state for select-all checkbox (DOM property, not HTML attribute)
             if (this.selectAllRef()) {
                 this.selectAllRef().indeterminate = this.someChecked;
-            }
-            if (this._needsScroll && this._lastArrivedId && this.sidebarRef()) {
-                const el = this.sidebarRef().querySelector(
-                    `[data-node-id="${this._lastArrivedId}"]`,
-                );
-                if (el) {
-                    el.scrollIntoView({ behavior: "smooth", block: "nearest" });
-                }
-                this._needsScroll = false;
             }
             if (this._flashId && this.sidebarRef()) {
                 const el = this.sidebarRef().querySelector(
