@@ -6,7 +6,7 @@ import { useService } from "@web/core/utils/hooks";
 import { JsonTree } from "./json_tree";
 import { TextPopupDialog } from "./text_popup";
 import { ImagePopupDialog } from "./image_popup";
-import { formatTokens, formatDuration } from "../format_metrics";
+import { formatCount, formatCredits, formatDuration } from "../format_metrics";
 
 export class IterationDetail extends Component {
     static template = "ai_debug.IterationDetail";
@@ -16,8 +16,9 @@ export class IterationDetail extends Component {
     });
 
     setup() {
-        this.formatTokens = formatTokens;
         this.formatDuration = formatDuration;
+        this.formatCount = formatCount;
+        this.formatCredits = formatCredits;
         try {
             this.dialog = useService("dialog");
         } catch {
@@ -50,5 +51,4 @@ export class IterationDetail extends Component {
     get toolsJson() {
         return JSON.stringify(this.props.iteration.tools, null, 2);
     }
-
 }

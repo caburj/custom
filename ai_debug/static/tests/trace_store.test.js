@@ -23,14 +23,33 @@ test("prepared iteration is updated in place without discarding tools or receive
     iteration(traces, { request_body: { messages: ["submitted"], tools: ["delegate"] } });
     tool(traces);
     const iter = traces.get("parent").iterations.get("r1");
-    iteration(traces, { phase: "result_received", raw_response: { status: "success" } });
-    iteration(traces, { raw_response: null });
+    iteration(traces, {
+        phase: "result_received",
+        raw_response: { status: "success" },
+        usage: { input: 120, cached_input: 40, output: { text: 25, image: 0 }, thought: 5 },
+        provider: "google",
+        cost: 0.00234,
+    });
+    iteration(traces, { raw_response: null, usage: null, cost: null });
     expect(traces.get("parent").iterations.size).toBe(1);
     expect(iter.toolCalls.size).toBe(1);
     expect(iter.raw_response).toEqual({ status: "success" });
     expect(iter.phase).toBe("result_received");
     expect(iter.messages_sent).toEqual(["submitted"]);
-    expect(iter.tokens).toBe(null);
+    expect(iter.tokens).toEqual({
+        input: 120,
+        output: 30,
+        cache_read: 40,
+        reasoning: 5,
+        output_text: 25,
+        output_image: 0,
+        web_search: null,
+        total: 150,
+    });
+    expect(iter.cost).toBe(0.00234);
+    const restored = hydrateTrace(serializeTrace(traces.get("parent"))).iterations.get("r1");
+    expect(restored.tokens).toEqual(iter.tokens);
+    expect(restored.cost).toBe(iter.cost);
     expect(iter.duration_ms).toBe(null);
 });
 
@@ -151,7 +170,6 @@ test("a late lower phase cannot replace consumed state and a new request can sta
     expect(traces.get("parent").request_state).toBe("waiting_model");
 });
 
-
 test("child application does not freeze the parent interaction phase", () => {
     const traces = new Map();
     const state = { request_uuid: "r1", iteration_id: "r1", round_no: 1, phase: "result_consumed" };
@@ -161,7 +179,6 @@ test("child application does not freeze the parent interaction phase", () => {
     expect(traces.get("parent").request_state).toBe("waiting_confirmation");
     expect(traces.get("parent").iterations.get("r1").request_state).toBe("waiting_confirmation");
 });
-
 
 test("thinking progress stays on its tool and survives persistence without completing it", () => {
     const traces = new Map();

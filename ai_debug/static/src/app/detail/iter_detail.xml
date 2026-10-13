@@ -16,10 +16,20 @@
                 <t t-out="this.formatDuration(this.props.iteration.duration_ms)"/>
                 <t t-if="this.props.iteration.duration_kind === 'request_lifecycle'"> lifecycle</t>
             </span>
-            <span t-if="this.props.iteration.tokens and this.props.iteration.tokens.total > 0"
-                  class="ai-metric-chip">
-                <t t-out="this.formatTokens(this.props.iteration.tokens.total)"/> tok
-            </span>
+            <span t-if="this.props.iteration.ai_provider" class="ai-detail-meta" t-out="this.props.iteration.ai_provider"/>
+            <span t-if="this.props.iteration.model_name" class="ai-detail-meta" t-out="this.props.iteration.model_name"/>
+        </div>
+        <t t-set="tokens" t-value="this.props.iteration.tokens"/>
+        <div t-if="tokens or this.props.iteration.cost != null" class="ai-usage-summary">
+            <t t-if="tokens">
+                <span>Input <strong t-out="this.formatCount(tokens.input)"/></span>
+                <span title="Included in input tokens">Cached <strong t-out="this.formatCount(tokens.cache_read)"/></span>
+                <span>Output <strong t-out="this.formatCount(tokens.output)"/>
+                    <small class="ms-1 text-muted">(<t t-out="this.formatCount(tokens.output_text)"/> text · <t t-out="this.formatCount(tokens.reasoning)"/> reasoning<t t-if="tokens.output_image"> · <t t-out="this.formatCount(tokens.output_image)"/> image</t>)</small>
+                </span>
+                <span>Total <strong t-out="this.formatCount(tokens.total)"/></span>
+            </t>
+            <span t-if="this.props.iteration.cost != null">Credits <strong t-out="this.formatCredits(this.props.iteration.cost)"/></span>
         </div>
 
         <!-- Error banner if iteration has error -->

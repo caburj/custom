@@ -12,11 +12,12 @@ from odoo.addons.iap import InsufficientCreditError
 from odoo.tools import hmac
 from odoo.addons.ai_debug.models.ai_session import AiSession as DebugAiSession
 from odoo.addons.ai.models.ai_session import AiSession as EnterpriseAiSession
+from odoo.addons.ai.tests.common import COMPLETION_METRICS
 from odoo.addons.base.tests.files import PNG_B64
 
 
 def assistant(content):
-    return {'role': 'assistant', 'content': content}
+    return {'role': 'assistant', 'content': content, 'provider_metadata': {}}
 
 
 @tagged('post_install', '-at_install')
@@ -50,7 +51,7 @@ class TestAiDebugAtomicCallback(HttpCase):
 
             def delegate(parent):
                 with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None):
-                    parent._continue_agent_loop({'kind': 'success', 'message': assistant([{
+                    parent._continue_agent_loop({**COMPLETION_METRICS, 'kind': 'success', 'message': assistant([{
                         'type': 'tool_call', 'name': 'ai_tool_start_session', 'call_id': 'child',
                         'args': {'agent_id': agent.id, 'message': 'Fixture child'},
                     }])})
@@ -133,11 +134,11 @@ class TestAiDebugAtomicCallback(HttpCase):
                                   'feedback': 'Here is the image', 'aspect_ratio': '1:1'}}]
                        if image else [{'type': 'text', 'text': 'Child result'}])
             payload = {'request_uuid': fixture['uuid'], 'llm_error': False,
-                       'llm_result': {'status': 'success', 'result': assistant(content)}}
+                       'llm_result': {**COMPLETION_METRICS, 'status': 'success', 'result': assistant(content)}}
             payload['signature'] = hmac(None, 'odoo_ai-webhook', (fixture['uuid'], payload['llm_result'], False), secret=fixture['secret'])
             with (
                 patch.object(DebugAiSession, '_continue_agent_loop', retry_before_commit),
-                patch.object(EnterpriseAiSession, '_get_completions', return_value={'result': assistant([
+                patch.object(EnterpriseAiSession, '_get_completions', return_value={**COMPLETION_METRICS, 'result': assistant([
                     {'type': 'inline_data', 'mimetype': 'image/png', 'data': PNG_B64},
                 ])}),
                 patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None) as transport,
@@ -198,21 +199,21 @@ class TestAiDebugAtomicCallback(HttpCase):
                         callback_type='channel_name', request_round=1, request_round_limit=1, state={},
                     )
                 elif kind == 'child':
-                    root._continue_agent_loop({'kind': 'success', 'message': assistant([{
+                    root._continue_agent_loop({**COMPLETION_METRICS, 'kind': 'success', 'message': assistant([{
                         'type': 'tool_call', 'name': 'ai_tool_start_session', 'call_id': 'rejected-child',
                         'args': {'agent_id': fixture['agent'], 'message': 'Child task'},
                     }])})
                     target = env['ai.session'].browse(root.pending_tool_call['pending_results'][0]['child_session_id'])
                     self.assertEqual(root.loop_state, 'waiting_child')
                 elif kind == 'followup':
-                    root._continue_agent_loop({'kind': 'success', 'message': assistant([{
+                    root._continue_agent_loop({**COMPLETION_METRICS, 'kind': 'success', 'message': assistant([{
                         'type': 'tool_call', 'name': 'ai_tool_load_skills', 'call_id': 'load',
                         'args': {'skill_ids': [env.ref('ai.ai_skill_generate_image').id]},
                     }])})
                     target = root
                     self.assertEqual(target.request_round, 2)
                 else:
-                    root._continue_agent_loop({'kind': 'success', 'message': assistant([{'type': 'text', 'text': 'Done'}])})
+                    root._continue_agent_loop({**COMPLETION_METRICS, 'kind': 'success', 'message': assistant([{'type': 'text', 'text': 'Done'}])})
                     root._submit_agent_request([{'type': 'text', 'text': 'New exchange'}])
                     target = root
                 target_id = target.id

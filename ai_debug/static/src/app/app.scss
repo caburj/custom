@@ -984,3 +984,84 @@ pre.ai-popup-content.ai-popup-nowrap {
     border-radius: 4px;
     object-fit: contain;
 }
+
+// Usage shares the debugger's existing palette in light and dark themes.
+.ai-usage-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    padding: 10px 16px;
+    border-bottom: 1px solid $border-color;
+    font-variant-numeric: tabular-nums;
+}
+
+.ai-usage-scroll {
+    overflow-x: auto;
+}
+
+.ai-usage-table {
+    width: 100%;
+    font-variant-numeric: tabular-nums;
+
+    caption {
+        caption-side: top;
+        color: inherit;
+        padding: 8px 0;
+    }
+
+    th, td {
+        padding: 10px 12px;
+        border-bottom: 1px solid $border-color;
+        text-align: right;
+    }
+
+    th:first-child {
+        text-align: left;
+    }
+
+    tbody th {
+        font-weight: normal;
+    }
+
+    tfoot {
+        font-weight: 600;
+    }
+}
+
+.ai-usage-note {
+    margin: 12px 0;
+}
+
+.ai-usage-table .o_ai_debug_usage_agent {
+    background-color: rgba($o-gray-500, 0.08);
+
+    td, th {
+        font-weight: 600;
+    }
+}
+
+.o_ai_debug_usage_label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+}
+
+.o_ai_debug_usage_toggle {
+    flex: 0 0 28px;
+    width: 28px;
+    min-height: 28px;
+    padding: 0;
+    color: inherit;
+}
+
+.o_ai_debug_usage_identity {
+    min-width: 0;
+    max-width: 220px;
+}
+
+.o_ai_debug_usage_query {
+    overflow: hidden;
+    font-weight: normal;
+    text-overflow: ellipsis;
+}

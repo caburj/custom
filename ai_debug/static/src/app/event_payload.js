@@ -1,16 +1,22 @@
 /** @odoo-module **/
 
-export function normalizeTokens(tokens) {
-    if (!tokens || typeof tokens !== "object" || Array.isArray(tokens)) {
-        return null;
-    }
+/**
+ * @param {{input: number, cached_input: number, output: {text: number, image: number}, thought: number, web_search?: number}} usage
+ * @param {string} provider
+ */
+export function normalizeUsage(usage, provider) {
+    // Google reports thoughts separately; OpenAI includes them in output.text.
+    const output =
+        usage.output.text + usage.output.image + (provider === "google" ? usage.thought : 0);
     return {
-        input: tokens?.input ?? 0,
-        output: tokens?.output ?? 0,
-        cache_read: tokens?.cached ?? tokens?.cache_read ?? 0,
-        cache_write: tokens?.cache_write ?? 0,
-        reasoning: tokens?.reasoning ?? 0,
-        total: tokens?.total ?? 0,
+        input: usage.input,
+        output,
+        cache_read: usage.cached_input,
+        reasoning: usage.thought,
+        output_text: usage.output.text - (provider === "openai" ? usage.thought : 0),
+        output_image: usage.output.image,
+        web_search: usage.web_search ?? null,
+        total: usage.input + output,
     };
 }
 

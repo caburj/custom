@@ -8,7 +8,7 @@ import { ToolCallDetail } from "./detail/tc_detail";
 import { probeIDB, writeTrace, deleteTraces, loadAllTraces, serializeTrace } from "./db";
 import { ImportPreviewDialog } from "./import_dialog";
 import { TextPopupDialog } from "./detail/text_popup";
-import { formatTokens, formatDuration } from "./format_metrics";
+import { formatTokens, formatDuration, formatCredits, getTraceTotals } from "./format_metrics";
 import { reduceTraceEvent, collectSidebarNodes, parentTool, hydrateTrace } from "./trace_store";
 
 const AI_DEBUG_CHANNEL = "ai_debug";
@@ -41,6 +41,8 @@ export class AiDebugApp extends Component {
 
         // Formatting utilities bound for template use (Phase 18)
         this.formatTokens = formatTokens;
+        this.formatCredits = formatCredits;
+        this.getTraceTotals = getTraceTotals;
         this.formatDuration = formatDuration;
 
         // Sidebar DOM ref for the new-trace flash effect
@@ -387,6 +389,35 @@ export class AiDebugApp extends Component {
         return collectSidebarNodes(this.traces);
     }
 
+    /** @param {{ trace_id: string }} trace */
+    getTraceFamily(trace) {
+        return [
+            trace,
+            ...this._collectDescendantIds(trace.trace_id).map((id) => this.traces.get(id)),
+        ];
+    }
+
+    /**
+     * @param {{ trace_id: string }} trace
+     * @param {{ iteration_id: string }} iteration
+     * @returns {number | null}
+     */
+    getIterationSubagentCost(trace, iteration) {
+        const descendants = [];
+        for (const child of this.traces.values()) {
+            if (child.parent_trace_id !== trace.trace_id) {
+                continue;
+            }
+            const requestId =
+                parentTool(this.traces, child)?.iteration.iteration_id ?? child.parent_request_uuid;
+            if (requestId === iteration.iteration_id) {
+                descendants.push(...this.getTraceFamily(child));
+            }
+        }
+        const totals = getTraceTotals(descendants);
+        return totals.cost_count ? totals.total_cost : null;
+    }
+
     /**
      * Recursively collect all descendant trace IDs of a given trace.
      * A descendant is any trace whose parent_trace_id matches traceId,
@@ -406,53 +437,6 @@ export class AiDebugApp extends Component {
             }
         }
         return descendants;
-    }
-
-    /**
-     * Compute trace-level token and timing aggregates across all iterations.
-     *
-     * Called from OWL templates — reading iter.tokens and iter.duration_ms through
-     * the reactive proxy chain (trace.iterations.values()) triggers re-render whenever
-     * any iteration's token data changes. This is the reactive data layer for SIDE-02:
-     * Phase 18 templates reading getTraceTotals(trace).total_tokens will re-render as
-     * each new iteration event arrives.
-     *
-     * Returns raw numbers only — no formatting (Phase 18's concern).
-     *
-     * @param {object} trace - reactive trace object with iterations Map
-     * @returns {{ total_tokens, total_duration_ms, total_input, total_output, total_cached, total_reasoning }}
-     */
-    getTraceTotals(trace) {
-        let total_tokens = 0, total_duration_ms = 0,
-            total_input = 0, total_output = 0,
-            total_cached = 0, total_reasoning = 0;
-        let has_token_metrics = false;
-        let has_duration_metrics = false;
-        for (const iter of trace.iterations.values()) {
-            const t = iter.tokens;
-            if (t) {
-                has_token_metrics = true;
-                total_input += t.input || 0;
-                total_output += t.output || 0;
-                total_cached += t.cache_read || 0;
-                total_reasoning += t.reasoning || 0;
-                total_tokens += t.total || 0;
-            }
-            if (iter.duration_ms !== null && iter.duration_ms !== undefined) {
-                has_duration_metrics = true;
-                total_duration_ms += iter.duration_ms;
-            }
-        }
-        return {
-            total_tokens,
-            total_duration_ms,
-            total_input,
-            total_output,
-            total_cached,
-            total_reasoning,
-            has_token_metrics,
-            has_duration_metrics,
-        };
     }
 
     // ----------------------------------------------------------------

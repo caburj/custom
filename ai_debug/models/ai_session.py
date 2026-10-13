@@ -1011,7 +1011,7 @@ class AiSession(models.Model):
             return {'_details_excluded': True}
         normalized = {
             key: self._ai_debug_sanitize(response.get(key), key=key)
-            for key in ('request_uuid', 'status')
+            for key in ('request_uuid', 'status', 'usage', 'cost')
             if key in response
         }
         if 'error' in response:
@@ -1135,6 +1135,8 @@ class AiSession(models.Model):
             'request_body': normalized_request,
             'request_label': 'Normalized IAP Submission',
             'raw_response': normalized_response if response else None,
+            'usage': normalized_response.get('usage'),
+            'cost': normalized_response.get('cost'),
             'response_label': 'Normalized IAP Result',
             'has_tool_calls': has_tool_calls,
             'is_final': False,
@@ -1268,8 +1270,12 @@ class AiSession(models.Model):
             )
 
     def _ai_debug_record_callback(self, request, result):
-        response = ({'status': 'success', 'result': result['message']}
-                    if result['kind'] == 'success' else {'status': 'error', 'error': result['code']})
+        response = ({
+            'status': 'success',
+            'result': result['message'],
+            'usage': result['usage'],
+            'cost': result['cost'],
+        } if result['kind'] == 'success' else {'status': 'error', 'error': result['code']})
         self._ai_debug_trace_request_result(request, response, {}, self._ai_debug_result_error(response))
         self._ai_debug_emit_state(request, 'result_received')
 
@@ -1398,7 +1404,10 @@ class AiSession(models.Model):
         if context is not None:
             context['model_duration_ms'] = int((time.monotonic() - started_at) * 1000)
             context['raw_response'] = self._ai_debug_try(
-                lambda: self._ai_debug_normalized_messages([result['result']]))
+                lambda: self._ai_debug_normalized_response(result))
+            context['usage'] = result['usage']
+            context['cost'] = result['cost']
+            context['provider_metadata'] = result['result']['provider_metadata']
         return result
 
     @api.model
@@ -1463,6 +1472,7 @@ class AiSession(models.Model):
                         'role': 'assistant',
                         'content': parts,
                     }])
+                    provider_metadata = _debug_ctx.pop('provider_metadata', {})
                     self._ai_debug_bus_send('iteration', {
                         'type': 'iteration',
                         'trace_id': trace_id,
@@ -1470,6 +1480,11 @@ class AiSession(models.Model):
                         'iteration_index': iteration_count,
                         'request_body': _debug_ctx.get('request_body') if prepared_id else None,
                         'raw_response': _debug_ctx.pop('raw_response', normalized_response) if prepared_id else normalized_response,
+                        'usage': _debug_ctx.pop('usage', None),
+                        'cost': _debug_ctx.pop('cost', None),
+                        'provider': provider_metadata.get('provider'),
+                        'model_name': provider_metadata.get('model'),
+                        'provider_api': provider_metadata.get('api'),
                         'response_summary': self._ai_debug_message_summary([{
                             'role': 'assistant',
                             'content': parts,

@@ -29,3 +29,61 @@ export function formatDuration(ms) {
     const secs = Math.round((ms % 60000) / 1000);
     return `${mins}m ${secs}s`;
 }
+
+/** @param {number} count */
+export function formatCount(count) {
+    return count.toLocaleString();
+}
+
+/** @param {number} credits */
+export function formatCredits(credits) {
+    if (credits !== 0 && Math.abs(credits) < 0.0005) {
+        return credits.toExponential(2);
+    }
+    return credits.toLocaleString(undefined, { maximumFractionDigits: 3 });
+}
+
+/**
+ * Aggregate captured iterations across the selected trace and its descendants.
+ * @param {{ iterations: Map<string, {
+ *     tokens: { input: number, output: number, cache_read: number, total: number } | null,
+ *     cost: number | null, duration_ms: number | null,
+ * }> }[]} traces
+ */
+export function getTraceTotals(traces) {
+    const totals = {
+        total_input: 0,
+        total_output: 0,
+        total_cached: 0,
+        total_tokens: 0,
+        total_duration_ms: 0,
+        total_cost: 0,
+        iteration_count: 0,
+        usage_count: 0,
+        cost_count: 0,
+        has_token_metrics: false,
+        has_duration_metrics: false,
+    };
+    for (const trace of traces) {
+        totals.iteration_count += trace.iterations.size;
+        for (const iteration of trace.iterations.values()) {
+            if (iteration.tokens) {
+                totals.usage_count++;
+                totals.total_input += iteration.tokens.input;
+                totals.total_output += iteration.tokens.output;
+                totals.total_cached += iteration.tokens.cache_read;
+                totals.total_tokens += iteration.tokens.total;
+            }
+            if (iteration.cost != null) {
+                totals.cost_count++;
+                totals.total_cost += iteration.cost;
+            }
+            if (iteration.duration_ms != null) {
+                totals.has_duration_metrics = true;
+                totals.total_duration_ms += iteration.duration_ms;
+            }
+        }
+    }
+    totals.has_token_metrics = totals.usage_count > 0;
+    return totals;
+}
