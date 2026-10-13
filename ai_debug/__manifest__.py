@@ -6,6 +6,7 @@
     'summary': 'Standalone live tracer for the AI agentic loop',
     'depends': ['ai', 'bus'],
     'data': [
+        'security/ir.access.csv',
         'views/ai_debug_index.xml',
     ],
     'assets': {

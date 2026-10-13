@@ -4,9 +4,10 @@ from textwrap import dedent
 from unittest.mock import MagicMock, patch
 
 from odoo import api, Command
-from odoo.exceptions import ConcurrencyError
+from odoo.exceptions import ConcurrencyError, UserError
 from odoo.modules.registry import Registry
 from odoo.tests import HttpCase, TransactionCase, new_test_user, tagged
+from odoo.tools import mute_logger
 
 from odoo.addons.ai.models.ai_session import AiSession as EnterpriseAiSession
 from odoo.addons.ai.models.ir_actions_server import IrActionsServer as EnterpriseActions
@@ -129,11 +130,28 @@ class TestAiDebugCallback(TransactionCase):
                 if event == kind and all(payload.get(key) == value for key, value in matches.items())]
 
     def test_submission_callback_and_followup_keep_connected_traces(self):
+        initial_context = self.env['ai.session.event'].create(
+            {
+                'ai_session_id': self.session.id,
+                'metadata': {
+                    'role': 'user',
+                    'content': [{'type': 'text', 'text': 'Initial context'}],
+                },
+            },
+        )
+        self.assertFalse(initial_context.exchange_id)
+        self.assertEqual(self.session.total_credits_used, 0)
         tool = self._create_callback_tool('debug_plain', "ai['result'] = 'Tool result'")
         self._enable_fixture_tools(self.session, tool)
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, first = self._prepare('Trace my message')
+            exchange = session.current_exchange_id
+            self.assertEqual(
+                exchange.uuid, first.context_snapshot['ai_debug_exchange_uuid'],
+            )
+            self.assertEqual(exchange.state, 'running')
+            self.assertEqual(exchange.total_credits_used, 0)
             self.transport.assert_not_called()
             self.assertEqual(session.state['callback_type'], 'agent_loop')
             self.assertEqual(self._events(events, 'iteration')[-1]['phase'], 'prepared')
@@ -141,6 +159,8 @@ class TestAiDebugCallback(TransactionCase):
             self.assertEqual(session.loop_state, 'waiting_model')
             self.assertNotEqual(session.request_uuid, first.request_uuid)
             self.assertEqual(session.request_context['ai_debug_exchange_uuid'], first.context_snapshot['ai_debug_exchange_uuid'])
+            self.assertEqual(session.current_exchange_id, exchange)
+            second_uuid = session.request_uuid
             self._consume(session, assistant_text('The answer'))
         self.assertEqual(len(self._events(events, 'new_trace')), 1)
         self.assertEqual(len(self._events(events, 'tool_call_completed')), 1)
@@ -152,6 +172,35 @@ class TestAiDebugCallback(TransactionCase):
             self.assertEqual(received['usage'], COMPLETION_METRICS['usage'])
             self.assertEqual(received['cost'], COMPLETION_METRICS['cost'])
             self.assertEqual(received['raw_response']['usage'], COMPLETION_METRICS['usage'])
+        session.event_ids.flush_recordset(['usage'])
+        session.event_ids.invalidate_recordset(['usage', 'credits_used'])
+        assistant_events = session.event_ids.filtered(
+            lambda event: event.metadata['role'] == 'assistant',
+        )
+        self.assertEqual(len(assistant_events), 2)
+        for event in assistant_events:
+            self.assertEqual(
+                event.usage,
+                {**COMPLETION_METRICS['usage'], 'cost': COMPLETION_METRICS['cost']},
+            )
+            self.assertEqual(event.credits_used, COMPLETION_METRICS['cost'])
+        self.assertFalse(any((session.event_ids - assistant_events).mapped('usage')))
+        self.assertEqual(session.credits_used, 2 * COMPLETION_METRICS['cost'])
+        self.assertEqual(session.total_credits_used, session.credits_used)
+        self.assertEqual(session.exchange_ids, exchange)
+        self.assertEqual(exchange.event_ids, session.event_ids - initial_context)
+        self.assertEqual(
+            assistant_events.sorted('request_round').mapped('request_uuid'),
+            [first.request_uuid, second_uuid],
+        )
+        self.assertEqual(
+            assistant_events.sorted('request_round').mapped('request_round'), [1, 2],
+        )
+        self.assertEqual(exchange.credits_used, session.credits_used)
+        self.assertEqual(exchange.state, 'completed')
+        self.assertTrue(exchange.finished_at)
+        self.assertFalse(session.current_exchange_id)
+        self.assertIn(initial_context.metadata, session._get_history())
 
     def test_model_round_duration_excludes_tools_and_restarts_per_request(self):
         tool = self._create_callback_tool('timed_round_tool', "ai['result'] = 'Done'")
@@ -491,10 +540,59 @@ else:
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare()
+            exchange = session.current_exchange_id
             session._continue_agent_loop({'kind': 'failure', 'code': 'request_failed'})
         terminal, = self._events(events, 'loop_end')
         self.assertEqual(terminal['termination_reason'], 'failed')
         self.assertEqual(terminal['error'], 'request_failed')
+        self.assertEqual(exchange.state, 'failed')
+        self.assertTrue(exchange.finished_at)
+        self.assertEqual(exchange.credits_used, 0)
+        self.assertFalse(session.current_exchange_id)
+
+        self.agent.allowed_agent_ids = self.agent
+        start = self.env.ref('ai.ir_actions_server_start_session')
+        session, _request = self._prepare('Delegate a failing task')
+        get_context_input = EnterpriseAiSession._get_context_input
+        error_message = 'Child request preparation failed'
+
+        def prepare_context(session, rag_context):
+            if session.parent_session_id:
+                raise UserError(error_message)
+            return get_context_input(session, rag_context)
+
+        with (
+            patch.object(EnterpriseAiSession, '_get_context_input', prepare_context),
+            mute_logger('odoo.addons.ai.models.ai_session'),
+        ):
+            self._consume(
+                session,
+                self._tool_result(
+                    start,
+                    'failed-child',
+                    {
+                        'agent_id': self.agent.id,
+                        'message': 'Child task',
+                    },
+                ),
+            )
+        child = session.child_session_ids
+        self.assertEqual(len(child), 1)
+        self.assertEqual(child.exchange_ids.state, 'failed')
+        self.assertTrue(child.exchange_ids.finished_at)
+        self.assertEqual(child.credits_used, 0)
+        self.assertFalse(child.current_exchange_id)
+        self.assertEqual(child.loop_state, 'ready')
+        self.assertEqual(session.loop_state, 'waiting_model')
+        results = [
+            part
+            for event in session.event_ids
+            for part in event.metadata['content']
+            if part['type'] == 'tool_result'
+        ]
+        self.assertEqual(len(results), 1)
+        self.assertFalse(results[0]['success'])
+        self.assertIn(error_message, str(results[0]))
 
     def test_pending_client_resume_and_new_exchange(self):
         tool = self._create_callback_tool('debug_client', "ai['result'] = {'client_tool': {'name': 'debug_client', 'params': {}}}")
@@ -502,6 +600,7 @@ else:
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, first = self._prepare()
+            exchange = session.current_exchange_id
             self._consume(session, self._tool_result(tool, 'client'))
             self.assertEqual(session.loop_state, 'waiting_client_result')
             session._resume_pending_interaction({'kind': 'client_result', 'value': False},
@@ -509,12 +608,24 @@ else:
             self.assertTrue(session.request_payload['boost_reasoning'])
             completed, = self._events(events, 'tool_call_completed')
             self.assertTrue(completed['success'])
+            self.assertEqual(session.current_exchange_id, exchange)
             self._consume(session, self._tool_result(tool, 'client-again'))
             session._abort_pending_tools()
             session._submit_agent_request([{'type': 'text', 'text': 'Another message'}])
+            second_exchange = session.current_exchange_id
         self.assertNotEqual(first.context_snapshot['ai_debug_exchange_uuid'], session.request_context['ai_debug_exchange_uuid'])
         terminal, = self._events(events, 'loop_end')
         self.assertEqual(terminal['termination_reason'], 'declined')
+        self.assertEqual(exchange.state, 'declined')
+        self.assertEqual(exchange.credits_used, 2 * COMPLETION_METRICS['cost'])
+        self.assertNotEqual(exchange, second_exchange)
+        session._submit_agent_request(
+            [{'type': 'text', 'text': 'Replace the active request'}],
+        )
+        self.assertEqual(second_exchange.state, 'superseded')
+        self.assertTrue(second_exchange.finished_at)
+        self.assertEqual(session.current_exchange_id.state, 'running')
+        self.assertEqual(len(session.exchange_ids), 3)
 
     def test_unchanged_event_context_refreshes_context_message_with_debug_metadata(self):
         tool = self._create_callback_tool('debug_context', "ai['result'] = 'Done'")
@@ -539,12 +650,15 @@ else:
         events = []
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             root, request = self._prepare('Delegate')
+            root_exchange = root.current_exchange_id
             self._consume(root, self._tool_result(start, 'start', {'agent_id': self.agent.id, 'message': 'Child task'}))
             child = self.env['ai.session'].search([('parent_session_id', '=', root.id)])
             self.assertEqual(len(child), 1)
             child_trace, = self._events(events, 'new_trace', session_id=child.id)
             self.assertEqual(child_trace['parent_tool_call_id'], root._ai_debug_callback_tool_call_id(request.request_uuid, 'start'))
             child_request = child.request_uuid
+            first_child_exchange = child.current_exchange_id
+            self.assertEqual(first_child_exchange.parent_exchange_id, root_exchange)
             loader = self.env.ref('ai.ir_actions_server_load_skills')
             self._consume(child, self._tool_result(loader, 'load-skill', {
                 'skill_ids': [self.env.ref('ai.ai_skill_generate_image').id],
@@ -554,6 +668,14 @@ else:
             self.assertEqual(child.request_context['ai_debug_exchange_uuid'], child_trace['trace_id'])
             self.assertEqual(len(self._events(events, 'new_trace', session_id=child.id)), 1)
             self._consume(child, assistant_text('Child answer'))
+            self.assertEqual(root.credits_used, COMPLETION_METRICS['cost'])
+            self.assertEqual(child.credits_used, 2 * COMPLETION_METRICS['cost'])
+            self.assertAlmostEqual(
+                root.total_credits_used, 3 * COMPLETION_METRICS['cost'],
+            )
+            self.assertAlmostEqual(
+                root_exchange.total_credits_used, 3 * COMPLETION_METRICS['cost'],
+            )
             self.assertEqual(root.loop_state, 'waiting_model')
             terminal, = self._events(events, 'loop_end', trace_id=child_trace['trace_id'])
             self.assertIn('Child answer', terminal['exchange_result']['message'])
@@ -561,11 +683,53 @@ else:
             parent_request = root.request_uuid
             self._consume(root, self._tool_result(again, 'again', {'session_id': child.id, 'message': 'Another task'}))
             self._consume(child, assistant_text('Second answer'))
+            self.assertEqual(root.credits_used, 2 * COMPLETION_METRICS['cost'])
+            self.assertAlmostEqual(child.credits_used, 3 * COMPLETION_METRICS['cost'])
+            self.assertAlmostEqual(
+                root.total_credits_used, 5 * COMPLETION_METRICS['cost'],
+            )
+            self.assertEqual(len(root_exchange.child_exchange_ids), 2)
+            self.assertEqual(
+                first_child_exchange.credits_used, 2 * COMPLETION_METRICS['cost'],
+            )
+            self.assertAlmostEqual(
+                root_exchange.total_credits_used, 5 * COMPLETION_METRICS['cost'],
+            )
             traces = self._events(events, 'new_trace', session_id=child.id)
             self.assertEqual(len(traces), 2)
             self.assertNotEqual(traces[0]['trace_id'], traces[1]['trace_id'])
             self.assertEqual(traces[1]['parent_request_uuid'], parent_request)
             self.assertEqual(len(self._events(events, 'request_state', phase='child_applied')), 2)
+            self._consume(root, assistant_text('Root answer'))
+            root, _request = self._prepare('Reuse the child in a new exchange')
+            second_root_exchange = root.current_exchange_id
+            self._consume(
+                root,
+                self._tool_result(
+                    again,
+                    'again-next-exchange',
+                    {
+                        'session_id': child.id,
+                        'message': 'A new task',
+                    },
+                ),
+            )
+            self.assertEqual(
+                child.current_exchange_id.parent_exchange_id, second_root_exchange,
+            )
+            self._consume(child, assistant_text('Third answer'))
+            self._consume(root, assistant_text('Second root answer'))
+        self.assertAlmostEqual(
+            root_exchange.total_credits_used, 6 * COMPLETION_METRICS['cost'],
+        )
+        self.assertAlmostEqual(
+            second_root_exchange.total_credits_used, 3 * COMPLETION_METRICS['cost'],
+        )
+        self.assertAlmostEqual(root.credits_used, 5 * COMPLETION_METRICS['cost'])
+        self.assertAlmostEqual(root.total_credits_used, 9 * COMPLETION_METRICS['cost'])
+        child.active = False
+        root.invalidate_recordset(['child_session_ids', 'total_credits_used'])
+        self.assertAlmostEqual(root.total_credits_used, 9 * COMPLETION_METRICS['cost'])
 
     def test_channel_title_trace_closes_after_session_deletion(self):
         self.channel.name = ''
@@ -588,10 +752,16 @@ else:
         with patch.object(DebugAiSession, '_ai_debug_prepare_request_context', side_effect=RuntimeError('Observer failed')):
             session, request = self._prepare()
         self.assertEqual(session.loop_state, 'waiting_model')
+        exchange = session.current_exchange_id
+        self.assertEqual(
+            session.request_context['ai_debug_exchange_uuid'], exchange.uuid,
+        )
         with patch.object(DebugAiSession, '_ai_debug_record_callback', side_effect=RuntimeError('Observer failed')):
             self._consume(session, assistant_text('Still answered'))
         self.assertEqual(session.loop_state, 'ready')
         self.assertIn('Still answered', session.channel_id.message_ids[0].body)
+        self.assertEqual(exchange.state, 'completed')
+        self.assertEqual(exchange.credits_used, COMPLETION_METRICS['cost'])
 
     def test_web_search_calls_are_nested_under_exact_callback_tools(self):
         tool = self.env.ref('ai.ir_actions_server_ai_web_search')
@@ -1115,8 +1285,12 @@ else:
 
     def test_savepoint_rollback_does_not_leave_bus_event(self):
         bus = self.env['bus.bus'].sudo()
+        exchange_ids = self.session.exchange_ids.ids
         with self.assertRaises(RuntimeError):
             with self.env.cr.savepoint(flush=False):
+                session, _request = self._prepare()
+                self._consume(session, assistant_text('Rolled back'))
+                self.assertEqual(session.credits_used, COMPLETION_METRICS['cost'])
                 self.session._ai_debug_bus_send('new_trace', {
                     'type': 'new_trace',
                     'trace_id': 'savepoint-rollback-fixture',
@@ -1125,6 +1299,8 @@ else:
                     ('message', 'ilike', 'savepoint-rollback-fixture'),
                 ]))
                 raise RuntimeError('savepoint rollback fixture')
+        self.assertEqual(self.session.exchange_ids.ids, exchange_ids)
+        self.assertEqual(self.session.total_credits_used, 0)
         self.assertFalse(bus.search([
             ('message', 'ilike', 'savepoint-rollback-fixture'),
         ]))

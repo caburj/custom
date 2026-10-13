@@ -93,10 +93,25 @@ class TestAiDebugAtomicCallback(HttpCase):
 
     def _snapshot(self, fixture):
         with self.registry._db.cursor() as cr:
-            cr.execute('''SELECT id, loop_state, request_uuid, state, request_payload,
-                                 pending_tool_call
-                            FROM ai_session WHERE id = ANY(%s) ORDER BY id''', [fixture['ids']])
+            cr.execute(
+                '''SELECT id, loop_state, request_uuid, state, request_payload,
+                                 pending_tool_call, current_exchange_id
+                            FROM ai_session WHERE id = ANY(%s) ORDER BY id''',
+                [fixture['ids']],
+            )
             sessions = cr.fetchall()
+            cr.execute(
+                '''SELECT id, session_id, parent_exchange_id, state, finished_at
+                            FROM ai_debug_exchange WHERE session_id = ANY(%s) ORDER BY id''',
+                [fixture['ids']],
+            )
+            exchanges = cr.fetchall()
+            cr.execute(
+                '''SELECT id, ai_session_id, exchange_id, request_uuid, request_round, usage
+                            FROM ai_session_event WHERE ai_session_id = ANY(%s) ORDER BY id''',
+                [fixture['ids']],
+            )
+            usage_events = cr.fetchall()
             cr.execute("SELECT id FROM ir_attachment WHERE name = %s ORDER BY id", [fixture['attachment_name']])
             attachments = cr.fetchall()
             cr.execute("""SELECT id, message::jsonb FROM bus_bus
@@ -109,7 +124,13 @@ class TestAiDebugAtomicCallback(HttpCase):
             if nested_ids:
                 cr.execute("SELECT id, message::jsonb FROM bus_bus WHERE message::jsonb->'payload'->>'trace_id' = ANY(%s) ORDER BY id", [nested_ids])
                 events = sorted(dict(events + cr.fetchall()).items())
-            return {'sessions': sessions, 'attachments': attachments, 'events': events}
+            return {
+                'sessions': sessions,
+                'exchanges': exchanges,
+                'usage_events': usage_events,
+                'attachments': attachments,
+                'events': events,
+            }
 
     def _exercise_atomic_callback(self, *, image):
         with self._fixture(image=image) as fixture:
@@ -150,6 +171,14 @@ class TestAiDebugAtomicCallback(HttpCase):
             self.assertNotEqual(*attempts)
             self.assertEqual(transport.call_count, 0 if image else 1)
             after = self._snapshot(fixture)
+            completion_events = [
+                row for row in after['usage_events'] if row[3] == fixture['uuid']
+            ]
+            self.assertEqual(len(completion_events), 1)
+            self.assertEqual(
+                completion_events[0][5],
+                {**COMPLETION_METRICS['usage'], 'cost': COMPLETION_METRICS['cost']},
+            )
             prior_ids = {row_id for row_id, _event in before['events']}
             events = [event for row_id, event in after['events'] if row_id not in prior_ids]
             received = [event for event in events if event['type'] == 'iteration'
@@ -180,6 +209,18 @@ class TestAiDebugAtomicCallback(HttpCase):
             self.assertEqual(replay.status_code, 200, replay.text)
             replay_transport.assert_not_called()
             self.assertEqual(self._snapshot(fixture), after, 'Unknown callback must not change facts or image effects')
+            with self.allow_requests(all_requests=True):
+                duplicate = requests.post(
+                    self.base_url() + '/ai/completion_result_ready',
+                    json=payload,
+                    timeout=30,
+                )
+            self.assertEqual(duplicate.status_code, 200, duplicate.text)
+            self.assertEqual(
+                self._snapshot(fixture),
+                after,
+                'Replayed callback must not duplicate usage',
+            )
 
     def test_nested_delivery_and_debugger_facts_retry_atomically(self):
         self._exercise_atomic_callback(image=False)

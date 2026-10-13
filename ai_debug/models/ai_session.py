@@ -1,22 +1,28 @@
 import copy
-from contextlib import contextmanager
 import json
 import logging
 import math
 import time
 import uuid
+from contextlib import contextmanager
 
 import odoo
-from odoo import api, models
+from odoo import api, fields, models
+from odoo.exceptions import UserError
+from odoo.tools import SQL, config, html2plaintext
+from odoo.tools.misc import OrderedSet
+
+from odoo.addons.ai.utils.types import (
+    AIMessageParts,
+    CompletionFailure,
+    CompletionSuccess,
+)
 from odoo.addons.bus.models.bus import (
     ODOO_NOTIFY_FUNCTION,
     channel_with_db,
     get_notify_payloads,
 )
 from odoo.addons.bus.tools.notifications import json_dump
-from odoo.exceptions import UserError
-from odoo.tools import SQL, config, html2plaintext
-from odoo.tools.misc import OrderedSet
 
 _logger = logging.getLogger(__name__)
 
@@ -79,6 +85,35 @@ _SENSITIVE_KEY_NAMES = frozenset(key.replace('_', '') for key in _SENSITIVE_KEYS
 
 class AiSession(models.Model):
     _inherit = 'ai.session'
+
+    child_session_ids = fields.One2many(
+        'ai.session', 'parent_session_id', context={'active_test': False},
+    )
+    exchange_ids = fields.One2many('ai.debug.exchange', 'session_id')
+    current_exchange_id = fields.Many2one(
+        'ai.debug.exchange', readonly=True, copy=False, ondelete='set null',
+    )
+    credits_used = fields.Float(
+        compute='_compute_credits_used',
+        help="Recorded IAP credits for this session's own agent-loop completions across all exchanges.",
+    )
+    total_credits_used = fields.Float(
+        compute='_compute_total_credits_used',
+        recursive=True,
+        help="Recorded IAP credits for this session and all its descendant sessions.",
+    )
+
+    @api.depends('exchange_ids.credits_used')
+    def _compute_credits_used(self):
+        for session in self:
+            session.credits_used = sum(session.exchange_ids.mapped('credits_used'))
+
+    @api.depends('credits_used', 'child_session_ids.total_credits_used')
+    def _compute_total_credits_used(self):
+        for session in self:
+            session.total_credits_used = session.credits_used + sum(
+                session.child_session_ids.mapped('total_credits_used'),
+            )
 
     def _ai_debug_bus_send(
         self, notification_type, payload, *, target_user_id=None,
@@ -630,25 +665,17 @@ class AiSession(models.Model):
                 snapshot[key] = copy.deepcopy(correlation[key])
         return snapshot
 
-    def _ai_debug_prepare_request_context(self, context_snapshot, *, continuation):
+    def _ai_debug_prepare_request_context(self, context_snapshot: dict | None) -> dict:
         """Add private correlation without trusting a browser-supplied value."""
         if context_snapshot is None:
             context_snapshot = self._get_request_context_snapshot()
-        if not isinstance(context_snapshot, dict):
-            return context_snapshot
         prepared_snapshot = copy.deepcopy(context_snapshot)
-        exchange_uuid = None
-        if continuation and isinstance(self.request_context, dict):
-            exchange_uuid = self.request_context.get(
-                _AI_DEBUG_EXCHANGE_UUID_CONTEXT_KEY
-            )
-        if not isinstance(exchange_uuid, str) or not exchange_uuid:
-            exchange_uuid = (
-                self.request_uuid
-                if continuation and self.request_uuid
-                else uuid.uuid4().hex
-            )
-        prepared_snapshot[_AI_DEBUG_EXCHANGE_UUID_CONTEXT_KEY] = exchange_uuid
+        # Title requests have no durable exchange; keep their debugger trace.
+        prepared_snapshot[_AI_DEBUG_EXCHANGE_UUID_CONTEXT_KEY] = (
+            self.current_exchange_id.uuid
+            if self.current_exchange_id
+            else uuid.uuid4().hex
+        )
         return prepared_snapshot
 
     def _ai_debug_user_query(self, request):
@@ -943,13 +970,29 @@ class AiSession(models.Model):
                 target_user_id=context['target_user_id'],
             )
 
+    def _submit_agent_request(self, message: AIMessageParts | None = None) -> None:
+        self.ensure_one()
+        if message is not None:
+            self.current_exchange_id.write(
+                {'state': 'superseded', 'finished_at': fields.Datetime.now()},
+            )
+            self.current_exchange_id = self.env['ai.debug.exchange'].create(
+                {
+                    'session_id': self.id,
+                    'parent_exchange_id': self.parent_session_id.current_exchange_id.id,
+                },
+            )
+        try:
+            return super()._submit_agent_request(message)
+        except UserError:
+            self._finish_exchange('failed')
+            raise
+
     def _save_and_submit_request(self, payload, *, callback_type,
                          request_round, request_round_limit, state):
         # Correlation is part of immutable request intent; instrumentation is optional.
         def prepare_context():
-            prepared_context = self._ai_debug_prepare_request_context(
-                {}, continuation=request_round > 1,
-            )
+            prepared_context = self._ai_debug_prepare_request_context({})
             parent_link = None
             if request_round == 1 and self.parent_session_id and callback_type == 'agent_loop':
                 parent_link = self.parent_session_id._ai_debug_parent_link(self.env.context['ai_parent_tool_call_id'])
@@ -964,6 +1007,10 @@ class AiSession(models.Model):
             return prepared_context
 
         correlation = self._ai_debug_try(prepare_context) or {}
+        if callback_type == 'agent_loop':
+            correlation[_AI_DEBUG_EXCHANGE_UUID_CONTEXT_KEY] = (
+                self.current_exchange_id.uuid
+            )
         session = self.with_context(**{_AI_DEBUG_STORE_CONTEXT_KEY: {
             'session_id': self.id, 'correlation': correlation,
         }})
@@ -1211,6 +1258,8 @@ class AiSession(models.Model):
         return self._ai_debug_finish_exchange(status, content=content)
 
     def _ai_debug_finish_exchange(self, status, *, content):
+        exchange = self.current_exchange_id
+
         def capture():
             context = self._ai_debug_active_callback_context()
             if context:
@@ -1219,7 +1268,10 @@ class AiSession(models.Model):
                     parts = content if isinstance(content, list) else [{'type': 'text', 'text': str(content)}]
                     context['final_output'] = self._ai_debug_normalized_message({'role': 'assistant', 'content': parts})
         self._ai_debug_try(capture)
-        return super()._finish_exchange(status, content=content)
+        result = super()._finish_exchange(status, content=content)
+        exchange.write({'state': status, 'finished_at': fields.Datetime.now()})
+        self.current_exchange_id = False
+        return result
 
     def _abort_pending_tools(self):
         # New messages abort their pending interaction in the controller, before
@@ -1279,9 +1331,28 @@ class AiSession(models.Model):
         self._ai_debug_trace_request_result(request, response, {}, self._ai_debug_result_error(response))
         self._ai_debug_emit_state(request, 'result_received')
 
-    def _continue_agent_loop(self, completion_result):
+    def _continue_agent_loop(
+        self,
+        completion_result: CompletionFailure | CompletionSuccess,
+    ) -> None:
         with self._ai_debug_transition(completion_result) as session:
-            return super(AiSession, session)._continue_agent_loop(completion_result)
+            previous_events = session.event_ids
+            request_uuid, request_round = session.request_uuid, session.request_round
+            super(AiSession, session)._continue_agent_loop(completion_result)
+            if completion_result['kind'] == 'success':
+                assistant_events = (session.event_ids - previous_events).filtered(
+                    lambda event: event.metadata['role'] == 'assistant',
+                )
+                assistant_events.write(
+                    {
+                        'request_uuid': request_uuid,
+                        'request_round': request_round,
+                        'usage': {
+                            **completion_result['usage'],
+                            'cost': completion_result['cost'],
+                        },
+                    },
+                )
 
     def _continue_channel_name(self, completion_result):
         # The core title handler deletes its temporary session. Keep the facts
