@@ -54,7 +54,7 @@
                     </div>
                 </div>
 
-                <!-- Scrollable tree content area — t-ref here so scrollIntoView targets the right container -->
+                <!-- Scrollable tree content area -->
                 <div t-attf-class="ai-tree-content {{ this.state.nestingMode === 'indent' ? 'ai-indent-mode' : '' }}" t-ref="this.sidebarRef">
 
                 <!-- Depth staircase line — SVG overlay, scrolls with content -->
