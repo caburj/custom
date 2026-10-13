@@ -112,20 +112,21 @@
                                 <t t-else="">
                                     <t t-out="node.trace.agent_name or 'Unknown Agent'"/>
                                 </t>
-                                <t t-set="totals" t-value="this.getTraceTotals(node.trace)"/>
-                                <span class="ai-tree-meta-line">
+                                <t t-set="totals" t-value="this.getTraceTotals(this.getTraceFamily(node.trace))"/>
+                                <span class="ai-tree-meta-line"
+                                      t-att-title="[node.trace.agent_name, node.trace.ai_provider, node.trace.model_name].filter(value => value).join(' · ')">
+                                    <t t-if="totals.has_token_metrics">
+                                        <t t-out="this.formatTokens(totals.total_input)"/>&#x2191; <t t-out="this.formatTokens(totals.total_output)"/>&#x2193; &#xB7;
+                                    </t>
+                                    <span t-if="totals.cost_count" title="Reported IAP credits, including descendants">
+                                        <t t-out="this.formatCredits(totals.total_cost)"/> C &#xB7;
+                                    </span>
+                                    <t t-if="totals.has_duration_metrics">
+                                        <t t-out="this.formatDuration(totals.total_duration_ms)"/> &#xB7;
+                                    </t>
                                     <t t-out="node.trace.agent_name or (node.trace.trace_kind === 'direct' ? 'Direct' : node.trace.trace_kind ? 'Helper' : 'Agent')"/>
                                     <t t-if="node.trace.ai_provider"> &#xB7; <t t-out="node.trace.ai_provider"/></t>
                                     <t t-if="node.trace.model_name"> &#xB7; <t t-out="node.trace.model_name"/></t>
-                                    <t t-if="totals.has_duration_metrics">
-                                        &#xB7; <t t-out="this.formatDuration(totals.total_duration_ms)"/>
-                                    </t>
-                                    <t t-if="totals.total_input > 0 and totals.total_output > 0">
-                                        &#xB7; <t t-out="this.formatTokens(totals.total_input)"/>&#x2191; <t t-out="this.formatTokens(totals.total_output)"/>&#x2193;
-                                    </t>
-                                    <t t-elif="totals.total_tokens > 0">
-                                        &#xB7; <t t-out="this.formatTokens(totals.total_tokens)"/> tok
-                                    </t>
                                 </span>
                             </span>
                             <span t-if="node.trace.partial" class="ai-tree-hydrated-badge">partial</span>
@@ -167,9 +168,16 @@
                                 <t t-elif="node.trace.status === 'running' and node.id === [...node.trace.iterations.keys()].pop()">
                                     <span class="ai-tree-label-dim"> &#xB7; <span class="ai-debug-pulse-dot tiny"/></span>
                                 </t>
-                                <t t-if="node.iter.tokens and (node.iter.tokens.input > 0 or node.iter.tokens.output > 0)">
+                                <t t-if="node.iter.tokens">
                                     <span class="ai-tree-label-dim"> &#xB7; <t t-out="this.formatTokens(node.iter.tokens.input)"/>&#x2191; <t t-out="this.formatTokens(node.iter.tokens.output)"/>&#x2193;</span>
                                 </t>
+                                <t t-set="subagentCost" t-value="this.getIterationSubagentCost(node.trace, node.iter)"/>
+                                <span t-if="node.iter.cost != null" class="ai-tree-label-dim" title="Reported IAP credits">
+                                    &#xB7; <t t-out="this.formatCredits(node.iter.cost)"/> C
+                                </span>
+                                <span t-if="subagentCost != null" class="ai-tree-label-dim">
+                                    <t t-if="node.iter.cost != null"> + </t><t t-else=""> · </t><t t-out="this.formatCredits(subagentCost)"/> C subagents
+                                </span>
                                 <t t-if="node.iter.has_error"><span class="ai-tree-label-error"> &#xB7; error</span></t>
                             </span>
                         </div>
@@ -226,7 +234,8 @@
                 <!-- Loop detail -->
                 <LoopDetail t-elif="this.state.selectedType === 'trace'"
                             t-key="this.state.selectedId"
-                            trace="this.getSelectedTrace()"/>
+                            trace="this.getSelectedTrace()"
+                            traceFamily="this.getTraceFamily(this.getSelectedTrace())"/>
                 <!-- Iteration detail -->
                 <IterationDetail t-elif="this.state.selectedType === 'iteration'"
                                  t-key="this.state.selectedId"

@@ -85,9 +85,9 @@ export function serializeTrace(trace) {
                 response_label: iter.response_label,
                 _payload_excluded: iter._payload_excluded,
                 // Phase 17: token/timing/provider fields
-                // tokens is a plain {input, output, cache_read, cache_write, reasoning, total} —
-                // JSON-serializable; writeTrace's JSON.parse(JSON.stringify(...)) strips OWL Proxies.
+                // Token breakdowns are JSON-serializable; writeTrace strips OWL Proxies.
                 tokens: iter.tokens,
+                cost: iter.cost,
                 duration_ms: iter.duration_ms,
                 duration_kind: iter.duration_kind,
                 ai_provider: iter.ai_provider,

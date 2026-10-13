@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { iterationMessages, iterationTools, normalizeTokens } from "./event_payload";
+import { iterationMessages, iterationTools, normalizeUsage } from "./event_payload";
 
 const PHASES = ["prepared", "submitted", "result_received", "result_consumed", "child_applied", "child_settled", "completed"];
 const makeMap = () => new Map();
@@ -29,13 +29,23 @@ function ensureIteration(trace, payload, newMap) {
     if (!id) return null;
     if (!trace.iterations.has(id)) {
         trace.iterations.set(id, {
-            iteration_id: id, trace_id: trace.trace_id, request_uuid: id,
+            iteration_id: id,
+            trace_id: trace.trace_id,
+            request_uuid: id,
             exchange_uuid: trace.exchange_uuid,
             iteration_index: payload.iteration_index ?? payload.round_no,
             round_no: payload.round_no ?? payload.iteration_index,
-            expanded: true, toolCalls: newMap(), has_error: false,
-            messages_sent: [], tools: [], raw_response: null, request_body: null,
-            tokens: null, duration_ms: null, duration_kind: null,
+            expanded: true,
+            toolCalls: newMap(),
+            has_error: false,
+            messages_sent: [],
+            tools: [],
+            raw_response: null,
+            request_body: null,
+            tokens: null,
+            cost: null,
+            duration_ms: null,
+            duration_kind: null,
         });
     }
     return trace.iterations.get(id);
@@ -101,7 +111,10 @@ export function reduceTraceEvent(traces, payload, newMap = makeMap) {
             if (payload.phase !== "prepared") {
                 assignDefined(iteration, payload, ["error", "is_final", "duration_ms", "duration_kind"]);
                 if (payload.error !== undefined) iteration.has_error = !!payload.error;
-                if (payload.tokens != null) iteration.tokens = normalizeTokens(payload.tokens);
+                if (payload.usage != null) {
+                    iteration.tokens = normalizeUsage(payload.usage, payload.provider);
+                }
+                assignDefined(iteration, payload, ["cost"]);
                 iteration.ai_provider = payload.provider ?? iteration.ai_provider;
                 iteration.model_name = payload.model_name ?? iteration.model_name;
                 iteration.provider_api = payload.provider_api ?? iteration.provider_api;
@@ -186,8 +199,15 @@ export function hydrateTrace(plain, newMap = makeMap) {
         for (const [tcId, tc] of iter.toolCalls ?? []) {
             toolCalls.set(tcId, { ...tc, status: tc.status ?? "completed", expanded: true });
         }
-        iterations.set(id, { ...iter, expanded: true, toolCalls, tokens: iter.tokens ?? null,
-            duration_ms: iter.duration_ms ?? null, tools: iter.tools ?? [] });
+        iterations.set(id, {
+            ...iter,
+            expanded: true,
+            toolCalls,
+            tokens: iter.tokens ?? null,
+            cost: iter.cost ?? null,
+            duration_ms: iter.duration_ms ?? null,
+            tools: iter.tools ?? [],
+        });
     }
     return { ...plain, created_ts: plain.created_ts || plain.storedAt || 0,
         ai_provider: plain.ai_provider ?? null, model_name: plain.model_name ?? "",

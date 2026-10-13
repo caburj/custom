@@ -34,6 +34,8 @@
             Trace payload omitted because the sanitized debugger event exceeded its size limit.
         </div>
 
+        <t t-set="totals" t-value="this.getTraceTotals(this.props.traceFamily)"/>
+
         <!-- Tabbed content -->
         <Notebook>
             <t t-set-slot="outcome" title="'Outcome'" isVisible="!!(this.props.trace.exchange_result or this.props.trace.final_output)">
@@ -41,6 +43,75 @@
                     <div class="ai-detail-section-header"><span>Exchange Outcome</span></div>
                     <JsonTree data="{exchange_result: this.props.trace.exchange_result, final_output: this.props.trace.final_output}"
                               onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
+                </div>
+            </t>
+            <t t-set-slot="usage" title="'Usage'" isVisible="!!(totals.has_token_metrics or totals.cost_count or totals.has_duration_metrics)">
+                <div t-if="totals.has_token_metrics or totals.cost_count" class="ai-usage-summary">
+                    <strong>Exchange total</strong>
+                    <span t-if="totals.has_token_metrics">Input <strong t-out="this.formatCount(totals.total_input)"/></span>
+                    <span t-if="totals.has_token_metrics" title="Included in input tokens">Cached <strong t-out="this.formatCount(totals.total_cached)"/></span>
+                    <span t-if="totals.has_token_metrics" title="Includes reasoning">Output <strong t-out="this.formatCount(totals.total_output)"/></span>
+                    <span t-if="totals.has_token_metrics">Total tokens <strong t-out="this.formatCount(totals.total_tokens)"/></span>
+                    <span t-if="totals.cost_count">Credits <strong t-out="this.formatCredits(totals.total_cost)"/></span>
+                </div>
+                <div class="ai-detail-section">
+                    <p t-if="totals.usage_count &lt; totals.iteration_count or totals.cost_count &lt; totals.iteration_count" class="ai-usage-note">
+                        Partial totals:
+                        <t t-if="totals.usage_count &lt; totals.iteration_count">usage for <t t-out="totals.usage_count"/>/<t t-out="totals.iteration_count"/> iterations<t t-if="totals.cost_count &lt; totals.iteration_count">; </t></t>
+                        <t t-if="totals.cost_count &lt; totals.iteration_count">credits for <t t-out="totals.cost_count"/>/<t t-out="totals.iteration_count"/> iterations</t>.
+                    </p>
+                    <div class="d-flex gap-2 mb-2">
+                        <button type="button" class="btn btn-sm btn-secondary" t-on-click="() => this.setUsageExpansion('expanded')">Expand all</button>
+                        <button type="button" class="btn btn-sm btn-secondary" t-on-click="() => this.setUsageExpansion('collapsed')">Collapse all</button>
+                    </div>
+                    <div class="ai-usage-scroll" tabindex="0" role="region" aria-label="Exchange usage">
+                        <table class="ai-usage-table">
+                            <caption class="visually-hidden">Captured exchange usage</caption>
+                            <thead><tr><th scope="col">Agent / iteration</th><th t-if="totals.has_token_metrics" scope="col">Input tokens</th><th t-if="totals.has_token_metrics" scope="col" title="Included in input tokens">Cached input</th><th t-if="totals.has_token_metrics" scope="col" title="Includes reasoning">Output tokens</th><th t-if="totals.cost_count" scope="col">Credits</th><th t-if="totals.has_duration_metrics" scope="col" title="Sum of round-trip durations, including overlapping calls">Model time</th></tr></thead>
+                            <tbody>
+                                <tr t-foreach="this.usageRows()" t-as="row" t-key="row.id"
+                                    t-att-class="{'o_ai_debug_usage_agent': row.type === 'agent'}">
+                                    <th scope="row">
+                                        <div class="o_ai_debug_usage_label" t-att-style="'padding-inline-start: ' + row.depth * 20 + 'px'">
+                                            <button t-if="row.children.length" type="button" class="btn btn-sm o_ai_debug_usage_toggle"
+                                                    t-att-aria-expanded="row.expanded ? 'true' : 'false'"
+                                                    t-att-aria-label="(row.expanded ? 'Collapse ' : 'Expand ') + (row.type === 'agent' ? row.label : 'Iteration ' + row.iteration.iteration_index)"
+                                                    t-on-click="() => this.toggleUsageRow(row)">
+                                                <span aria-hidden="true" t-out="row.expanded ? '▾' : '▸'"/>
+                                            </button>
+                                            <span t-else="" class="o_ai_debug_usage_toggle"/>
+                                            <div t-if="row.type === 'agent'" class="o_ai_debug_usage_identity">
+                                                <div class="d-flex align-items-center gap-2">
+                                                    <span t-out="row.label"/>
+                                                    <span class="badge text-bg-secondary" title="Includes descendants">Subtotal</span>
+                                                </div>
+                                                <div class="o_ai_debug_usage_query" t-att-title="row.query" t-out="row.query"/>
+                                            </div>
+                                            <t t-else="">Iteration <t t-out="row.iteration.iteration_index"/></t>
+                                        </div>
+                                    </th>
+                                    <td t-if="totals.has_token_metrics"><t t-if="row.tokens" t-out="this.formatCount(row.tokens.input)"/></td>
+                                    <td t-if="totals.has_token_metrics"><t t-if="row.tokens" t-out="this.formatCount(row.tokens.cache_read)"/></td>
+                                    <td t-if="totals.has_token_metrics"><t t-if="row.tokens" t-out="this.formatCount(row.tokens.output)"/></td>
+                                    <td t-if="totals.cost_count">
+                                        <t t-if="row.cost != null" t-out="this.formatCredits(row.cost)"/>
+                                        <div t-if="row.type === 'iteration' and row.subagentCost != null" class="small text-muted text-nowrap">
+                                            <t t-if="row.cost != null">+ </t><t t-out="this.formatCredits(row.subagentCost)"/> subagents
+                                        </div>
+                                    </td>
+                                    <td t-if="totals.has_duration_metrics"><t t-if="row.duration_ms != null" t-out="this.formatDuration(row.duration_ms)"/></td>
+                                </tr>
+                            </tbody>
+                            <tfoot><tr>
+                                <th scope="row">Exchange total</th>
+                                <td t-if="totals.has_token_metrics" t-out="this.formatCount(totals.total_input)"/>
+                                <td t-if="totals.has_token_metrics" t-out="this.formatCount(totals.total_cached)"/>
+                                <td t-if="totals.has_token_metrics" t-out="this.formatCount(totals.total_output)"/>
+                                <td t-if="totals.cost_count" t-out="this.formatCredits(totals.total_cost)"/>
+                                <td t-if="totals.has_duration_metrics" t-out="this.formatDuration(totals.total_duration_ms)"/>
+                            </tr></tfoot>
+                        </table>
+                    </div>
                 </div>
             </t>
             <t t-set-slot="system_prompt" title="'Submitted Instructions'" isVisible="true">

@@ -10,6 +10,7 @@ from odoo.tests import HttpCase, TransactionCase, new_test_user, tagged
 
 from odoo.addons.ai.models.ai_session import AiSession as EnterpriseAiSession
 from odoo.addons.ai.models.ir_actions_server import IrActionsServer as EnterpriseActions
+from odoo.addons.ai.tests.common import COMPLETION_METRICS
 from odoo.addons.ai.utils.ai_utils import UserInputResponse
 from odoo.addons.ai_debug.models.ai_session import AiSession as DebugAiSession
 
@@ -18,6 +19,7 @@ def assistant_text(text, provider_metadata=None):
     message = {
         'role': 'assistant',
         'content': [{'type': 'text', 'text': text}],
+        'provider_metadata': {},
     }
     if provider_metadata:
         message['provider_metadata'] = provider_metadata
@@ -104,6 +106,7 @@ class TestAiDebugCallback(TransactionCase):
     def _tool_result(tool, call_id, args=None):
         return {
             'role': 'assistant',
+            'provider_metadata': {},
             'content': [{
                 'type': 'tool_call',
                 'call_id': call_id,
@@ -119,7 +122,7 @@ class TestAiDebugCallback(TransactionCase):
         self.addCleanup(transport.stop)
 
     def _consume(self, session, message):
-        session._continue_agent_loop({'kind': 'success', 'message': message})
+        session._continue_agent_loop({**COMPLETION_METRICS, 'kind': 'success', 'message': message})
 
     def _events(self, events, kind, **matches):
         return [payload for event, payload, _kwargs in events
@@ -145,6 +148,10 @@ class TestAiDebugCallback(TransactionCase):
         self.assertIn('The answer', str(terminal['final_output']))
         self.assertEqual(terminal['termination_reason'], 'success')
         self.assertEqual([e['round_no'] for e in self._events(events, 'iteration', phase='result_received')], [1, 2])
+        for received in self._events(events, 'iteration', phase='result_received'):
+            self.assertEqual(received['usage'], COMPLETION_METRICS['usage'])
+            self.assertEqual(received['cost'], COMPLETION_METRICS['cost'])
+            self.assertEqual(received['raw_response']['usage'], COMPLETION_METRICS['usage'])
 
     def test_model_round_duration_excludes_tools_and_restarts_per_request(self):
         tool = self._create_callback_tool('timed_round_tool', "ai['result'] = 'Done'")
@@ -272,8 +279,8 @@ else:
                     patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
                     patch.object(EnterpriseActions, '_ai_tool_run', run),
                     patch.object(EnterpriseAiSession, '_get_completions', side_effect=[
-                        {'result': {'role': 'assistant', 'content': calls}},
-                        {'result': assistant_text('Done')},
+                        {**COMPLETION_METRICS, 'result': {'role': 'assistant', 'content': calls, 'provider_metadata': {}}},
+                        {**COMPLETION_METRICS, 'result': assistant_text('Done')},
                     ]),
                 ):
                     clock.time_ns.return_value = 1_000_000_000
@@ -285,7 +292,7 @@ else:
                     else:
                         session, _request = self._prepare()
                         clock.time_ns.return_value = 4_000_000_000
-                        self._consume(session, {'role': 'assistant', 'content': calls})
+                        self._consume(session, {'role': 'assistant', 'content': calls, 'provider_metadata': {}})
                         self._consume(session, assistant_text('Done'))
                 completed = self._events(events, 'tool_call_completed')
                 self.assertEqual([(item['call_id'], item['duration_ms']) for item in completed],
@@ -348,7 +355,7 @@ else:
         def complete(*args, **kwargs):
             duration, message = next(completions)
             clock.monotonic.return_value += duration
-            return {'result': message}
+            return {**COMPLETION_METRICS, 'result': message}
 
         def slow_tools(session, *args, **kwargs):
             clock.monotonic.return_value += 10
@@ -387,6 +394,7 @@ else:
         with (
             patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
             patch.object(EnterpriseAiSession, '_get_completions', return_value={
+                **COMPLETION_METRICS,
                 'status': 'success', 'result': self._tool_result(tool, 'direct-final'),
             }) as completion,
         ):
@@ -461,7 +469,7 @@ else:
         with (
             patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
             patch.object(EnterpriseAiSession, '_get_completions', side_effect=[
-                {'result': message}, {'result': assistant_text('Finished')},
+                {**COMPLETION_METRICS, 'result': message}, {**COMPLETION_METRICS, 'result': assistant_text('Finished')},
             ]),
         ):
             result = self.env['ai.session']._get_direct_response(
@@ -569,7 +577,7 @@ else:
                                            'instructions': 'Name it', 'tools': []}, callback_type='channel_name',
                                           request_round=1, request_round_limit=1, state={})
             title_id = title.id
-            title._continue_channel_name({'kind': 'success', 'message': assistant_text('A good title')})
+            title._continue_channel_name({**COMPLETION_METRICS, 'kind': 'success', 'message': assistant_text('A good title')})
         self.assertFalse(title.exists())
         self.assertEqual(self.channel.name, 'A good title')
         trace, = self._events(events, 'new_trace', session_id=title_id)
@@ -593,7 +601,7 @@ else:
 
         def complete(model, messages, instructions, tools=None, **options):
             completion_contexts.append(dict(model.env.context))
-            return {'result': assistant_text('Found a source')}
+            return {**COMPLETION_METRICS, 'result': assistant_text('Found a source')}
 
         with (
             patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
@@ -602,7 +610,7 @@ else:
             parent, request = self._prepare('Search twice', current_view_info={'marker': 'current-page'})
             calls = [self._tool_result(tool, call_id, {'query': 'Odoo', 'retrieval_mode': 'summary'})['content'][0]
                      for call_id in ('search-first', 'search-second')]
-            self._consume(parent, {'role': 'assistant', 'content': calls})
+            self._consume(parent, {'role': 'assistant', 'content': calls, 'provider_metadata': {}})
         traces = self._events(events, 'new_trace', trace_kind='web_search')
         self.assertEqual(len(traces), 2)
         for trace, call in zip(traces, calls):
@@ -632,7 +640,7 @@ else:
         }
         with (
             patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
-            patch.object(EnterpriseAiSession, '_get_completions', return_value={'result': assistant_text('Found')}),
+            patch.object(EnterpriseAiSession, '_get_completions', return_value={**COMPLETION_METRICS, 'result': assistant_text('Found')}),
         ):
             response = self.env['ai.session'].with_user(user).with_context(**context)._get_direct_response(
                 instructions='Search', message=[{'type': 'text', 'text': 'Find it'}], usage='web_search',
@@ -648,6 +656,7 @@ else:
         with (
             patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
             patch.object(EnterpriseAiSession, '_get_completions', return_value={
+                **COMPLETION_METRICS,
                 'status': 'success',
                 'result': assistant_text('Direct result'),
             }),
@@ -658,6 +667,10 @@ else:
                 on_item_callback=lambda item, _tools_context: callback_items.append(item),
             )
 
+        iteration = self._events(events, 'iteration')[0]
+        self.assertEqual(iteration['usage'], COMPLETION_METRICS['usage'])
+        self.assertEqual(iteration['cost'], COMPLETION_METRICS['cost'])
+        self.assertEqual(iteration['raw_response']['cost'], COMPLETION_METRICS['cost'])
         self.assertEqual(result, assistant_text('Direct result')['content'])
         self.assertEqual(callback_items, [{
             'final_message': assistant_text('Direct result')['content'],
@@ -671,14 +684,15 @@ else:
             if event == 'iteration'
         )
         self.assertEqual(
-            iteration['raw_response'],
-            [{
+            iteration['raw_response']['result'],
+            {
                 'role': 'assistant',
                 'content': [{
                     'type': 'text',
                     'content': {'data': 'Direct result'},
                 }],
-            }],
+                'provider_metadata': {},
+            },
         )
 
     def test_channel_name_direct_trace_keeps_session_and_agent_identity(self):
@@ -686,6 +700,7 @@ else:
         with (
             patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
             patch.object(EnterpriseAiSession, '_get_completions', return_value={
+                **COMPLETION_METRICS,
                 'status': 'success',
                 'result': assistant_text('Callback observability'),
             }),
@@ -710,14 +725,15 @@ else:
             if event == 'iteration'
         )
         self.assertEqual(
-            iteration['raw_response'],
-            [{
+            iteration['raw_response']['result'],
+            {
                 'role': 'assistant',
                 'content': [{
                     'type': 'text',
                     'content': {'data': 'Callback observability'},
                 }],
-            }],
+                'provider_metadata': {},
+            },
         )
         self.assertEqual(
             [event for event, _payload, _kwargs in events],
@@ -734,10 +750,12 @@ else:
             patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
             patch.object(EnterpriseAiSession, '_get_completions', side_effect=[
                 {
+                    **COMPLETION_METRICS,
                     'status': 'success',
                     'result': self._tool_result(tool, 'direct-tool-call'),
                 },
                 {
+                    **COMPLETION_METRICS,
                     'status': 'success',
                     'result': assistant_text('Direct tool result'),
                 },
@@ -957,6 +975,7 @@ else:
         self.assertIn((row.id, self.env.uid), queued)
 
         self.session._ai_debug_bus_send('iteration', {
+            **COMPLETION_METRICS,
             'type': 'iteration',
             'trace_id': 'oversized-fixture',
             'exchange_uuid': 'oversized-fixture',
@@ -974,6 +993,8 @@ else:
         ], order='id desc', limit=1)
         oversized_payload = json.loads(oversized_row.message)['payload']
         self.assertTrue(oversized_payload['_payload_excluded'])
+        self.assertEqual(oversized_payload['usage'], COMPLETION_METRICS['usage'])
+        self.assertEqual(oversized_payload['cost'], COMPLETION_METRICS['cost'])
         self.assertEqual(oversized_payload['session_id'], self.session.id)
         self.assertEqual(oversized_payload['request_uuid'], 'oversized-request-fixture')
         self.assertNotIn('messages_sent', oversized_payload)
