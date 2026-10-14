@@ -25,6 +25,7 @@
             <span t-elif="this.props.trace.duration_ms !== null and this.props.trace.duration_ms !== undefined"
                   class="ai-metric-chip">
                 <t t-out="this.formatDuration(this.props.trace.duration_ms)"/>
+                <t t-if="this.props.trace.duration_kind === 'exchange_elapsed'"> elapsed</t>
                 <t t-if="this.props.trace.duration_kind === 'request_lifecycle'"> lifecycle</t>
             </span>
         </div>
@@ -67,7 +68,7 @@
                     <div class="ai-usage-scroll" tabindex="0" role="region" aria-label="Exchange usage">
                         <table class="ai-usage-table">
                             <caption class="visually-hidden">Captured exchange usage</caption>
-                            <thead><tr><th scope="col">Agent / iteration</th><th t-if="totals.has_token_metrics" scope="col">Input tokens</th><th t-if="totals.has_token_metrics" scope="col" title="Included in input tokens">Cached input</th><th t-if="totals.has_token_metrics" scope="col" title="Includes reasoning">Output tokens</th><th t-if="totals.cost_count" scope="col">Credits</th><th t-if="totals.has_duration_metrics" scope="col" title="Sum of round-trip durations, including overlapping calls">Model time</th></tr></thead>
+                            <thead><tr><th scope="col">Agent / iteration</th><th t-if="totals.has_token_metrics" scope="col">Input tokens</th><th t-if="totals.has_token_metrics" scope="col" title="Included in input tokens">Cached input</th><th t-if="totals.has_token_metrics" scope="col" title="Includes reasoning">Output tokens</th><th t-if="totals.cost_count" scope="col">Credits</th><th t-if="totals.has_duration_metrics" scope="col" title="Sum of round-trip durations, including overlapping calls">Cumulative model time</th></tr></thead>
                             <tbody>
                                 <tr t-foreach="this.usageRows()" t-as="row" t-key="row.id"
                                     t-att-class="{'o_ai_debug_usage_agent': row.type === 'agent'}">
