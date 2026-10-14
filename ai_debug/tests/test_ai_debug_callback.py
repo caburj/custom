@@ -1,5 +1,6 @@
 import json
 import time
+from datetime import datetime
 from textwrap import dedent
 from unittest.mock import MagicMock, patch
 
@@ -281,6 +282,7 @@ else:
         original_merge = EnterpriseAiSession._merge_child_result
 
         def slow_parent(session, child, result):
+            now.return_value = datetime(2026, 10, 13, 12, 0, 20)
             clock.time_ns.return_value = 20_000_000_000
             return original_merge(session, child, result)
 
@@ -288,7 +290,9 @@ else:
             patch('odoo.addons.ai_debug.models.ai_session.time', wraps=time) as clock,
             patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)),
             patch.object(EnterpriseAiSession, '_merge_child_result', slow_parent),
+            patch('odoo.addons.ai_debug.models.ai_session.fields.Datetime.now') as now,
         ):
+            now.return_value = datetime(2026, 10, 13, 12, 0, 1)
             clock.time_ns.return_value = 1_000_000_000
             parent, first = self._prepare()
             clock.time_ns.return_value = 4_000_000_000
@@ -298,12 +302,18 @@ else:
             }))
             self.assertEqual(parent.loop_state, 'waiting_child')
             child = self.env['ai.session'].browse(parent.pending_tool_call['pending_results'][0]['child_session_id'])
-            child_uuid = child.request_uuid
+            exchange = child.current_exchange_id
+            exchange.started_at = datetime(2026, 10, 13, 12, 0, 4)
+            now.return_value = datetime(2026, 10, 13, 12, 0, 10)
             clock.time_ns.return_value = 10_000_000_000
             self._consume(child, assistant_text('Done'))
         completed, = self._events(events, 'tool_call_completed', call_id='child')
         self.assertEqual(completed['duration_ms'], 6000)
         self.assertEqual(completed['request_uuid'], first.request_uuid)
+        self.assertEqual(exchange.finished_at, datetime(2026, 10, 13, 12, 0, 10))
+        ended, = self._events(events, 'loop_end', trace_id=exchange.uuid)
+        self.assertEqual(ended['duration_ms'], 6000)
+        self.assertEqual(ended['duration_kind'], 'exchange_elapsed')
 
     def test_each_tool_in_a_batch_has_its_own_duration(self):
         first = self._create_callback_tool('timed_first', "ai['result'] = 'First'")
@@ -1362,6 +1372,8 @@ class TestAiDebugHttp(HttpCase):
                 root._onTraceEvent({type: "tool_call_completed", trace_id: "timed-trace",
                     iteration_id: "timed-round", round_no: 1, tool_call_id: "timed-tool",
                     tool_name: "accounting_report_describe", duration_ms: 800, success: true});
+                root._onTraceEvent({type: "loop_end", trace_id: "timed-trace",
+                    termination_reason: "success", duration_ms: 6000, duration_kind: "exchange_elapsed"});
                 root.selectItem("timed-round", "iteration");
                 requestAnimationFrame(() => requestAnimationFrame(() => {
                     const row = document.querySelector('[data-node-id="timed-round"]');
@@ -1380,7 +1392,18 @@ class TestAiDebugHttp(HttpCase):
                         if (!duration?.textContent.includes("800ms")) {
                             throw new Error("Tool detail duration is missing");
                         }
-                        console.log("test successful");
+                        root.selectItem("timed-trace", "trace");
+                        requestAnimationFrame(() => requestAnimationFrame(() => {
+                            const traceRow = document.querySelector('[data-node-id="timed-trace"] .ai-tree-meta-line');
+                            const elapsed = document.querySelector(".ai-detail-header .ai-metric-chip");
+                            if (!traceRow?.textContent.includes("6.0s elapsed")
+                                || traceRow.textContent.includes("4.2s")
+                                || !elapsed?.textContent.includes("6.0s elapsed")
+                                || !document.querySelector(".ai-usage-table")?.textContent.includes("Cumulative model time")) {
+                                throw new Error("Exchange elapsed time is not separate from cumulative model time");
+                            }
+                            console.log("test successful");
+                        }));
                     }));
                 }));
             """,

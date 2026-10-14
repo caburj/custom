@@ -121,9 +121,9 @@
                                     <span t-if="totals.cost_count" title="Reported IAP credits, including descendants">
                                         <t t-out="this.formatCredits(totals.total_cost)"/> C &#xB7;
                                     </span>
-                                    <t t-if="totals.has_duration_metrics">
-                                        <t t-out="this.formatDuration(totals.total_duration_ms)"/> &#xB7;
-                                    </t>
+                                    <span t-if="node.trace.duration_ms != null" title="Elapsed time, including tool and subagent waits">
+                                        <t t-out="this.formatDuration(node.trace.duration_ms)"/> elapsed &#xB7;
+                                    </span>
                                     <t t-out="node.trace.agent_name or (node.trace.trace_kind === 'direct' ? 'Direct' : node.trace.trace_kind ? 'Helper' : 'Agent')"/>
                                     <t t-if="node.trace.ai_provider"> &#xB7; <t t-out="node.trace.ai_provider"/></t>
                                     <t t-if="node.trace.model_name"> &#xB7; <t t-out="node.trace.model_name"/></t>

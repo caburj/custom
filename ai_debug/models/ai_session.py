@@ -1123,6 +1123,11 @@ class AiSession(models.Model):
         if outcome.get('responseState') != 'idle':
             return False
         exchange_uuid = self._ai_debug_exchange_uuid(request)
+        exchange = self.env['ai.debug.exchange'].search([('uuid', '=', exchange_uuid)])
+        duration_ms = (
+            int((exchange.finished_at - exchange.started_at).total_seconds() * 1000)
+            if exchange.finished_at else None
+        )
         return self._ai_debug_bus_send('loop_end', {
             'type': 'loop_end',
             'trace_id': exchange_uuid,
@@ -1141,8 +1146,8 @@ class AiSession(models.Model):
             'phase': 'child_settled' if request['parent_session_id'] else 'completed',
             'error': error,
             'iteration_count': request['round_no'],
-            'duration_ms': None,
-            'duration_kind': None,
+            'duration_ms': duration_ms,
+            'duration_kind': 'exchange_elapsed' if duration_ms is not None else None,
         }, target_user_id=request['user_id'])
 
     def _ai_debug_trace_request_result(self, request, response, outcome, error):
@@ -1259,6 +1264,7 @@ class AiSession(models.Model):
 
     def _ai_debug_finish_exchange(self, status, *, content):
         exchange = self.current_exchange_id
+        finished_at = fields.Datetime.now()
 
         def capture():
             context = self._ai_debug_active_callback_context()
@@ -1269,7 +1275,7 @@ class AiSession(models.Model):
                     context['final_output'] = self._ai_debug_normalized_message({'role': 'assistant', 'content': parts})
         self._ai_debug_try(capture)
         result = super()._finish_exchange(status, content=content)
-        exchange.write({'state': status, 'finished_at': fields.Datetime.now()})
+        exchange.write({'state': status, 'finished_at': finished_at})
         self.current_exchange_id = False
         return result
 

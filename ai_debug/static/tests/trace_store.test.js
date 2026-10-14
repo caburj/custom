@@ -200,7 +200,11 @@ test("thinking progress stays on its tool and survives persistence without compl
 
 test("round timing survives prepared replays, tool waits, refresh and export", () => {
     const traces = new Map();
-    iteration(traces, { phase: "result_received", duration_ms: 4200, duration_kind: "model_round_trip" });
+    iteration(traces, {
+        phase: "result_received",
+        duration_ms: 4200,
+        duration_kind: "model_round_trip",
+    });
     iteration(traces, { duration_ms: null, duration_kind: null });
     tool(traces, "tool_call_completed", { status: "waiting_confirmation" });
     const restored = hydrateTrace(JSON.parse(JSON.stringify(serializeTrace(traces.get("parent")))));
@@ -210,10 +214,26 @@ test("round timing survives prepared replays, tool waits, refresh and export", (
     const reloaded = new Map([["parent", restored]]);
     iteration(reloaded, { iteration_id: "r2", request_uuid: "r2", round_no: 2 });
     expect(restored.iterations.get("r2").duration_ms).toBe(null);
-    iteration(reloaded, { iteration_id: "r2", request_uuid: "r2", round_no: 2,
-        phase: "result_received", duration_ms: 0, duration_kind: "model_round_trip" });
+    iteration(reloaded, {
+        iteration_id: "r2",
+        request_uuid: "r2",
+        round_no: 2,
+        phase: "result_received",
+        duration_ms: 0,
+        duration_kind: "model_round_trip",
+    });
+    reduceTraceEvent(reloaded, {
+        type: "loop_end",
+        trace_id: "parent",
+        termination_reason: "success",
+        duration_ms: 6000,
+        duration_kind: "exchange_elapsed",
+    });
     const exported = serializeTrace(restored);
     expect(exported.iterations.map(([, iter]) => iter.duration_ms)).toEqual([4200, 0]);
+    const completed = hydrateTrace(JSON.parse(JSON.stringify(exported)));
+    expect(completed.duration_ms).toBe(6000);
+    expect(completed.duration_kind).toBe("exchange_elapsed");
 });
 
 test("tool duration stays separate from model time through confirmation, replay and persistence", () => {
