@@ -1399,8 +1399,11 @@ class TestAiDebugHttp(HttpCase):
                             if (!traceRow?.textContent.includes("6.0s elapsed")
                                 || traceRow.textContent.includes("4.2s")
                                 || !elapsed?.textContent.includes("6.0s elapsed")
-                                || !document.querySelector(".ai-usage-table")?.textContent.includes("Cumulative model time")) {
-                                throw new Error("Exchange elapsed time is not separate from cumulative model time");
+                                || document.querySelector(".ai-usage-table thead th:last-child")?.textContent !== "Elapsed time"
+                                || document.querySelector(".ai-usage-table tbody tr:first-child td:last-child")?.textContent !== "6.0s"
+                                || document.querySelector(".ai-usage-table tbody tr:nth-child(2) td:last-child")?.textContent !== ""
+                                || document.querySelector(".ai-usage-table tfoot td:last-child")?.textContent !== "6.0s") {
+                                throw new Error("Usage table must show exchange elapsed time without substituting model-round durations");
                             }
                             console.log("test successful");
                         }));

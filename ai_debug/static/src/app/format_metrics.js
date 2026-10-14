@@ -47,7 +47,7 @@ export function formatCredits(credits) {
  * Aggregate captured iterations across the selected trace and its descendants.
  * @param {{ iterations: Map<string, {
  *     tokens: { input: number, output: number, cache_read: number, total: number } | null,
- *     cost: number | null, duration_ms: number | null,
+ *     cost: number | null,
  * }> }[]} traces
  */
 export function getTraceTotals(traces) {
@@ -56,13 +56,11 @@ export function getTraceTotals(traces) {
         total_output: 0,
         total_cached: 0,
         total_tokens: 0,
-        total_duration_ms: 0,
         total_cost: 0,
         iteration_count: 0,
         usage_count: 0,
         cost_count: 0,
         has_token_metrics: false,
-        has_duration_metrics: false,
     };
     for (const trace of traces) {
         totals.iteration_count += trace.iterations.size;
@@ -77,10 +75,6 @@ export function getTraceTotals(traces) {
             if (iteration.cost != null) {
                 totals.cost_count++;
                 totals.total_cost += iteration.cost;
-            }
-            if (iteration.duration_ms != null) {
-                totals.has_duration_metrics = true;
-                totals.total_duration_ms += iteration.duration_ms;
             }
         }
     }

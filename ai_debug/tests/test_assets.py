@@ -130,6 +130,7 @@ class TestAiDebugRuntime(HttpCase):
                     });
                     root._onTraceEvent({
                         type: "loop_end", trace_id: traceId, termination_reason: "success",
+                        duration_ms: 6000, duration_kind: "exchange_elapsed",
                     });
                     const { loadAllTraces } = odoo.loader.modules.get("@ai_debug/app/db");
                     const saved = (await loadAllTraces()).find((trace) => trace.trace_id === traceId);
@@ -138,10 +139,10 @@ class TestAiDebugRuntime(HttpCase):
                         || iteration.cost !== 0.00234) {
                         failures.push("captured usage and credits were not persisted");
                     }
-                    for (const [id, parentId, parentRound, input, cached, output, cost] of [
-                        ["child", traceId, "usage-round", 60, 20, 15, 0.001],
-                        ["grandchild", "child", "child-round", 20, 5, 10, 0.0005],
-                        ["unrelated", null, null, 1000, 500, 100, 1],
+                    for (const [id, parentId, parentRound, input, cached, output, cost, elapsed] of [
+                        ["child", traceId, "usage-round", 60, 20, 15, 0.001, 4000],
+                        ["grandchild", "child", "child-round", 20, 5, 10, 0.0005, 0],
+                        ["unrelated", null, null, 1000, 500, 100, 1, 9000],
                     ]) {
                         root._onTraceEvent({
                             type: "new_trace", trace_id: id, parent_trace_id: parentId,
@@ -155,6 +156,10 @@ class TestAiDebugRuntime(HttpCase):
                                 output: { text: output, image: 0 }, thought: 0,
                             },
                             cost,
+                        });
+                        root._onTraceEvent({
+                            type: "loop_end", trace_id: id, termination_reason: "success",
+                            duration_ms: elapsed, duration_kind: "exchange_elapsed",
                         });
                     }
                     root._onTraceEvent({
@@ -200,6 +205,10 @@ class TestAiDebugRuntime(HttpCase):
                         || visibleRows()[2].querySelector("td").textContent !== "80") {
                         failures.push("initial tree must show parent rounds and collapsed child subtotal");
                     }
+                    if (totalCells.at(-1) !== "6.0s"
+                        || visibleRows().map((row) => row.querySelector("td:last-child").textContent).join(",") !== "6.0s,,4.0s") {
+                        failures.push("elapsed time must use each exchange's duration, without adding descendants");
+                    }
                     const roundCredits = visibleRows()[1].querySelectorAll("td")[3].textContent;
                     if (roundCredits.replace(/\\s+/g, "") !== "0.002+0.002subagents"
                         || root.getIterationSubagentCost(root.traces.get(traceId), root.traces.get(traceId).iterations.get("usage-round")) !== 0.0015
@@ -212,6 +221,9 @@ class TestAiDebugRuntime(HttpCase):
                         || !visibleRows()[4].textContent.includes("grandchild")
                         || visibleRows().some((row) => row.textContent.includes("Partial child") || row.textContent.includes("Iteration 2"))) {
                         failures.push("expanded tree must nest descendants under their initiating rounds");
+                    }
+                    if (visibleRows()[4].querySelector("td:last-child").textContent !== "0ms") {
+                        failures.push("a measured zero elapsed duration must remain visible");
                     }
                     const childToggle = document.querySelector('button[aria-label="Collapse child"]');
                     childToggle.click();
