@@ -36,6 +36,7 @@
         </div>
 
         <t t-set="totals" t-value="this.getTraceTotals(this.props.traceFamily)"/>
+        <t t-set="hasElapsed" t-value="this.props.traceFamily.some(trace => trace.duration_ms != null)"/>
 
         <!-- Tabbed content -->
         <Notebook>
@@ -46,7 +47,7 @@
                               onExpandText="(title, content) => this.openTextPopup(title, content, 'json')"/>
                 </div>
             </t>
-            <t t-set-slot="usage" title="'Usage'" isVisible="!!(totals.has_token_metrics or totals.cost_count or totals.has_duration_metrics)">
+            <t t-set-slot="usage" title="'Usage'" isVisible="!!(totals.has_token_metrics or totals.cost_count or hasElapsed)">
                 <div t-if="totals.has_token_metrics or totals.cost_count" class="ai-usage-summary">
                     <strong>Exchange total</strong>
                     <span t-if="totals.has_token_metrics">Input <strong t-out="this.formatCount(totals.total_input)"/></span>
@@ -68,7 +69,7 @@
                     <div class="ai-usage-scroll" tabindex="0" role="region" aria-label="Exchange usage">
                         <table class="ai-usage-table">
                             <caption class="visually-hidden">Captured exchange usage</caption>
-                            <thead><tr><th scope="col">Agent / iteration</th><th t-if="totals.has_token_metrics" scope="col">Input tokens</th><th t-if="totals.has_token_metrics" scope="col" title="Included in input tokens">Cached input</th><th t-if="totals.has_token_metrics" scope="col" title="Includes reasoning">Output tokens</th><th t-if="totals.cost_count" scope="col">Credits</th><th t-if="totals.has_duration_metrics" scope="col" title="Sum of round-trip durations, including overlapping calls">Cumulative model time</th></tr></thead>
+                            <thead><tr><th scope="col">Agent / iteration</th><th t-if="totals.has_token_metrics" scope="col">Input tokens</th><th t-if="totals.has_token_metrics" scope="col" title="Included in input tokens">Cached input</th><th t-if="totals.has_token_metrics" scope="col" title="Includes reasoning">Output tokens</th><th t-if="totals.cost_count" scope="col">Credits</th><th t-if="hasElapsed" scope="col" title="Exchange elapsed time, including tool and subagent waits">Elapsed time</th></tr></thead>
                             <tbody>
                                 <tr t-foreach="this.usageRows()" t-as="row" t-key="row.id"
                                     t-att-class="{'o_ai_debug_usage_agent': row.type === 'agent'}">
@@ -100,7 +101,7 @@
                                             <t t-if="row.cost != null">+ </t><t t-out="this.formatCredits(row.subagentCost)"/> subagents
                                         </div>
                                     </td>
-                                    <td t-if="totals.has_duration_metrics"><t t-if="row.duration_ms != null" t-out="this.formatDuration(row.duration_ms)"/></td>
+                                    <td t-if="hasElapsed"><t t-if="row.type === 'agent' and row.duration_ms != null" t-out="this.formatDuration(row.duration_ms)"/></td>
                                 </tr>
                             </tbody>
                             <tfoot><tr>
@@ -109,7 +110,7 @@
                                 <td t-if="totals.has_token_metrics" t-out="this.formatCount(totals.total_cached)"/>
                                 <td t-if="totals.has_token_metrics" t-out="this.formatCount(totals.total_output)"/>
                                 <td t-if="totals.cost_count" t-out="this.formatCredits(totals.total_cost)"/>
-                                <td t-if="totals.has_duration_metrics" t-out="this.formatDuration(totals.total_duration_ms)"/>
+                                <td t-if="hasElapsed"><t t-if="this.props.trace.duration_ms != null" t-out="this.formatDuration(this.props.trace.duration_ms)"/></td>
                             </tr></tfoot>
                         </table>
                     </div>

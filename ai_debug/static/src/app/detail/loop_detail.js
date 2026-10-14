@@ -102,7 +102,7 @@ export class LoopDetail extends Component {
                       }
                     : null;
                 node.cost = totals.cost_count ? totals.total_cost : null;
-                node.duration_ms = totals.has_duration_metrics ? totals.total_duration_ms : null;
+                node.duration_ms = node.trace.duration_ms;
             } else {
                 node.subagentCost = totals.cost_count ? totals.total_cost : null;
             }
