@@ -465,6 +465,60 @@ class TestAiDebugRuntime(HttpCase):
                     if (document.querySelector(".o_ai_debug_scrollbar")) {
                         failures.push("overlay scrollbar must disappear when collapsed exchanges fit");
                     }
+                    const exchange = root.traces.get(traceId);
+                    exchange.hydrated = true;
+                    exchange.phase = "completed";
+                    exchange.user_query = "Inspect this exchange";
+                    root.selectItem("another-exchange", "trace");
+                    await frame();
+                    const exchangeRow = document.querySelector(`[data-node-id="${traceId}"]`);
+                    if (exchangeRow.querySelector(".ai-tree-hydrated-badge, .ai-tree-label-dim")
+                        || !exchangeRow.querySelector(".ai-tree-status.success")) {
+                        failures.push("saved successful exchanges must show only the success icon");
+                    }
+                    for (const target of [exchangeRow, exchangeRow.querySelector(".ai-tree-status")]) {
+                        root.selectItem("another-exchange", "trace");
+                        target.click();
+                        await frame();
+                        if (root.state.selectedId !== traceId || root.state.selectedType !== "trace"
+                            || !exchangeRow.classList.contains("selected")) {
+                            failures.push("row space and status icon must select the exchange");
+                        }
+                    }
+                    document.querySelector('[data-node-id="another-exchange"] .ai-tree-label-dim').click();
+                    await frame();
+                    if (root.state.selectedId !== "another-exchange") {
+                        failures.push("active status text must select its exchange");
+                    }
+                    const checked = root.state.checkedTraceIds.has(traceId);
+                    exchangeRow.querySelector(".ai-tree-row-check").click();
+                    await frame();
+                    if (root.state.selectedId !== "another-exchange"
+                        || root.state.checkedTraceIds.has(traceId) === checked) {
+                        failures.push("checkbox must toggle without selecting the exchange");
+                    }
+                    const expanded = exchange.expanded;
+                    exchangeRow.querySelector(".ai-tree-chevron").click();
+                    await frame();
+                    if (root.state.selectedId !== "another-exchange" || exchange.expanded === expanded) {
+                        failures.push("chevron must fold without selecting the exchange");
+                    }
+                    exchangeRow.querySelector(".o_ai_debug_exchange_toggle").click();
+                    await frame();
+                    if (root.state.selectedId !== "another-exchange") {
+                        failures.push("recursive toggle must not select the exchange");
+                    }
+                    exchangeRow.querySelector(".ai-tree-query-title").click();
+                    await frame();
+                    if (root.state.selectedId !== "another-exchange" || !document.querySelector(".o_dialog")) {
+                        failures.push("query popup must open without selecting the exchange");
+                    }
+                    document.querySelector(".o_dialog .btn-close").click();
+                    exchangeRow.querySelector(".o_ai_debug_exchange_select").click();
+                    await frame();
+                    if (root.state.selectedId !== traceId) {
+                        failures.push("native label button must select the exchange");
+                    }
                     if (failures.length) {
                         throw new Error(failures.join("; "));
                     }
