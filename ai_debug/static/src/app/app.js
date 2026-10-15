@@ -48,6 +48,24 @@ export class AiDebugApp extends Component {
 
         // Sidebar DOM ref for the new-trace flash effect
         this.sidebarRef = signal.ref();
+        this.sidebarScroll = proxy({
+            top: 0,
+            height: 0,
+            max: 0,
+            value: 0,
+            active: false,
+            dragging: false,
+        });
+        onMounted(() => {
+            this.sidebarResizeObserver = new ResizeObserver(() => this.updateSidebarScrollbar());
+            this.sidebarResizeObserver.observe(this.sidebarRef());
+            this.updateSidebarScrollbar();
+        });
+        onPatched(() => this.updateSidebarScrollbar());
+        onWillUnmount(() => {
+            this.sidebarResizeObserver.disconnect();
+            clearTimeout(this.sidebarScrollTimeout);
+        });
         // Select-all checkbox DOM ref for indeterminate state sync
         this.selectAllRef = signal.ref();
         // Hidden file input ref for import file picker
@@ -177,6 +195,86 @@ export class AiDebugApp extends Component {
         }
     }
 
+    updateSidebarScrollbar() {
+        const viewport = this.sidebarRef();
+        const height = viewport.clientHeight;
+        const max = viewport.scrollHeight - height;
+        this.sidebarScroll.max = max;
+        this.sidebarScroll.value = viewport.scrollTop;
+        this.sidebarScroll.height = Math.min(
+            height,
+            Math.max(24, (height * height) / viewport.scrollHeight),
+        );
+        this.sidebarScroll.top =
+            max > 0 ? (viewport.scrollTop / max) * (height - this.sidebarScroll.height) : 0;
+    }
+
+    onSidebarScroll() {
+        this.updateSidebarScrollbar();
+        this.sidebarScroll.active = true;
+        clearTimeout(this.sidebarScrollTimeout);
+        this.sidebarScrollTimeout = setTimeout(() => {
+            this.sidebarScroll.active = false;
+        }, 700);
+    }
+
+    /** @param {PointerEvent} event */
+    onSidebarScrollbarDown(event) {
+        if (event.button !== 0) {
+            return;
+        }
+        const viewport = this.sidebarRef();
+        const track = event.currentTarget;
+        if (event.target === track) {
+            viewport.scrollTop =
+                ((event.clientY -
+                    track.getBoundingClientRect().top -
+                    this.sidebarScroll.height / 2) /
+                    (viewport.clientHeight - this.sidebarScroll.height)) *
+                this.sidebarScroll.max;
+        }
+        this.sidebarDragY = event.clientY;
+        this.sidebarDragScroll = viewport.scrollTop;
+        this.sidebarScroll.dragging = true;
+        track.setPointerCapture(event.pointerId);
+    }
+
+    /** @param {PointerEvent} event */
+    onSidebarScrollbarMove(event) {
+        if (!this.sidebarScroll.dragging) {
+            return;
+        }
+        const viewport = this.sidebarRef();
+        viewport.scrollTop =
+            this.sidebarDragScroll +
+            ((event.clientY - this.sidebarDragY) * this.sidebarScroll.max) /
+                (viewport.clientHeight - this.sidebarScroll.height);
+    }
+
+    /** @param {KeyboardEvent} event */
+    onSidebarScrollbarKeydown(event) {
+        const viewport = this.sidebarRef();
+        const positions = {
+            ArrowUp: viewport.scrollTop - 40,
+            ArrowDown: viewport.scrollTop + 40,
+            PageUp: viewport.scrollTop - viewport.clientHeight,
+            PageDown: viewport.scrollTop + viewport.clientHeight,
+            Home: 0,
+            End: this.sidebarScroll.max,
+        };
+        if (event.key in positions) {
+            event.preventDefault();
+            viewport.scrollTop = positions[event.key];
+        }
+    }
+
+    /** @param {WheelEvent} event */
+    onSidebarScrollbarWheel(event) {
+        const viewport = this.sidebarRef();
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1;
+        viewport.scrollTop += event.deltaY * unit;
+    }
+
     toggleGroup(id) {
         if (this.state.collapsedGroupIds.has(id)) {
             this.state.collapsedGroupIds.delete(id);
@@ -222,6 +320,33 @@ export class AiDebugApp extends Component {
             if (!trace) return;
             const iteration = trace.iterations.get(typeOrIterationId);
             if (iteration) iteration.expanded = !iteration.expanded;
+        }
+    }
+
+    /** @param {{ trace_id: string }} trace */
+    isExchangeFullyExpanded(trace) {
+        return this.getTraceFamily(trace).every(
+            (member) =>
+                member.expanded &&
+                [...member.iterations.values()].every(
+                    (iteration) =>
+                        iteration.expanded &&
+                        [...iteration.toolCalls.values()].every((toolCall) => toolCall.expanded),
+                ),
+        );
+    }
+
+    /** @param {{ trace_id: string }} trace */
+    toggleExchangeExpansion(trace) {
+        const expanded = !this.isExchangeFullyExpanded(trace);
+        for (const member of this.getTraceFamily(trace)) {
+            member.expanded = expanded;
+            for (const iteration of member.iterations.values()) {
+                iteration.expanded = expanded;
+                for (const toolCall of iteration.toolCalls.values()) {
+                    toolCall.expanded = expanded;
+                }
+            }
         }
     }
 

@@ -344,6 +344,127 @@ class TestAiDebugRuntime(HttpCase):
                         [traceId, "another-exchange", "session-only"].includes(node.id) && node.depth !== 0)) {
                         failures.push("channel grouping must not add exchange indentation");
                     }
+                    for (const [parentId, roundId, toolId, childId] of [
+                        [traceId, "usage-round", "start-child", "child"],
+                        ["child", "child-round", "start-grandchild", "grandchild"],
+                    ]) {
+                        root._onTraceEvent({
+                            type: "tool_call_started", trace_id: parentId,
+                            iteration_id: roundId, tool_call_id: toolId,
+                            tool_name: "start_agent",
+                        });
+                        root._onTraceEvent({
+                            type: "new_trace", trace_id: childId, parent_tool_call_id: toolId,
+                        });
+                    }
+                    root.traces.get("child").expanded = false;
+                    await frame();
+                    const exchangeToggle = document.querySelector(
+                        `[data-node-id="${traceId}"] .o_ai_debug_exchange_toggle`
+                    );
+                    const unrelatedExpanded = root.traces.get("unrelated").expanded;
+                    if (!exchangeToggle.querySelector('[data-icon="expand_content"]')
+                        || exchangeToggle.getAttribute("aria-label") !== "Expand all in exchange") {
+                        failures.push("partially expanded exchanges must offer recursive expansion");
+                    }
+                    const icon = exchangeToggle.querySelector("i");
+                    await document.fonts.load('14px "Material Symbols Outlined"');
+                    const iconStyle = getComputedStyle(icon, "::before");
+                    if (iconStyle.content !== '"expand_content"'
+                        || !iconStyle.fontFamily.includes("Material Symbols Outlined")
+                        || !document.fonts.check('14px "Material Symbols Outlined"')
+                        || icon.getBoundingClientRect().width === 0) {
+                        failures.push("recursive toggle icon must render with the loaded Odoo icon font");
+                    }
+                    exchangeToggle.focus();
+                    await frame();
+                    if (document.activeElement !== exchangeToggle
+                        || getComputedStyle(exchangeToggle).opacity !== "1") {
+                        failures.push("recursive exchange toggle must be visible when keyboard focused");
+                    }
+                    exchangeToggle.click();
+                    await frame();
+                    if (!document.querySelector('[data-node-id="grandchild-round"]')
+                        || !exchangeToggle.querySelector('[data-icon="close_fullscreen"]')
+                        || exchangeToggle.getAttribute("aria-label") !== "Collapse all in exchange") {
+                        failures.push("recursive expansion must reveal all descendant rounds");
+                    }
+                    const childExchangeToggle = document.querySelector(
+                        '[data-node-id="child"] .o_ai_debug_exchange_toggle'
+                    );
+                    childExchangeToggle.click();
+                    await frame();
+                    if (!root.traces.get(traceId).expanded
+                        || document.querySelector('[data-node-id="grandchild"]')
+                        || !exchangeToggle.querySelector('[data-icon="expand_content"]')) {
+                        failures.push("nested exchange collapse must leave its ancestor open");
+                    }
+                    exchangeToggle.click();
+                    await frame();
+                    exchangeToggle.click();
+                    await frame();
+                    if (document.querySelector('[data-node-id="usage-round"]')
+                        || document.querySelector('[data-node-id="grandchild-round"]')
+                        || root.getTraceFamily(root.traces.get(traceId)).some((trace) =>
+                            trace.expanded || [...trace.iterations.values()].some((iteration) =>
+                                iteration.expanded || [...iteration.toolCalls.values()].some((tool) => tool.expanded)))
+                        || root.traces.get("unrelated").expanded !== unrelatedExpanded
+                        || selection.join(",") !== [root.state.selectedId, root.state.selectedType].join(",")) {
+                        failures.push("recursive collapse must close only its subtree and preserve detail selection");
+                    }
+                    document.querySelector(`[data-node-id="${traceId}"] .ai-tree-chevron`).click();
+                    await frame();
+                    if (!document.querySelector('[data-node-id="usage-round"]')
+                        || document.querySelector('[data-node-id="start-child"]')) {
+                        failures.push("ordinary chevron must preserve the collapsed descendant state");
+                    }
+                    root.state.ephemeralMode = true;
+                    const viewport = root.sidebarRef();
+                    const initialWidth = viewport.clientWidth;
+                    for (let index = 0; index < 40; index++) {
+                        root._onTraceEvent({
+                            type: "iteration", trace_id: "another-exchange",
+                            iteration_id: `scroll-round-${index}`, iteration_index: index,
+                            phase: "prepared",
+                        });
+                    }
+                    await frame();
+                    await frame();
+                    const scrollbar = document.querySelector(".o_ai_debug_scrollbar");
+                    if (!scrollbar || viewport.scrollHeight <= viewport.clientHeight
+                        || viewport.clientWidth !== initialWidth
+                        || viewport.offsetWidth !== viewport.clientWidth) {
+                        failures.push("sidebar scrollbar must overlay overflowing content without consuming width");
+                    }
+                    scrollbar.focus();
+                    scrollbar.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+                    await frame();
+                    await frame();
+                    if (viewport.scrollTop !== viewport.scrollHeight - viewport.clientHeight
+                        || Number(scrollbar.getAttribute("aria-valuenow")) !== Math.round(viewport.scrollTop)) {
+                        failures.push("overlay scrollbar must support keyboard scrolling and expose its position");
+                    }
+                    scrollbar.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+                    await frame();
+                    scrollbar.dispatchEvent(new WheelEvent("wheel", { deltaY: 100, bubbles: true, cancelable: true }));
+                    await frame();
+                    await frame();
+                    if (viewport.scrollTop !== 100 || !scrollbar.classList.contains("o_active")) {
+                        failures.push("scrolling over the overlay must scroll the traces and reveal the thumb");
+                    }
+                    const beforeResize = root.sidebarScroll.height;
+                    root.state.sidebarWidth = 340;
+                    await frame();
+                    await frame();
+                    if (viewport.offsetWidth !== viewport.clientWidth || root.sidebarScroll.height !== beforeResize) {
+                        failures.push("resizing the sidebar must retain the overlay without a gutter");
+                    }
+                    for (const trace of root.traces.values()) trace.expanded = false;
+                    await frame();
+                    await frame();
+                    if (document.querySelector(".o_ai_debug_scrollbar")) {
+                        failures.push("overlay scrollbar must disappear when collapsed exchanges fit");
+                    }
                     if (failures.length) {
                         throw new Error(failures.join("; "));
                     }

@@ -55,7 +55,10 @@
                 </div>
 
                 <!-- Scrollable tree content area -->
-                <div t-attf-class="ai-tree-content {{ this.state.nestingMode === 'indent' ? 'ai-indent-mode' : '' }}" t-ref="this.sidebarRef">
+                <div class="o_ai_debug_scroll_area">
+                <div t-attf-class="ai-tree-content {{ this.state.nestingMode === 'indent' ? 'ai-indent-mode' : '' }}"
+                     id="o_ai_debug_trace_list" role="region" aria-label="Traces" tabindex="0"
+                     t-on-scroll="this.onSidebarScroll" t-ref="this.sidebarRef">
 
                 <!-- Depth staircase line — SVG overlay, scrolls with content -->
                 <svg t-if="this.sidebarNodes.length > 0 and this.state.nestingMode === 'lines'"
@@ -147,6 +150,13 @@
                             <span t-elif="node.trace.status === 'success'" class="ai-tree-status success">&#x2713;</span>
                             <span t-elif="node.trace.status === 'error'" class="ai-tree-status error">&#x2717;</span>
                             <span t-elif="node.trace.status === 'max_iterations'" class="ai-tree-status warn">&#x23F8;</span>
+                            <t t-set="fullyExpanded" t-value="this.isExchangeFullyExpanded(node.trace)"/>
+                            <button type="button" class="o_ai_debug_exchange_toggle"
+                                    t-att-aria-label="fullyExpanded ? 'Collapse all in exchange' : 'Expand all in exchange'"
+                                    t-att-title="fullyExpanded ? 'Collapse all in exchange' : 'Expand all in exchange'"
+                                    t-on-click.stop="() => this.toggleExchangeExpansion(node.trace)">
+                                <i class="oi" t-att-data-icon="fullyExpanded ? 'close_fullscreen' : 'expand_content'" aria-hidden="true"/>
+                            </button>
                         </div>
                     </t>
 
@@ -226,6 +236,21 @@
                 </t>
 
                 </div> <!-- end .ai-tree-content -->
+                <div t-if="this.sidebarScroll.max > 0" class="o_ai_debug_scrollbar"
+                     t-att-class="{ 'o_active': this.sidebarScroll.active or this.sidebarScroll.dragging }"
+                     role="scrollbar" aria-label="Scroll traces" aria-controls="o_ai_debug_trace_list"
+                     aria-orientation="vertical" aria-valuemin="0" tabindex="0"
+                     t-att-aria-valuemax="Math.round(this.sidebarScroll.max)"
+                     t-att-aria-valuenow="Math.round(this.sidebarScroll.value)"
+                     t-on-pointerdown.prevent="this.onSidebarScrollbarDown"
+                     t-on-pointermove="this.onSidebarScrollbarMove"
+                     t-on-lostpointercapture="() => this.sidebarScroll.dragging = false"
+                     t-on-keydown="this.onSidebarScrollbarKeydown"
+                     t-on-wheel.prevent="this.onSidebarScrollbarWheel">
+                    <div class="o_ai_debug_scroll_thumb"
+                         t-attf-style="height: {{this.sidebarScroll.height}}px; transform: translateY({{this.sidebarScroll.top}}px);"/>
+                </div>
+                </div>
 
             </aside>
 
