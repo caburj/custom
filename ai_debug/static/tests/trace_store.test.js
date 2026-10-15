@@ -55,18 +55,34 @@ test("prepared iteration is updated in place without discarding tools or receive
 
 test("child updates remain captured and visible before parent arrives, then nest on the exact tool", () => {
     const traces = new Map();
-    const captured = child(traces);
+    const captured = child(traces, { root_session_id: 1, root_agent_name: "Auditor", channel_id: 42, channel_name: "Audit" });
     iteration(traces, { trace_id: "child", raw_response: { status: "success" }, phase: "result_received" });
     event(traces, "loop_end", { trace_id: "child", phase: "child_settled", termination_reason: "success" });
-    expect(collectSidebarNodes(traces)[0].id).toBe("child");
+    expect(collectSidebarNodes(traces)[0].id).toBe("group:channel:42");
+    expect(collectSidebarNodes(traces)[1].id).toBe("child");
     expect(parentTool(traces, captured)).toBe(null);
-    event(traces, "new_trace", { session_id: 1 });
+    event(traces, "new_trace", { session_id: 1, root_session_id: 1, root_agent_name: "Auditor", channel_id: 42, channel_name: "Audit" });
     tool(traces);
     expect(parentTool(traces, captured).tc.tool_call_id).toBe("r1-call");
     const nodes = collectSidebarNodes(traces).filter((node) => node.type === "trace");
     expect(nodes.map((node) => [node.id, node.depth])).toEqual([["parent", 0], ["child", 1]]);
     expect(captured.status).toBe("success");
     expect(captured.iterations.get("r1").raw_response).toEqual({ status: "success" });
+    event(traces, "new_trace", { trace_id: "same-channel", session_id: 3, root_session_id: 3,
+        channel_id: 42, channel_name: "Audit" });
+    event(traces, "new_trace", { trace_id: "session-only", session_id: 4, root_session_id: 4,
+        root_agent_name: "Auditor", channel_id: null });
+    event(traces, "new_trace", { trace_id: "session-again", session_id: 4, root_session_id: 4,
+        root_agent_name: "Auditor", channel_id: null });
+    event(traces, "new_trace", { trace_id: "another-session", session_id: 5, root_session_id: 5,
+        root_agent_name: "Auditor", channel_id: null });
+    for (const [index, trace] of [...traces.values()].entries()) trace.created_ts = index;
+    const grouped = collectSidebarNodes(traces);
+    expect(grouped.filter((node) => node.type === "group").map((node) => node.id))
+        .toEqual(["group:session:5", "group:session:4", "group:channel:42"]);
+    expect(grouped.filter((node) => node.type === "trace" && node.depth === 0).map((node) => node.id))
+        .toEqual(["another-session", "session-again", "session-only", "same-channel", "parent"]);
+
 });
 
 test("durable linkage never falls back to a reused raw call ID in another round or session", () => {
@@ -132,7 +148,8 @@ test("old round application updates its tool without regressing the next prepare
 
 test("refresh and export retain active phases, helper identity and unresolved links", () => {
     const traces = new Map();
-    const trace = child(traces, { trace_kind: "web_search", trace_label: "Web Search" });
+    const trace = child(traces, { trace_kind: "web_search", trace_label: "Web Search",
+        root_session_id: 1, root_agent_name: "Auditor", channel_id: 42, channel_name: "Audit" });
     tool(traces, "tool_call_completed", { trace_id: "child", status: "waiting_confirmation", triggered_confirmation: true });
     event(traces, "request_state", { trace_id: "child", iteration_id: "r1", request_uuid: "r1", round_no: 1,
         phase: "result_consumed", state: "waiting_interaction", request_phase: "submitted" });
@@ -145,11 +162,17 @@ test("refresh and export retain active phases, helper identity and unresolved li
     expect(restored.trace_label).toBe("Web Search");
     expect(restored.iterations.get("r1").toolCalls.get("r1-call").status).toBe("waiting_confirmation");
     const reloaded = new Map([["child", restored]]);
-    expect(collectSidebarNodes(reloaded).map((node) => node.id)).toEqual(["child"]);
+    expect(collectSidebarNodes(reloaded).map((node) => node.id)).toEqual(["group:channel:42", "child"]);
+    expect(restored.root_session_id).toBe(1);
+    expect(restored.channel_id).toBe(42);
+    expect(collectSidebarNodes(reloaded)[0].label).toBe("Audit");
     event(reloaded, "loop_end", { trace_id: "child", phase: "child_settled", termination_reason: "success",
+        root_session_id: 1, channel_id: 42, channel_name: "Renamed audit",
         exchange_result: { status: "completed", message: "answer", attachments: [7], sources: ["source"] },
         final_output: { content: [{ type: "text", content: { data: "answer" } }] } });
     const exported = serializeTrace(restored);
+    expect(exported.channel_name).toBe("Renamed audit");
+    expect(collectSidebarNodes(reloaded)[0].label).toBe("Renamed audit");
     expect(exported.exchange_result.attachments).toEqual([7]);
     expect(exported.final_output.content[0].content.data).toBe("answer");
     expect(exported.phase).toBe("child_settled");

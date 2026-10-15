@@ -78,6 +78,10 @@ export function reduceTraceEvent(traces, payload, newMap = makeMap) {
     }
     const trace = traces.get(payload.trace_id);
     assignDefined(trace, payload, ["exchange_uuid", "session_id"]);
+    if (payload.root_session_id !== undefined) {
+        assignDefined(trace, payload, ["root_session_id", "root_agent_name", "channel_id", "channel_name"]);
+        trace.group_updated_ts = Date.now();
+    }
     if (trace.status === "running") updateProgress(trace, payload);
 
     if (payload.type === "new_trace") {
@@ -187,7 +191,51 @@ export function collectSidebarNodes(traces) {
             }
         }
     }
-    for (const root of roots.reverse()) collect(root, 0);
+    const groups = new Map();
+    for (const root of roots.reverse().sort((a, b) => b.created_ts - a.created_ts)) {
+        const id = root.channel_id
+            ? `channel:${root.channel_id}`
+            : root.root_session_id
+              ? `session:${root.root_session_id}`
+              : "unlinked";
+        if (!groups.has(id)) {
+            groups.set(id, {
+                type: "group",
+                id: `group:${id}`,
+                depth: 0,
+                channel_id: root.channel_id,
+                root_session_id: root.root_session_id,
+                label: "Unlinked traces",
+                updated: -1,
+                roots: [],
+            });
+        }
+        const group = groups.get(id);
+        group.roots.push(root);
+    }
+    // A title helper may have the newest name even when nested or older.
+    for (const trace of traces.values()) {
+        const id = trace.channel_id
+            ? `channel:${trace.channel_id}`
+            : trace.root_session_id
+              ? `session:${trace.root_session_id}`
+              : "unlinked";
+        const group = groups.get(id);
+        if (group && trace.group_updated_ts >= group.updated) {
+            group.label = trace.channel_id
+                ? trace.channel_name || "Untitled conversation"
+                : trace.root_session_id
+                  ? trace.root_agent_name || "Session"
+                  : "Unlinked traces";
+            group.updated = trace.group_updated_ts;
+        }
+    }
+    for (const group of groups.values()) {
+        nodes.push(group);
+        for (const root of group.roots) {
+            collect(root, 0);
+        }
+    }
     return nodes;
 }
 

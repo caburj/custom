@@ -291,6 +291,7 @@ export class AiDebugApp extends Component {
     static DEPTH_LINE_STEP_X = 4;
     static DEPTH_LINE_TRANSITION_H = 16;
     static DEPTH_LINE_COLORS = ["#3b82f6", "#14b8a6", "#a855f7", "#f59e0b", "#f43f5e"];
+    static ROW_H_GROUP = 32;
     static ROW_H_TRACE = 44;
     static ROW_H_DEFAULT = 34;
 
@@ -309,7 +310,7 @@ export class AiDebugApp extends Component {
     get depthLineTotalHeight() {
         const C = this.constructor;
         return this.sidebarNodes.reduce(
-            (h, n) => h + (n.type === "trace" ? C.ROW_H_TRACE : C.ROW_H_DEFAULT), 0
+            (h, n) => h + (n.type === "group" ? C.ROW_H_GROUP : n.type === "trace" ? C.ROW_H_TRACE : C.ROW_H_DEFAULT), 0
         );
     }
 
@@ -331,8 +332,8 @@ export class AiDebugApp extends Component {
         let y = 0;
         const pos = [];
         for (const node of nodes) {
-            const h = node.type === "trace" ? C.ROW_H_TRACE : C.ROW_H_DEFAULT;
-            pos.push({ top: y, bottom: y + h, depth: Math.min(node.depth, 4) });
+            const h = node.type === "group" ? C.ROW_H_GROUP : node.type === "trace" ? C.ROW_H_TRACE : C.ROW_H_DEFAULT;
+            pos.push({ top: y, bottom: y + h, depth: node.type === "group" ? null : Math.min(node.depth, 4) });
             y += h;
         }
 
@@ -354,21 +355,24 @@ export class AiDebugApp extends Component {
         const paths = [];
         for (let g = 0; g < groups.length; g++) {
             const grp = groups[g];
+            if (grp.depth === null) {
+                continue;
+            }
             const x = BX + grp.depth * SX;
             const color = COLORS[grp.depth] || COLORS[4];
 
             // Vertical extent, trimmed by transition zones
             let yStart = grp.yTop;
             let yEnd = grp.yBot;
-            if (g > 0) yStart += TH / 2;
-            if (g < groups.length - 1) yEnd -= TH / 2;
+            if (g > 0 && groups[g - 1].depth !== null) yStart += TH / 2;
+            if (g < groups.length - 1 && groups[g + 1].depth !== null) yEnd -= TH / 2;
 
             if (yEnd > yStart) {
                 paths.push({ d: `M ${x},${yStart} L ${x},${yEnd}`, color });
             }
 
             // S-curve transition to next group
-            if (g < groups.length - 1) {
+            if (g < groups.length - 1 && groups[g + 1].depth !== null) {
                 const next = groups[g + 1];
                 const nx = BX + next.depth * SX;
                 const boundary = grp.yBot;

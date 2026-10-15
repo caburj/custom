@@ -81,6 +81,12 @@
                 <!-- Tree entries — flat list from sidebarNodes computed getter -->
                 <t t-foreach="this.sidebarNodes" t-as="node" t-key="node.id">
 
+                    <div t-if="node.type === 'group'" class="o_ai_debug_group_header" role="heading" aria-level="2">
+                        <span class="text-truncate" t-out="node.label"/>
+                        <span t-if="node.channel_id" class="o_ai_debug_group_record">Channel #<t t-out="node.channel_id"/></span>
+                        <span t-elif="node.root_session_id" class="o_ai_debug_group_record">Session #<t t-out="node.root_session_id"/></span>
+                    </div>
+
                     <!-- Trace row (two-line format: query title + agent/model meta) -->
                     <t t-if="node.type === 'trace'">
                         <div t-attf-class="ai-tree-row ai-tree-trace-row ai-depth-{{ node.depth > 4 ? 4 : node.depth }}"

@@ -168,6 +168,9 @@ class TestAiDebugCallback(TransactionCase):
             second_uuid = session.request_uuid
             self._consume(session, assistant_text('The answer'))
         self.assertEqual(len(self._events(events, 'new_trace')), 1)
+        trace, = self._events(events, 'new_trace')
+        self.assertEqual(trace['root_session_id'], session.id)
+        self.assertEqual(trace['channel_id'], self.channel.id)
         self.assertEqual(len(self._events(events, 'tool_call_completed')), 1)
         terminal, = self._events(events, 'loop_end')
         self.assertIn('The answer', str(terminal['final_output']))
@@ -670,6 +673,8 @@ else:
             child = self.env['ai.session'].search([('parent_session_id', '=', root.id)])
             self.assertEqual(len(child), 1)
             child_trace, = self._events(events, 'new_trace', session_id=child.id)
+            self.assertEqual(child_trace['root_session_id'], root.id)
+            self.assertEqual(child_trace['channel_id'], self.channel.id)
             self.assertEqual(child_trace['parent_tool_call_id'], root._ai_debug_callback_tool_call_id(request.request_uuid, 'start'))
             child_request = child.request_uuid
             first_child_exchange = child.current_exchange_id
@@ -760,11 +765,15 @@ else:
         self.assertFalse(title.exists())
         self.assertEqual(self.channel.name, 'A good title')
         trace, = self._events(events, 'new_trace', session_id=title_id)
+        self.assertEqual(trace['root_session_id'], root.id)
+        self.assertEqual(trace['channel_id'], self.channel.id)
+        self.assertIsNone(trace['channel_name'])
         received, = self._events(events, 'iteration', trace_id=trace['trace_id'], phase='result_received')
         self.assertEqual(received['usage'], COMPLETION_METRICS['usage'])
         self.assertEqual(received['cost'], 0)
         terminal, = self._events(events, 'loop_end', trace_id=trace['trace_id'])
         self.assertEqual(terminal['termination_reason'], 'success')
+        self.assertEqual(terminal['channel_name'], 'A good title')
 
     def test_debugger_failures_do_not_break_business_requests(self):
         with patch.object(DebugAiSession, '_ai_debug_prepare_request_context', side_effect=RuntimeError('Observer failed')):
@@ -822,7 +831,7 @@ else:
         events = []
         context = {
             '_ai_debug_callback_ctx': {'session_id': self.session.id, 'trace_id': 'root-trace',
-                                       'request_uuid': 'root-request'},
+                                       'request_uuid': 'root-request', 'group': self.session._ai_debug_group_metadata()},
             'ai_parent_trace_id': 'root-trace', 'ai_parent_tool_call_id': 'search-call',
             'allowed_company_ids': user.company_ids.ids, 'current_view_info': {'marker': 'page'},
         }
@@ -836,6 +845,8 @@ else:
         self.assertEqual(response, assistant_text('Found')['content'])
         trace, = self._events(events, 'new_trace')
         self.assertEqual(trace['parent_session_id'], self.session.id)
+        self.assertEqual(trace['root_session_id'], self.session.id)
+        self.assertEqual(trace['channel_id'], self.channel.id)
         self.assertEqual(trace['parent_tool_call_id'], self.session._ai_debug_callback_tool_call_id('root-request', 'search-call'))
 
     def test_direct_sync_tracing_keeps_existing_event_contract(self):
@@ -1208,6 +1219,7 @@ else:
         public_user = self.env.ref('base.public_user')
         request = {
             'continuation_type': 'agent',
+            'group': self.session._ai_debug_group_metadata(),
             'request_uuid': 'guest-observer-request-fixture',
             'round_no': 1,
             'round_limit': 3,
