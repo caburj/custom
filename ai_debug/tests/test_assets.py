@@ -122,7 +122,7 @@ class TestAiDebugRuntime(HttpCase):
                             input: 120, cached_input: 40,
                             output: { text: 25, image: 0 }, thought: 5,
                         },
-                        cost: 0.00234,
+                        cost: 0.00234, duration_ms: 1200, duration_kind: "model_round_trip",
                     });
                     root._onTraceEvent({
                         type: "request_state", trace_id: traceId, iteration_id: "usage-round",
@@ -139,10 +139,10 @@ class TestAiDebugRuntime(HttpCase):
                         || iteration.cost !== 0.00234) {
                         failures.push("captured usage and credits were not persisted");
                     }
-                    for (const [id, parentId, parentRound, input, cached, output, cost, elapsed] of [
-                        ["child", traceId, "usage-round", 60, 20, 15, 0.001, 4000],
-                        ["grandchild", "child", "child-round", 20, 5, 10, 0.0005, 0],
-                        ["unrelated", null, null, 1000, 500, 100, 1, 9000],
+                    for (const [id, parentId, parentRound, input, cached, output, cost, elapsed, modelTime] of [
+                        ["child", traceId, "usage-round", 60, 20, 15, 0.001, 4000, 2500],
+                        ["grandchild", "child", "child-round", 20, 5, 10, 0.0005, 0, 0],
+                        ["unrelated", null, null, 1000, 500, 100, 1, 9000, null],
                     ]) {
                         root._onTraceEvent({
                             type: "new_trace", trace_id: id, parent_trace_id: parentId,
@@ -155,7 +155,7 @@ class TestAiDebugRuntime(HttpCase):
                                 input, cached_input: cached,
                                 output: { text: output, image: 0 }, thought: 0,
                             },
-                            cost,
+                            cost, duration_ms: modelTime, duration_kind: "model_round_trip",
                         });
                         root._onTraceEvent({
                             type: "loop_end", trace_id: id, termination_reason: "success",
@@ -209,6 +209,10 @@ class TestAiDebugRuntime(HttpCase):
                         || visibleRows().map((row) => row.querySelector("td:last-child").textContent).join(",") !== "6.0s,,4.0s") {
                         failures.push("elapsed time must use each exchange's duration, without adding descendants");
                     }
+                    if (totalCells.at(-2) !== ""
+                        || visibleRows().map((row) => row.querySelector("td:nth-last-child(2)").textContent).join(",") !== ",1.2s,") {
+                        failures.push("model time must appear only on iteration rows");
+                    }
                     const roundCredits = visibleRows()[1].querySelectorAll("td")[3].textContent;
                     if (roundCredits.replace(/\\s+/g, "") !== "0.002+0.002subagents"
                         || root.getIterationSubagentCost(root.traces.get(traceId), root.traces.get(traceId).iterations.get("usage-round")) !== 0.0015
@@ -224,6 +228,10 @@ class TestAiDebugRuntime(HttpCase):
                     }
                     if (visibleRows()[4].querySelector("td:last-child").textContent !== "0ms") {
                         failures.push("a measured zero elapsed duration must remain visible");
+                    }
+                    if (visibleRows()[3].querySelector("td:nth-last-child(2)").textContent !== "2.5s"
+                        || visibleRows()[5].querySelector("td:nth-last-child(2)").textContent !== "0ms") {
+                        failures.push("nested model times must preserve captured zero durations");
                     }
                     const childToggle = document.querySelector('button[aria-label="Collapse child"]');
                     childToggle.click();
@@ -256,6 +264,15 @@ class TestAiDebugRuntime(HttpCase):
                     if (!document.querySelector(".ai-usage-summary").textContent.includes("Total tokens 106")
                         || visibleRows().length !== 3 || !visibleRows()[0].textContent.includes("child")) {
                         failures.push("nested exchange must show the same table rooted at that agent");
+                    }
+                    root.selectItem("unrelated", "trace");
+                    await frame();
+                    [...document.querySelectorAll(".o_notebook .nav-link")]
+                        .find((tab) => tab.textContent.trim() === "Usage").click();
+                    await frame();
+                    if ([...document.querySelectorAll(".ai-usage-table thead th")]
+                        .some((cell) => cell.textContent === "Model time")) {
+                        failures.push("model time must be hidden when no durations were captured");
                     }
                     root.selectItem("usage-round", "iteration");
                     await frame();
