@@ -102,18 +102,18 @@
                                  'selected': this.state.selectedId === node.id,
                                  'ancestor': this.selectedTraceId === node.id and this.state.selectedId !== node.id,
                              }"
-                             t-att-data-node-id="node.id">
+                             t-att-data-node-id="node.id"
+                             t-on-click="() => this.selectItem(node.id, 'trace')">
                             <input t-if="node.depth === 0"
                                    type="checkbox"
                                    class="ai-tree-row-check"
                                    t-att-checked="this.state.checkedTraceIds.has(node.id)"
-                                   t-on-change.stop="() => this.toggleTraceCheck(node.id)"/>
+                                   t-on-click.stop="() => this.toggleTraceCheck(node.id)"/>
                             <span t-else="" class="ai-tree-row-check-spacer"/>
                             <span class="ai-tree-chevron"
                                   t-att-class="{'expanded': node.trace.expanded}"
                                   t-on-click.stop="() => this.toggleExpand(node.id, 'trace')">&#x203A;</span>
-                            <span class="ai-tree-label"
-                                  t-on-click="() => this.selectItem(node.id, 'trace')">
+                            <button type="button" class="ai-tree-label o_ai_debug_exchange_select">
                                 <t t-if="node.trace.trace_label">
                                     <t t-out="node.trace.trace_label"/>
                                 </t>
@@ -142,12 +142,11 @@
                                     <t t-if="node.trace.ai_provider"> &#xB7; <t t-out="node.trace.ai_provider"/></t>
                                     <t t-if="node.trace.model_name"> &#xB7; <t t-out="node.trace.model_name"/></t>
                                 </span>
-                            </span>
+                            </button>
                             <span t-if="node.trace.partial" class="ai-tree-hydrated-badge">partial</span>
-                            <span t-if="node.trace.hydrated" class="ai-tree-hydrated-badge" title="Loaded from browser storage; shows the last captured state">saved</span>
-                            <span t-if="node.trace.phase" class="ai-tree-label-dim" t-out="(node.trace.status === 'running' and node.trace.request_state or node.trace.phase).replaceAll('_', ' ')"/>
+                            <span t-if="node.trace.status !== 'success' and node.trace.phase" class="ai-tree-label-dim" t-out="(node.trace.status === 'running' and node.trace.request_state or node.trace.phase).replaceAll('_', ' ')"/>
                             <span t-if="node.trace.status === 'running'" class="ai-debug-pulse-dot small"/>
-                            <span t-elif="node.trace.status === 'success'" class="ai-tree-status success">&#x2713;</span>
+                            <span t-elif="node.trace.status === 'success'" class="ai-tree-status success" title="Completed successfully">&#x2713;</span>
                             <span t-elif="node.trace.status === 'error'" class="ai-tree-status error">&#x2717;</span>
                             <span t-elif="node.trace.status === 'max_iterations'" class="ai-tree-status warn">&#x23F8;</span>
                             <t t-set="fullyExpanded" t-value="this.isExchangeFullyExpanded(node.trace)"/>
