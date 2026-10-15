@@ -20,7 +20,6 @@
             ('include', 'web._assets_bootstrap_backend'),
             ('include', 'web._assets_core'),
             ('include', 'web.icons_fonts'),
-            ('remove', 'web/static/src/**/*.dark.scss'),
 
             # Minimal page-side dependency closure for bus_service. The worker
             # code is served independently by bus.websocket_worker_assets.
