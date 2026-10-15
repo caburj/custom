@@ -5,15 +5,16 @@ from unittest.mock import patch
 
 import requests
 
-from odoo import api, Command
+from odoo import Command, api
 from odoo.exceptions import ConcurrencyError
 from odoo.tests import HttpCase, tagged
-from odoo.addons.iap import InsufficientCreditError
 from odoo.tools import hmac
-from odoo.addons.ai_debug.models.ai_session import AiSession as DebugAiSession
+
 from odoo.addons.ai.models.ai_session import AiSession as EnterpriseAiSession
-from odoo.addons.ai.tests.common import COMPLETION_METRICS
+from odoo.addons.ai_debug.models.ai_session import AiSession as DebugAiSession
+from odoo.addons.ai_debug.tests.test_ai_debug_callback import COMPLETION_METRICS
 from odoo.addons.base.tests.files import PNG_B64
+from odoo.addons.iap import InsufficientCreditError
 
 
 def assistant(content):
@@ -51,7 +52,7 @@ class TestAiDebugAtomicCallback(HttpCase):
 
             def delegate(parent):
                 with patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None):
-                    parent._continue_agent_loop({**COMPLETION_METRICS, 'kind': 'success', 'message': assistant([{
+                    parent._process_completion_result({**COMPLETION_METRICS, 'status': 'success', 'result': assistant([{
                         'type': 'tool_call', 'name': 'ai_tool_start_session', 'call_id': 'child',
                         'args': {'agent_id': agent.id, 'message': 'Fixture child'},
                     }])})
@@ -136,7 +137,7 @@ class TestAiDebugAtomicCallback(HttpCase):
         with self._fixture(image=image) as fixture:
             before = self._snapshot(fixture)
             attempts = []
-            original = DebugAiSession._continue_agent_loop
+            original = DebugAiSession._process_completion_result
 
             def retry_before_commit(session, completion_result):
                 result = original(session, completion_result)
@@ -158,13 +159,20 @@ class TestAiDebugAtomicCallback(HttpCase):
                        'llm_result': {**COMPLETION_METRICS, 'status': 'success', 'result': assistant(content)}}
             payload['signature'] = hmac(None, 'odoo_ai-webhook', (fixture['uuid'], payload['llm_result'], False), secret=fixture['secret'])
             with (
-                patch.object(DebugAiSession, '_continue_agent_loop', retry_before_commit),
+                patch.object(DebugAiSession, '_process_completion_result', retry_before_commit),
                 patch.object(EnterpriseAiSession, '_get_completions', return_value={**COMPLETION_METRICS, 'result': assistant([
                     {'type': 'inline_data', 'mimetype': 'image/png', 'data': PNG_B64},
                 ])}),
                 patch('odoo.addons.ai.models.ai_session.call_odoo_ai_transport', return_value=None) as transport,
                 self.allow_requests(all_requests=True),
             ):
+                rejected = requests.post(
+                    self.base_url() + '/ai/completion_result_ready',
+                    json={**payload, 'signature': 'invalid'}, timeout=30,
+                )
+                self.assertEqual(rejected.status_code, 200, rejected.text)
+                self.assertEqual(self._snapshot(fixture), before)
+                self.assertFalse(attempts)
                 response = requests.post(self.base_url() + '/ai/completion_result_ready', json=payload, timeout=30)
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(len(attempts), 2)
@@ -233,6 +241,7 @@ class TestAiDebugAtomicCallback(HttpCase):
             with self.registry._db.cursor() as cr:
                 env = api.Environment(cr, self.env.uid, {'cron_id': 123})
                 root = env['ai.session'].browse(fixture['root'])
+                root.request_context = {**root.request_context, 'cron_id': 123}
                 if kind == 'title':
                     target = env['ai.session'].create({'parent_session_id': root.id})
                     target._save_and_submit_request(
@@ -240,21 +249,21 @@ class TestAiDebugAtomicCallback(HttpCase):
                         callback_type='channel_name', request_round=1, request_round_limit=1, state={},
                     )
                 elif kind == 'child':
-                    root._continue_agent_loop({**COMPLETION_METRICS, 'kind': 'success', 'message': assistant([{
+                    root._process_completion_result({**COMPLETION_METRICS, 'status': 'success', 'result': assistant([{
                         'type': 'tool_call', 'name': 'ai_tool_start_session', 'call_id': 'rejected-child',
                         'args': {'agent_id': fixture['agent'], 'message': 'Child task'},
                     }])})
                     target = env['ai.session'].browse(root.pending_tool_call['pending_results'][0]['child_session_id'])
                     self.assertEqual(root.loop_state, 'waiting_child')
                 elif kind == 'followup':
-                    root._continue_agent_loop({**COMPLETION_METRICS, 'kind': 'success', 'message': assistant([{
+                    root._process_completion_result({**COMPLETION_METRICS, 'status': 'success', 'result': assistant([{
                         'type': 'tool_call', 'name': 'ai_tool_load_skills', 'call_id': 'load',
                         'args': {'skill_ids': [env.ref('ai.ai_skill_generate_image').id]},
                     }])})
                     target = root
                     self.assertEqual(target.request_round, 2)
                 else:
-                    root._continue_agent_loop({**COMPLETION_METRICS, 'kind': 'success', 'message': assistant([{'type': 'text', 'text': 'Done'}])})
+                    root._process_completion_result({**COMPLETION_METRICS, 'status': 'success', 'result': assistant([{'type': 'text', 'text': 'Done'}])})
                     root._submit_agent_request([{'type': 'text', 'text': 'New exchange'}])
                     target = root
                 target_id = target.id

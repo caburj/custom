@@ -5,6 +5,7 @@ import math
 import time
 import uuid
 from contextlib import contextmanager
+from typing import Literal
 
 import odoo
 from odoo import api, fields, models
@@ -15,6 +16,7 @@ from odoo.tools.misc import OrderedSet
 from odoo.addons.ai.utils.types import (
     AIMessageParts,
     CompletionFailure,
+    CompletionResponse,
     CompletionSuccess,
 )
 from odoo.addons.bus.models.bus import (
@@ -81,6 +83,11 @@ _SENSITIVE_KEYS = {
     "thought_signature",
 }
 _SENSITIVE_KEY_NAMES = frozenset(key.replace('_', '') for key in _SENSITIVE_KEYS)
+
+
+class IapCompletionResponse(CompletionResponse):
+    usage: dict[str, int | dict[str, int]]
+    cost: float
 
 
 class AiSession(models.Model):
@@ -1250,8 +1257,6 @@ class AiSession(models.Model):
         request, context, history_ids = snapshot
         context['outer_context'] = self.env.context.get(_AI_DEBUG_CALLBACK_CONTEXT_KEY)
         session = self.with_context(**{_AI_DEBUG_CALLBACK_CONTEXT_KEY: context})
-        if completion_result is not None:
-            session._ai_debug_try(lambda: session._ai_debug_record_callback(request, completion_result))
         yield session
         session._ai_debug_try(lambda: session._ai_debug_observe_transition(request, context, history_ids))
 
@@ -1327,45 +1332,46 @@ class AiSession(models.Model):
                 termination_reason='failed' if error and reason == 'completed' else 'success' if reason == 'completed' else reason,
             )
 
-    def _ai_debug_record_callback(self, request, result):
-        response = ({
-            'status': 'success',
-            'result': result['message'],
-            'usage': result['usage'],
-            'cost': result['cost'],
-        } if result['kind'] == 'success' else {'status': 'error', 'error': result['code']})
+    def _ai_debug_record_callback(self, request, response):
         self._ai_debug_trace_request_result(request, response, {}, self._ai_debug_result_error(response))
         self._ai_debug_emit_state(request, 'result_received')
+
+    def _process_completion_result(self, llm_result: IapCompletionResponse | Literal[False]) -> None:
+        # Webhooks reach this hook after signature verification; synchronous
+        # completions use it too. Capture before core drops the IAP metrics and
+        # before the title callback deletes its temporary session.
+        request = self._ai_debug_try(self._ai_debug_request_snapshot)
+        if request:
+            response = llm_result if llm_result is not False else {'status': 'error', 'error': 'request_failed'}
+            self._ai_debug_try(lambda: self._ai_debug_record_callback(request, response))
+        record_usage = llm_result is not False and self.state['callback_type'] == 'agent_loop'
+        if record_usage:
+            previous_events = self.event_ids
+            request_uuid, request_round = self.request_uuid, self.request_round
+        super()._process_completion_result(llm_result)
+        if record_usage:
+            assistant_events = (self.event_ids - previous_events).filtered(
+                lambda event: event.metadata['role'] == 'assistant',
+            )
+            assistant_events.write(
+                {
+                    'request_uuid': request_uuid,
+                    'request_round': request_round,
+                    'usage': {**llm_result['usage'], 'cost': llm_result['cost']},
+                },
+            )
 
     def _continue_agent_loop(
         self,
         completion_result: CompletionFailure | CompletionSuccess,
     ) -> None:
         with self._ai_debug_transition(completion_result) as session:
-            previous_events = session.event_ids
-            request_uuid, request_round = session.request_uuid, session.request_round
             super(AiSession, session)._continue_agent_loop(completion_result)
-            if completion_result['kind'] == 'success':
-                assistant_events = (session.event_ids - previous_events).filtered(
-                    lambda event: event.metadata['role'] == 'assistant',
-                )
-                assistant_events.write(
-                    {
-                        'request_uuid': request_uuid,
-                        'request_round': request_round,
-                        'usage': {
-                            **completion_result['usage'],
-                            'cost': completion_result['cost'],
-                        },
-                    },
-                )
 
     def _continue_channel_name(self, completion_result):
         # The core title handler deletes its temporary session. Keep the facts
         # needed to close the trace before handing over ownership.
         request = self._ai_debug_try(self._ai_debug_request_snapshot)
-        if request:
-            self._ai_debug_try(lambda: self._ai_debug_record_callback(request, completion_result))
         result = super(AiSession, self.with_context(_ai_debug_title_callback=True))._continue_channel_name(completion_result)
         if request:
             self._ai_debug_try(lambda: self._ai_debug_trace_exchange_end(

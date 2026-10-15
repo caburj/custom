@@ -4,7 +4,7 @@ from datetime import datetime
 from textwrap import dedent
 from unittest.mock import MagicMock, patch
 
-from odoo import api, Command
+from odoo import Command, api
 from odoo.exceptions import ConcurrencyError, UserError
 from odoo.modules.registry import Registry
 from odoo.tests import HttpCase, TransactionCase, new_test_user, tagged
@@ -12,9 +12,13 @@ from odoo.tools import mute_logger
 
 from odoo.addons.ai.models.ai_session import AiSession as EnterpriseAiSession
 from odoo.addons.ai.models.ir_actions_server import IrActionsServer as EnterpriseActions
-from odoo.addons.ai.tests.common import COMPLETION_METRICS
 from odoo.addons.ai.utils.ai_utils import UserInputResponse
 from odoo.addons.ai_debug.models.ai_session import AiSession as DebugAiSession
+
+COMPLETION_METRICS = {
+    'usage': {'input': 120, 'cached_input': 40, 'output': {'text': 25, 'image': 0}, 'thought': 5},
+    'cost': 0.00234,
+}
 
 
 def assistant_text(text, provider_metadata=None):
@@ -124,7 +128,7 @@ class TestAiDebugCallback(TransactionCase):
         self.addCleanup(transport.stop)
 
     def _consume(self, session, message):
-        session._continue_agent_loop({**COMPLETION_METRICS, 'kind': 'success', 'message': message})
+        session._process_completion_result({**COMPLETION_METRICS, 'status': 'success', 'result': message})
 
     def _events(self, events, kind, **matches):
         return [payload for event, payload, _kwargs in events
@@ -172,6 +176,7 @@ class TestAiDebugCallback(TransactionCase):
         for received in self._events(events, 'iteration', phase='result_received'):
             self.assertEqual(received['usage'], COMPLETION_METRICS['usage'])
             self.assertEqual(received['cost'], COMPLETION_METRICS['cost'])
+            self.assertIsNone(received['error'])
             self.assertEqual(received['raw_response']['usage'], COMPLETION_METRICS['usage'])
         session.event_ids.flush_recordset(['usage'])
         session.event_ids.invalidate_recordset(['usage', 'credits_used'])
@@ -551,7 +556,7 @@ else:
         with patch.object(DebugAiSession, '_ai_debug_bus_send', self._capture(events)):
             session, request = self._prepare()
             exchange = session.current_exchange_id
-            session._continue_agent_loop({'kind': 'failure', 'code': 'request_failed'})
+            session._process_completion_result(False)
         terminal, = self._events(events, 'loop_end')
         self.assertEqual(terminal['termination_reason'], 'failed')
         self.assertEqual(terminal['error'], 'request_failed')
@@ -751,10 +756,13 @@ else:
                                            'instructions': 'Name it', 'tools': []}, callback_type='channel_name',
                                           request_round=1, request_round_limit=1, state={})
             title_id = title.id
-            title._continue_channel_name({**COMPLETION_METRICS, 'kind': 'success', 'message': assistant_text('A good title')})
+            title._process_completion_result({**COMPLETION_METRICS, 'status': 'success', 'cost': 0, 'result': assistant_text('A good title')})
         self.assertFalse(title.exists())
         self.assertEqual(self.channel.name, 'A good title')
         trace, = self._events(events, 'new_trace', session_id=title_id)
+        received, = self._events(events, 'iteration', trace_id=trace['trace_id'], phase='result_received')
+        self.assertEqual(received['usage'], COMPLETION_METRICS['usage'])
+        self.assertEqual(received['cost'], 0)
         terminal, = self._events(events, 'loop_end', trace_id=trace['trace_id'])
         self.assertEqual(terminal['termination_reason'], 'success')
 
