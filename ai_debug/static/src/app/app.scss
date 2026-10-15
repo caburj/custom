@@ -1065,3 +1065,26 @@ pre.ai-popup-content.ai-popup-nowrap {
     font-weight: normal;
     text-overflow: ellipsis;
 }
+
+.o_ai_debug_group_header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px; // Keep in sync with ROW_H_GROUP.
+    padding: 0 12px;
+    border-bottom: 1px solid $o-gray-300;
+    background-color: $o-gray-200;
+    color: $o-gray-900;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.o_ai_debug_group_record {
+    flex-shrink: 0;
+    margin-inline-start: auto;
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+}

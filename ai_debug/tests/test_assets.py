@@ -110,7 +110,8 @@ class TestAiDebugRuntime(HttpCase):
                     }
                     dialog?.querySelector(".btn-secondary")?.click();
                     const traceId = "usage-runtime-check";
-                    root._onTraceEvent({ type: "new_trace", trace_id: traceId });
+                    root._onTraceEvent({ type: "new_trace", trace_id: traceId, root_session_id: 10,
+                        channel_id: 42, channel_name: "Audit conversation" });
                     root._onTraceEvent({
                         type: "iteration", trace_id: traceId, iteration_id: "usage-round",
                         phase: "prepared", iteration_index: 1,
@@ -280,6 +281,32 @@ class TestAiDebugRuntime(HttpCase):
                     if (!iterationSummary.includes("25 text · 5 reasoning")
                         || [...document.querySelectorAll(".o_notebook .nav-link")].some((tab) => tab.textContent.trim() === "Usage")) {
                         failures.push("iteration output must show its breakdown without a Usage tab");
+                    }
+                    root._onTraceEvent({ type: "new_trace", trace_id: "another-exchange", root_session_id: 11,
+                        channel_id: 42, channel_name: "Audit conversation" });
+                    root._onTraceEvent({ type: "new_trace", trace_id: "session-only", root_session_id: 12,
+                        root_agent_name: "Auditor", channel_id: null });
+                    await frame();
+                    const headers = [...document.querySelectorAll(".o_ai_debug_group_header")];
+                    if (headers.length !== 3
+                        || !headers.some((header) => header.textContent.includes("Audit conversation") && header.textContent.includes("Channel #42"))
+                        || !headers.some((header) => header.textContent.includes("Auditor") && header.textContent.includes("Session #12"))
+                        || root.sidebarNodes.filter((node) => node.id === "group:channel:42").length !== 1) {
+                        failures.push("flat headers must group exchanges by channel or root session");
+                    }
+                    root.state.nestingMode = "lines";
+                    await frame();
+                    const rowHeight = root.sidebarNodes.reduce((height, node) => height +
+                        (node.type === "group" ? 32 : node.type === "trace" ? 44 : 34), 0);
+                    if (Number(document.querySelector(".ai-depth-line-svg").getAttribute("height")) !== rowHeight
+                        || root.depthLinePaths.some((segment) => segment.d.includes("NaN"))) {
+                        failures.push("guide lines must account for section headers");
+                    }
+                    root.state.nestingMode = "indent";
+                    await frame();
+                    if (root.sidebarNodes.some((node) => node.type === "trace" &&
+                        [traceId, "another-exchange", "session-only"].includes(node.id) && node.depth !== 0)) {
+                        failures.push("channel grouping must not add exchange indentation");
                     }
                     if (failures.length) {
                         throw new Error(failures.join("; "));

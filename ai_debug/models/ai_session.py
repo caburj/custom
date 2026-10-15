@@ -152,7 +152,8 @@ class AiSession(models.Model):
                     correlation_keys = (
                         'type', 'trace_id', 'exchange_uuid', 'request_uuid',
                         'round_no', 'iteration_id', 'iteration_index',
-                        'session_id', 'request_state', 'is_final', 'error', 'duration_ms',
+                        'session_id', 'root_session_id', 'root_agent_name', 'channel_id', 'channel_name',
+                        'request_state', 'is_final', 'error', 'duration_ms',
                         'duration_kind', 'termination_reason', 'iteration_count',
                         'tool_call_count', 'provider', 'model_name', 'provider_api',
                         'trace_kind', 'trace_label', 'phase', 'state', 'request_phase',
@@ -638,6 +639,15 @@ class AiSession(models.Model):
                 text_parts.append(text)
         return '\n'.join(text_parts)
 
+    def _ai_debug_group_metadata(self) -> dict:
+        root = self._root_session()
+        return {
+            'root_session_id': root.id,
+            'root_agent_name': root.agent_id.name or None,
+            'channel_id': root.channel_id.id or None,
+            'channel_name': root.channel_id.name or None,
+        }
+
     def _ai_debug_request_snapshot(self, request_uuid=None):
         """Copy the active immutable request intent before Enterprise replaces it."""
         self.ensure_one()
@@ -656,6 +666,7 @@ class AiSession(models.Model):
             'loop_state': self.loop_state,
             'pending': copy.deepcopy(self.pending_tool_call or {}),
             'continuation_type': (self.state or {}).get('callback_type'),
+            'group': self._ai_debug_group_metadata(),
             'parent_session_id': self.parent_session_id.id,
         }
 
@@ -734,6 +745,7 @@ class AiSession(models.Model):
             'request_uuid': request['request_uuid'],
             'round_no': request['round_no'],
             'target_user_id': request['user_id'],
+            'group': request['group'],
             'events': [],
             'started_tool_call_ids': set(),
             'tool_timings': copy.deepcopy(request['context_snapshot'].get(_AI_DEBUG_TOOL_TIMINGS_CONTEXT_KEY, {})),
@@ -1110,6 +1122,7 @@ class AiSession(models.Model):
             'round_no': request['round_no'],
             'request_state': request['loop_state'],
             'session_id': self.id,
+            **request['group'],
             'trace_kind': request['continuation_type'],
             'trace_label': {'channel_name': 'Conversation Title'}.get(request['continuation_type']),
             **(request['context_snapshot'].get('_ai_debug_parent_link') or {}),
@@ -1145,6 +1158,7 @@ class AiSession(models.Model):
                 termination_reason or ('error' if error else 'success')
             ),
             'termination_source': 'committed_session_state',
+            **request['group'],
             'exchange_result': self._ai_debug_sanitize(
                 (self._ai_debug_active_callback_context() or {}).get('child_result'),
             ),
@@ -1374,11 +1388,15 @@ class AiSession(models.Model):
         request = self._ai_debug_try(self._ai_debug_request_snapshot)
         result = super(AiSession, self.with_context(_ai_debug_title_callback=True))._continue_channel_name(completion_result)
         if request:
-            self._ai_debug_try(lambda: self._ai_debug_trace_exchange_end(
-                request, {'responseState': 'idle'}, request_state='ready',
-                error=completion_result.get('code'),
-                termination_reason='failed' if completion_result['kind'] == 'failure' else 'success',
-            ))
+            def finish_trace():
+                channel = self.env['discuss.channel'].browse(request['group']['channel_id'])
+                request['group']['channel_name'] = channel.name or None
+                self._ai_debug_trace_exchange_end(
+                    request, {'responseState': 'idle'}, request_state='ready',
+                    error=completion_result.get('code'),
+                    termination_reason='failed' if completion_result['kind'] == 'failure' else 'success',
+                )
+            self._ai_debug_try(finish_trace)
         return result
 
     def unlink(self):
@@ -1448,8 +1466,10 @@ class AiSession(models.Model):
                       completion_options.get('usage') if completion_options.get('usage') in ('channel_name', 'web_search')
                       else 'direct')
         parent_link = {}
+        group = self._ai_debug_group_metadata() if len(self) == 1 else {}
         callback_context = self.env.context.get(_AI_DEBUG_CALLBACK_CONTEXT_KEY)
         if callback_context and self.env.context.get('ai_parent_trace_id') == callback_context['trace_id']:
+            group = callback_context['group']
             parent_link = {
                 'parent_trace_id': callback_context['trace_id'],
                 'parent_session_id': callback_context['session_id'],
@@ -1461,6 +1481,7 @@ class AiSession(models.Model):
         direct_self = self.with_context(**{
             _AI_DEBUG_DIRECT_TRACE_CONTEXT_KEY: {
                 **parent_link,
+                'group': group,
                 'session_id': self.id if len(self) == 1 else None,
                 'agent_name': agent.name if agent else None,
                 'trace_kind': trace_kind,
@@ -1525,6 +1546,7 @@ class AiSession(models.Model):
                 if len(self) == 1 and self.agent_id
                 else direct_trace.get('agent_name')
             ),
+            **(self._ai_debug_group_metadata() if len(self) == 1 else direct_trace.get('group', {})),
             'trace_kind': direct_trace.get('trace_kind'),
             'trace_label': direct_trace.get('trace_label'),
             'state_snapshot': {
