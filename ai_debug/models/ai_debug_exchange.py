@@ -43,10 +43,12 @@ class AiDebugExchange(models.Model):
 
     _uuid_unique = models.UniqueIndex('(uuid)', 'The exchange UUID must be unique.')
 
-    @api.depends('event_ids.credits_used')
+    @api.depends('event_ids.usage')
     def _compute_credits_used(self):
         for exchange in self:
-            exchange.credits_used = sum(exchange.event_ids.mapped('credits_used'))
+            exchange.credits_used = sum(
+                usage['cost'] for usage in exchange.event_ids.mapped('usage') if usage
+            )
 
     @api.depends('credits_used', 'child_exchange_ids.total_credits_used')
     def _compute_total_credits_used(self):

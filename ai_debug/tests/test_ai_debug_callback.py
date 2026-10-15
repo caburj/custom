@@ -182,7 +182,7 @@ class TestAiDebugCallback(TransactionCase):
             self.assertIsNone(received['error'])
             self.assertEqual(received['raw_response']['usage'], COMPLETION_METRICS['usage'])
         session.event_ids.flush_recordset(['usage'])
-        session.event_ids.invalidate_recordset(['usage', 'credits_used'])
+        session.event_ids.invalidate_recordset(['usage'])
         assistant_events = session.event_ids.filtered(
             lambda event: event.metadata['role'] == 'assistant',
         )
@@ -192,7 +192,6 @@ class TestAiDebugCallback(TransactionCase):
                 event.usage,
                 {**COMPLETION_METRICS['usage'], 'cost': COMPLETION_METRICS['cost']},
             )
-            self.assertEqual(event.credits_used, COMPLETION_METRICS['cost'])
         self.assertFalse(any((session.event_ids - assistant_events).mapped('usage')))
         self.assertEqual(session.credits_used, 2 * COMPLETION_METRICS['cost'])
         self.assertEqual(session.total_credits_used, session.credits_used)
