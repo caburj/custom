@@ -14,12 +14,6 @@ class AiSessionEvent(models.Model):
         help="Completion token usage and its reported cost in IAP credits. "
         "Empty for events without recorded usage.",
     )
-    credits_used = fields.Float(compute='_compute_credits_used')
-
-    @api.depends('usage')
-    def _compute_credits_used(self):
-        for event in self:
-            event.credits_used = event.usage['cost'] if event.usage else 0
 
     @api.model_create_multi
     def create(self, vals_list):
