@@ -104,11 +104,22 @@
 }
 
 // Scrollable tree content area — lives below the pinned header
-.ai-tree-content {
+.o_ai_debug_scroll_area {
+    position: relative;
     flex: 1;
+    min-height: 0;
+}
+
+.ai-tree-content {
+    height: 100%;
     overflow-y: auto;
+    scrollbar-width: none;
     min-height: 0;
     position: relative; // anchor for SVG depth-line overlay
+
+    &::-webkit-scrollbar {
+        display: none;
+    }
 }
 
 // SVG staircase depth line — scrolls with content, renders above row backgrounds
@@ -1106,5 +1117,69 @@ pre.ai-popup-content.ai-popup-nowrap {
     &:focus-visible {
         outline: 2px solid currentColor;
         outline-offset: -2px;
+    }
+}
+
+.o_ai_debug_exchange_toggle {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: $border-radius-sm;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+
+    &:hover {
+        background: rgba($o-action, 0.08);
+    }
+
+    &:focus-visible {
+        outline: 2px solid currentColor;
+        outline-offset: -2px;
+    }
+}
+
+@media (hover: hover) {
+    .ai-tree-trace-row:not(:hover):not(:focus-within):not(.selected) {
+        .o_ai_debug_exchange_toggle {
+            opacity: 0;
+        }
+    }
+}
+
+.o_ai_debug_scrollbar {
+    position: absolute;
+    z-index: 3;
+    inset-block: 0;
+    inset-inline-end: 0;
+    width: 10px;
+    opacity: 0;
+    touch-action: none;
+    user-select: none;
+    transition: opacity 150ms;
+
+    .o_ai_debug_scroll_area:hover &,
+    .o_ai_debug_scroll_area:focus-within &,
+    &.o_active {
+        opacity: 1;
+    }
+
+    &:focus-visible {
+        outline: 2px solid $o-action;
+        outline-offset: -2px;
+    }
+}
+
+.o_ai_debug_scroll_thumb {
+    margin-inline: 2px;
+    border-radius: 3px;
+    background: $o-gray-600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .o_ai_debug_scrollbar {
+        transition: none;
     }
 }
