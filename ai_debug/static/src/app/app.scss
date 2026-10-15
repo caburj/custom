@@ -1070,11 +1070,7 @@ pre.ai-popup-content.ai-popup-nowrap {
     position: sticky;
     top: 0;
     z-index: 2;
-    display: flex;
-    align-items: center;
-    gap: 8px;
     height: 32px; // Keep in sync with ROW_H_GROUP.
-    padding: 0 12px;
     border-bottom: 1px solid $o-gray-300;
     background-color: $o-gray-200;
     color: $o-gray-900;
@@ -1087,4 +1083,28 @@ pre.ai-popup-content.ai-popup-nowrap {
     margin-inline-start: auto;
     font-weight: 400;
     font-variant-numeric: tabular-nums;
+}
+
+.o_ai_debug_group_toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    height: 100%;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+
+    &:hover {
+        background-color: rgba($o-action, 0.08);
+    }
+
+    &:focus-visible {
+        outline: 2px solid currentColor;
+        outline-offset: -2px;
+    }
 }

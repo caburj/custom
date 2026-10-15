@@ -302,6 +302,42 @@ class TestAiDebugRuntime(HttpCase):
                         || root.depthLinePaths.some((segment) => segment.d.includes("NaN"))) {
                         failures.push("guide lines must account for section headers");
                     }
+                    const channelToggle = headers.find((header) => header.textContent.includes("Channel #42")).querySelector("button");
+                    const selection = [root.state.selectedId, root.state.selectedType];
+                    const exchangeExpanded = root.traces.get(traceId).expanded;
+                    channelToggle.click();
+                    await frame();
+                    if (channelToggle.getAttribute("aria-expanded") !== "false"
+                        || document.querySelector(`[data-node-id="${traceId}"]`)
+                        || document.querySelector('[data-node-id="another-exchange"]')
+                        || !document.querySelector('[data-node-id="session-only"]')
+                        || selection.join(",") !== [root.state.selectedId, root.state.selectedType].join(",")
+                        || !document.querySelector(".ai-usage-summary").textContent.includes("25 text · 5 reasoning")) {
+                        failures.push("folding a channel must hide its exchanges without changing the detail selection");
+                    }
+                    root._onTraceEvent({ type: "new_trace", trace_id: "new-while-folded", root_session_id: 13,
+                        channel_id: 42, channel_name: "Audit conversation" });
+                    await frame();
+                    if (document.querySelector('[data-node-id="new-while-folded"]')) {
+                        failures.push("new exchanges must respect the folded channel");
+                    }
+                    channelToggle.click();
+                    await frame();
+                    if (channelToggle.getAttribute("aria-expanded") !== "true"
+                        || !document.querySelector(`[data-node-id="${traceId}"]`)
+                        || !document.querySelector('[data-node-id="another-exchange"]')
+                        || !document.querySelector('[data-node-id="new-while-folded"]')
+                        || root.traces.get(traceId).expanded !== exchangeExpanded) {
+                        failures.push("unfolding must restore exchanges and their expansion state");
+                    }
+                    const sessionToggle = headers.find((header) => header.textContent.includes("Session #12")).querySelector("button");
+                    sessionToggle.click();
+                    await frame();
+                    if (document.querySelector('[data-node-id="session-only"]')) {
+                        failures.push("session groups must fold too");
+                    }
+                    sessionToggle.click();
+                    await frame();
                     root.state.nestingMode = "indent";
                     await frame();
                     if (root.sidebarNodes.some((node) => node.type === "trace" &&

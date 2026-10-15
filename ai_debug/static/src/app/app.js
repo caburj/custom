@@ -32,6 +32,7 @@ export class AiDebugApp extends Component {
             selectedType: null,   // 'trace' | 'iteration' | 'tool_call'
             ephemeralMode: false, // true when IDB is unavailable (private browsing or write failure)
             checkedTraceIds: new Set(),  // Phase 11: checkbox selection for bulk delete
+            collapsedGroupIds: new Set(),
             sidebarWidth: 420,
             nestingMode: (() => {
                 try { return localStorage.getItem("ai_debug.nestingMode") || "indent"; }
@@ -173,6 +174,14 @@ export class AiDebugApp extends Component {
         if (type === "trace") {
             const trace = this.traces.get(id);
             if (trace) trace.expanded = true;
+        }
+    }
+
+    toggleGroup(id) {
+        if (this.state.collapsedGroupIds.has(id)) {
+            this.state.collapsedGroupIds.delete(id);
+        } else {
+            this.state.collapsedGroupIds.add(id);
         }
     }
 
@@ -390,7 +399,14 @@ export class AiDebugApp extends Component {
     }
 
     get sidebarNodes() {
-        return collectSidebarNodes(this.traces);
+        let expanded = true;
+        return collectSidebarNodes(this.traces).filter((node) => {
+            if (node.type === "group") {
+                expanded = !this.state.collapsedGroupIds.has(node.id);
+                return true;
+            }
+            return expanded;
+        });
     }
 
     /** @param {{ trace_id: string }} trace */
